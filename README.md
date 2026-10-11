@@ -4,6 +4,9 @@ A live tree of systemd jobs on the boot console, in the spirit of
 nix-output-monitor. It replaces the scrolling kernel and systemd lines with the
 units still pending and a timeline of the ones that ran.
 
+![The initrd: pending units on top, the timeline below](docs/initrd.png)
+![Stage 2: the initrd collapsed, a failed unit, three still running](docs/stage-2.png)
+
 It needs systemd ≥ 246 as PID 1, libdbus and a virtual terminal (it draws on
 tty12). With a systemd initrd it starts about a second after the kernel and
 follows the boot through the switch to the real root; without one it starts in

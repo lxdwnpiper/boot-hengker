@@ -16,6 +16,7 @@ Work inside the dev shell (`direnv allow` once). Run `cargo clippy
 - `nix build .#checks.x86_64-linux.boot`: boots a VM and reads the screen with
   OCR; screenshots land in `result/`. Run it by hand with
   `nix run .#checks.x86_64-linux.boot.driverInteractive`, then `test_script()`.
+  The images in `docs/` are crops of these screenshots.
 
 Prefix the VM commands with `env -u LD_LIBRARY_PATH` when the shell exports
 libraries that clash with QEMU's.
