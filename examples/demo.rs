@@ -4,7 +4,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use boot_tree::{
+use bootvine::{
     model::{ActiveState, Activity, BootState, JobResult, Phase, UnitFacts},
     palette::Palette,
     view::BootView,

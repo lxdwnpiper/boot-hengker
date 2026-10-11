@@ -6,7 +6,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use boot_tree::model::{BootState, HANDOFF_UNIT, HOST_MILESTONES};
+use bootvine::model::{BootState, HANDOFF_UNIT, HOST_MILESTONES};
 use dbus::Path;
 
 use crate::{
@@ -133,7 +133,7 @@ impl Feed {
         jobs.iter()
             .for_each(|job| state.queue_job(job.id, &job.unit, now));
         eprintln!(
-            "boot-tree: watching {root} in {} as pid {} over {}",
+            "bootvine: watching {root} in {} as pid {} over {}",
             if self.in_initrd { "initrd" } else { "stage 2" },
             process::id(),
             if session.peer_to_peer {

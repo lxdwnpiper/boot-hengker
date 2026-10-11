@@ -19,7 +19,7 @@ def "main start" [--units: path, --target: string] {
     install-units $units
     ^systemctl --user stop ...(unit-names $units)
     ^systemctl --user start --no-block $target
-    print $"started ($target); watch it with: boot-tree --user --target ($target) --hold 3s"
+    print $"started ($target); watch it with: bootvine --user --target ($target) --hold 3s"
 }
 
 def "main remove" [--units: path, --target: string] {
@@ -29,5 +29,5 @@ def "main remove" [--units: path, --target: string] {
 }
 
 def main [--units: path, --target: string] {
-    print "usage: boot-tree-demo-units (start | remove)"
+    print "usage: bootvine-demo-units (start | remove)"
 }

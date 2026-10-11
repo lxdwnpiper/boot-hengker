@@ -1,5 +1,5 @@
 {
-  description = "boot-tree — live dependency tree of systemd jobs on the boot console";
+  description = "bootvine — live dependency tree of systemd jobs on the boot console";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
@@ -76,15 +76,15 @@
             };
             strictDeps = true;
             postInstall = ''
-              install -Dm644 packaging/systemd/boot-tree.service $out/lib/systemd/system/boot-tree.service
-              substituteInPlace $out/lib/systemd/system/boot-tree.service \
-                --replace-fail /usr/bin/boot-tree $out/bin/boot-tree
-              install -Dm755 packaging/dracut/90boot-tree/module-setup.sh \
-                $out/lib/dracut/modules.d/90boot-tree/module-setup.sh
-              install -Dm644 packaging/mkinitcpio/install/sd-boot-tree \
-                $out/lib/initcpio/install/sd-boot-tree
+              install -Dm644 packaging/systemd/bootvine.service $out/lib/systemd/system/bootvine.service
+              substituteInPlace $out/lib/systemd/system/bootvine.service \
+                --replace-fail /usr/bin/bootvine $out/bin/bootvine
+              install -Dm755 packaging/dracut/90bootvine/module-setup.sh \
+                $out/lib/dracut/modules.d/90bootvine/module-setup.sh
+              install -Dm644 packaging/mkinitcpio/install/sd-bootvine \
+                $out/lib/initcpio/install/sd-bootvine
             '';
-            meta.mainProgram = "boot-tree";
+            meta.mainProgram = "bootvine";
             meta.platforms = lib.platforms.linux;
           };
           demo-units = pkgs.callPackage ./demo/user-units.nix { inherit demoUnits; };

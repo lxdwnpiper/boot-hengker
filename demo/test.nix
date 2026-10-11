@@ -1,6 +1,6 @@
 { demoHost }:
 {
-  name = "boot-tree";
+  name = "bootvine";
   enableOCR = true;
 
   nodes.machine =
@@ -27,18 +27,18 @@
     machine.screenshot("stage-2")
 
     machine.wait_for_unit("greetd.service")
-    machine.wait_until_succeeds("systemctl show -p ActiveState --value boot-tree | grep -qx inactive")
+    machine.wait_until_succeeds("systemctl show -p ActiveState --value bootvine | grep -qx inactive")
 
-    journal = machine.succeed("journalctl -b -u boot-tree -o cat")
+    journal = machine.succeed("journalctl -b -u bootvine -o cat")
     print(journal)
-    watched = [line for line in journal.splitlines() if line.startswith("boot-tree: watching")]
+    watched = [line for line in journal.splitlines() if line.startswith("bootvine: watching")]
     assert any(" in initrd " in line for line in watched), "never ran in the initrd"
     assert any(" in stage 2 " in line for line in watched), "never reconnected after the root switch"
     pids = {line.split(" as pid ")[1].split()[0] for line in watched}
     assert len(pids) == 1, f"the initrd process did not survive the root switch: {pids}"
     assert "handing the console over" in journal, "never handed the console over"
 
-    machine.succeed("test \"$(systemctl show -p Result --value boot-tree)\" = success")
+    machine.succeed("test \"$(systemctl show -p Result --value bootvine)\" = success")
     console_level = machine.succeed("cut -f1 /proc/sys/kernel/printk").strip()
     assert console_level != "1", f"kernel console level was not restored: {console_level}"
     show_status = machine.succeed("systemctl show -p ShowStatus --value").strip()

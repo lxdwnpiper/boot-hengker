@@ -8,7 +8,7 @@ Conflicts=shutdown.target
 
 [Service]
 Type=simple
-ExecStart=@/usr/bin/boot-tree @boot-tree
+ExecStart=@/usr/bin/bootvine @bootvine
 StandardInput=tty
 StandardOutput=tty
 StandardError=journal

@@ -8,7 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use boot_tree::{
+use bootvine::{
     model::{BootState, Phase},
     palette::Palette,
     view::BootView,
@@ -115,7 +115,7 @@ fn watch(
         })?;
         if state.is_complete() {
             eprintln!(
-                "boot-tree: {} reached, handing the console over",
+                "bootvine: {} reached, handing the console over",
                 state.root.as_deref().unwrap_or("boot")
             );
             sleep(hold);

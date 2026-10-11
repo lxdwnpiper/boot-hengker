@@ -18,13 +18,13 @@ let
   };
 in
 {
-  networking.hostName = "boot-tree-demo";
+  networking.hostName = "bootvine-demo";
   system.stateVersion = "26.05";
 
   boot.initrd.systemd = {
     enable = true;
     services.demo-initrd-probe = {
-      description = "boot-tree demo: slow initrd step";
+      description = "bootvine demo: slow initrd step";
       wantedBy = [ "initrd.target" ];
       before = [ "initrd.target" ];
       unitConfig.DefaultDependencies = false;
@@ -35,7 +35,7 @@ in
     };
   };
 
-  services.boot-tree = {
+  services.bootvine = {
     enable = true;
     palette.running = "light-yellow";
   };

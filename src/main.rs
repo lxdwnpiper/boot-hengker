@@ -8,7 +8,7 @@ mod systemd;
 
 use std::{fs, io::ErrorKind, path::PathBuf, process::ExitCode, time::Duration};
 
-use boot_tree::palette::Config;
+use bootvine::palette::Config;
 use clap::Parser;
 use jiff::SignedDuration;
 
@@ -36,7 +36,7 @@ struct Cli {
     hold: Duration,
     #[arg(
         long,
-        default_value = "/etc/boot-tree.toml",
+        default_value = "/etc/bootvine.toml",
         help = "TOML file with a [palette] table"
     )]
     config: PathBuf,
@@ -51,12 +51,12 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     let config = match fs::read_to_string(&cli.config) {
         Ok(text) => toml::from_str(&text).unwrap_or_else(|error| {
-            eprintln!("boot-tree: ignoring {}: {error}", cli.config.display());
+            eprintln!("bootvine: ignoring {}: {error}", cli.config.display());
             Config::default()
         }),
         Err(error) if error.kind() == ErrorKind::NotFound => Config::default(),
         Err(error) => {
-            eprintln!("boot-tree: cannot read {}: {error}", cli.config.display());
+            eprintln!("bootvine: cannot read {}: {error}", cli.config.display());
             Config::default()
         }
     };
@@ -69,7 +69,7 @@ fn main() -> ExitCode {
     match run(&options) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("boot-tree: {error}");
+            eprintln!("bootvine: {error}");
             ExitCode::FAILURE
         }
     }

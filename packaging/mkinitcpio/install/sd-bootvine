@@ -1,0 +1,18 @@
+#!/usr/bin/bash
+
+build() {
+    add_binary bootvine
+    add_systemd_unit bootvine.service
+    if [[ -f /etc/bootvine.toml ]]; then
+        add_file /etc/bootvine.toml
+    fi
+    add_symlink /usr/lib/systemd/system/sysinit.target.wants/bootvine.service \
+        /usr/lib/systemd/system/bootvine.service
+}
+
+help() {
+    cat <<HELP
+Shows a live dependency tree of systemd jobs while the initramfs boots.
+Requires the systemd hook; add sd-bootvine after it in HOOKS.
+HELP
+}

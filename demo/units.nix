@@ -1,5 +1,5 @@
 {
-  target = "boot-tree-demo";
+  target = "bootvine-demo";
   initrdProbeSeconds = "6";
   services = {
     demo-disk.seconds = "2";

@@ -1,6 +1,6 @@
 use std::{iter, time::Duration};
 
-use boot_tree::model::{ActiveState, Activity, JobResult, UnitFacts};
+use bootvine::model::{ActiveState, Activity, JobResult, UnitFacts};
 use dbus::{
     Message, MessageType, Path,
     arg::{AppendAll, PropMap, RefArg, Variant},

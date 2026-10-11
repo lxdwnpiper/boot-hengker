@@ -196,7 +196,7 @@ impl BootView<'_> {
         });
         Table::new(
             [Row::new([
-                Line::from(format!("boot-tree  {}", self.host)),
+                Line::from(format!("bootvine  {}", self.host)),
                 Line::from(total.unwrap_or_default()).right_aligned(),
             ])],
             [Constraint::Fill(1), Constraint::Length(DURATION_WIDTH)],
@@ -804,7 +804,7 @@ mod tests {
     fn tree_on_top_timeline_below() {
         let lines = render(&boot_in_progress(), 12_400 * MS, 110, 24);
         let screen = lines.join("\n");
-        assert_eq!(lines[0], "boot-tree  ryzen", "{screen}");
+        assert_eq!(lines[0], "bootvine  ryzen", "{screen}");
         assert!(lines[2].starts_with("── stage 2 ──"), "{screen}");
         assert!(lines[2].ends_with("12.4s ──"), "{screen}");
         assert!(lines[3].starts_with("graphical.target"), "{screen}");

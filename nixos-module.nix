@@ -6,9 +6,9 @@
   ...
 }:
 let
-  cfg = config.services.boot-tree;
+  cfg = config.services.bootvine;
   chosenColors = lib.filterAttrs (_: color: color != null) cfg.palette;
-  configFile = (pkgs.formats.toml { }).generate "boot-tree.toml" { palette = chosenColors; };
+  configFile = (pkgs.formats.toml { }).generate "bootvine.toml" { palette = chosenColors; };
   colorOption =
     role: default:
     lib.mkOption {
@@ -23,7 +23,7 @@ let
     };
 in
 {
-  options.services.boot-tree = {
+  options.services.bootvine = {
     enable = lib.mkEnableOption ''
       a live dependency tree of systemd jobs on the boot console. With a
       systemd initrd it starts there and survives the switch to the real root;
@@ -34,8 +34,8 @@ in
     package = lib.mkOption {
       type = lib.types.package;
       default = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
-      defaultText = lib.literalExpression "boot-tree.packages.\${system}.default";
-      description = "The boot-tree package, which ships the systemd unit.";
+      defaultText = lib.literalExpression "bootvine.packages.\${system}.default";
+      description = "The bootvine package, which ships the systemd unit.";
     };
 
     palette = {
@@ -52,19 +52,19 @@ in
   config = lib.mkIf cfg.enable {
     environment = {
       systemPackages = [ cfg.package ];
-      etc."boot-tree.toml" = lib.mkIf (chosenColors != { }) { source = configFile; };
+      etc."bootvine.toml" = lib.mkIf (chosenColors != { }) { source = configFile; };
     };
 
     systemd = {
       packages = [ cfg.package ];
-      services.boot-tree.wantedBy = [ "sysinit.target" ];
+      services.bootvine.wantedBy = [ "sysinit.target" ];
     };
 
     boot.initrd.systemd = lib.mkIf config.boot.initrd.systemd.enable {
       packages = [ cfg.package ];
       storePaths = [ (lib.getExe cfg.package) ];
-      services.boot-tree.wantedBy = [ "sysinit.target" ];
-      contents."/etc/boot-tree.toml" = lib.mkIf (chosenColors != { }) { source = configFile; };
+      services.bootvine.wantedBy = [ "sysinit.target" ];
+      contents."/etc/bootvine.toml" = lib.mkIf (chosenColors != { }) { source = configFile; };
     };
   };
 }

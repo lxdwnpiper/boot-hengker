@@ -14,7 +14,7 @@ let
     name: spec:
     writeText "${name}.service" (toUnitFile {
       Unit = {
-        Description = "boot-tree demo: ${name}";
+        Description = "bootvine demo: ${name}";
         After = map (dependency: "${dependency}.service") (spec.after or [ ]);
       };
       Service = {
@@ -30,13 +30,13 @@ let
 
   targetFile = writeText "${demoUnits.target}.target" (toUnitFile {
     Unit = {
-      Description = "boot-tree demo target";
+      Description = "bootvine demo target";
       Wants = serviceNames;
       After = serviceNames;
     };
   });
 
-  units = linkFarm "boot-tree-demo-units" (
+  units = linkFarm "bootvine-demo-units" (
     lib.mapAttrsToList (name: spec: {
       name = "${name}.service";
       path = serviceFile name spec;
@@ -50,6 +50,6 @@ let
   );
 in
 writeShellApplication {
-  name = "boot-tree-demo-units";
+  name = "bootvine-demo-units";
   text = ''exec ${lib.getExe nushell} ${./demo-units.nu} "$@" --units ${units} --target ${demoUnits.target}.target'';
 }
