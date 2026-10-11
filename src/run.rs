@@ -21,7 +21,11 @@ use rustix::system::uname;
 use signal_hook::{consts::SIGTERM, flag};
 
 use crate::{
-    clock::monotonic_now, console::ForegroundVt, error::Error, feed::Feed, sysroot::INITRD_RELEASE,
+    clock::monotonic_now,
+    console::{ForegroundVt, QuietKernelConsole},
+    error::Error,
+    feed::Feed,
+    sysroot::INITRD_RELEASE,
     systemd::Scope,
 };
 
@@ -44,6 +48,9 @@ pub fn run(options: Options) -> Result<(), Error> {
     };
     let mut state = BootState::new(phase);
     let mut feed = Feed::new(options.scope, options.target);
+    let _quiet_kernel = (options.scope == Scope::System)
+        .then(QuietKernelConsole::take)
+        .flatten();
     let _foreground = ForegroundVt::take();
     let mut terminal = ratatui::try_init()?;
     let watched = watch(

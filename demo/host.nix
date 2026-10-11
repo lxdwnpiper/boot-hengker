@@ -35,9 +35,11 @@ in
     };
   };
 
-  services.boot-tree = {
-    enable = true;
-    consoleFont = "ter-v20n";
+  services.boot-tree.enable = true;
+
+  console = {
+    earlySetup = true;
+    font = "${pkgs.terminus_font}/share/consolefonts/ter-v20n.psf.gz";
   };
 
   systemd.services = lib.mapAttrs (_: demoService) demoUnits.services // {

@@ -67,8 +67,23 @@
         {
           default = craneLib.buildPackage {
             inherit (buildInputsFor pkgs) nativeBuildInputs buildInputs;
-            src = craneLib.cleanCargoSource ./.;
+            src = lib.fileset.toSource {
+              root = ./.;
+              fileset = lib.fileset.unions [
+                (craneLib.fileset.commonCargoSources ./.)
+                ./packaging
+              ];
+            };
             strictDeps = true;
+            postInstall = ''
+              install -Dm644 packaging/systemd/boot-tree.service $out/lib/systemd/system/boot-tree.service
+              substituteInPlace $out/lib/systemd/system/boot-tree.service \
+                --replace-fail /usr/bin/boot-tree $out/bin/boot-tree
+              install -Dm755 packaging/dracut/90boot-tree/module-setup.sh \
+                $out/lib/dracut/modules.d/90boot-tree/module-setup.sh
+              install -Dm644 packaging/mkinitcpio/install/sd-boot-tree \
+                $out/lib/initcpio/install/sd-boot-tree
+            '';
             meta.mainProgram = "boot-tree";
             meta.platforms = lib.platforms.linux;
           };

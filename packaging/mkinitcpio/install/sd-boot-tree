@@ -1,0 +1,15 @@
+#!/usr/bin/bash
+
+build() {
+    add_binary boot-tree
+    add_systemd_unit boot-tree.service
+    add_symlink /usr/lib/systemd/system/sysinit.target.wants/boot-tree.service \
+        /usr/lib/systemd/system/boot-tree.service
+}
+
+help() {
+    cat <<HELP
+Shows a live dependency tree of systemd jobs while the initramfs boots.
+Requires the systemd hook; add sd-boot-tree after it in HOOKS.
+HELP
+}

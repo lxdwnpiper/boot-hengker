@@ -18,6 +18,8 @@ use crate::{
 
 const RECONNECT_PATIENCE: Duration = Duration::from_secs(60);
 const SWITCH_ROOT_UNIT: &str = "initrd-switch-root.service";
+const SILENT_STATUS: &str = "no";
+const CONFIGURED_STATUS: &str = "";
 
 pub struct Feed {
     scope: Scope,
@@ -91,6 +93,9 @@ impl Feed {
     fn connect(&mut self, state: &mut BootState) -> Result<Session, Error> {
         let session = Session::open(self.scope)?;
         session.subscribe()?;
+        if self.scope == Scope::System {
+            session.set_show_status(SILENT_STATUS).ok();
+        }
         let requested_root = match &self.target {
             Some(target) => target.clone(),
             None => session.default_target()?,
@@ -173,6 +178,16 @@ impl Feed {
                     state.update_activity(unit, activity);
                 }
             }
+        }
+    }
+}
+
+impl Drop for Feed {
+    fn drop(&mut self) {
+        if let Some(session) = &self.session
+            && self.scope == Scope::System
+        {
+            session.set_show_status(CONFIGURED_STATUS).ok();
         }
     }
 }

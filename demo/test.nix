@@ -3,16 +3,19 @@
   name = "boot-tree";
   enableOCR = true;
 
-  nodes.machine = {
-    imports = [ demoHost ];
-    virtualisation = {
-      memorySize = 2048;
-      qemu.options = [
-        "-vga none"
-        "-device virtio-vga,xres=1280,yres=800"
-      ];
+  nodes.machine =
+    { lib, ... }:
+    {
+      imports = [ demoHost ];
+      systemd.settings.Manager.ShowStatus = lib.mkForce true;
+      virtualisation = {
+        memorySize = 2048;
+        qemu.options = [
+          "-vga none"
+          "-device virtio-vga,xres=1280,yres=800"
+        ];
+      };
     };
-  };
 
   testScript = ''
     machine.start()
@@ -36,6 +39,10 @@
     assert "handing the console over" in journal, "never handed the console over"
 
     machine.succeed("test \"$(systemctl show -p Result --value boot-tree)\" = success")
+    console_level = machine.succeed("cut -f1 /proc/sys/kernel/printk").strip()
+    assert console_level != "1", f"kernel console level was not restored: {console_level}"
+    show_status = machine.succeed("systemctl show -p ShowStatus --value").strip()
+    assert show_status == "yes", f"systemd status output was not restored: {show_status}"
     machine.screenshot("handed-over")
   '';
 }

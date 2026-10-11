@@ -129,6 +129,17 @@ impl Session {
         Ok(())
     }
 
+    pub fn set_show_status(&self, mode: &str) -> Result<(), Error> {
+        self.call(
+            DESTINATION,
+            MANAGER_PATH,
+            MANAGER_INTERFACE,
+            "SetShowStatus",
+            (mode,),
+        )?;
+        Ok(())
+    }
+
     pub fn default_target(&self) -> Result<String, Error> {
         let reply = self.call(
             DESTINATION,
