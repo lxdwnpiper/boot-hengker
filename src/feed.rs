@@ -22,9 +22,10 @@ const SILENT_STATUS: &str = "no";
 const CONFIGURED_STATUS: &str = "";
 
 pub struct Feed {
+    pub connections: u32,
     scope: Scope,
     target: Option<String>,
-    session: Option<Session>,
+    pub session: Option<Session>,
     unit_paths: HashMap<Path<'static>, String>,
     in_initrd: bool,
     sysroot: Option<Sysroot>,
@@ -35,6 +36,7 @@ pub struct Feed {
 impl Feed {
     pub fn new(scope: Scope, target: Option<String>) -> Self {
         Self {
+            connections: 0,
             in_initrd: scope == Scope::System && FilePath::new(INITRD_RELEASE).exists(),
             scope,
             target,
@@ -66,6 +68,7 @@ impl Feed {
         match self.connect(state) {
             Ok(session) => {
                 self.session = Some(session);
+                self.connections += 1;
                 Ok(())
             }
             Err(_) if Instant::now() < self.reconnect_deadline => {

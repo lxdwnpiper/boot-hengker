@@ -7,6 +7,20 @@
 }:
 let
   cfg = config.services.boot-tree;
+  chosenColors = lib.filterAttrs (_: color: color != null) cfg.palette;
+  configFile = (pkgs.formats.toml { }).generate "boot-tree.toml" { palette = chosenColors; };
+  colorOption =
+    role: default:
+    lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "light-yellow";
+      description = ''
+        Colour for ${role}; unset keeps `${default}`. One of the 16 console
+        colour names (`red`, `light-red`, `dark-gray`, …). What each name
+        looks like comes from the console palette, {option}`console.colors`.
+      '';
+    };
 in
 {
   options.services.boot-tree = {
@@ -23,10 +37,23 @@ in
       defaultText = lib.literalExpression "boot-tree.packages.\${system}.default";
       description = "The boot-tree package, which ships the systemd unit.";
     };
+
+    palette = {
+      text = colorOption "running units and headings" "white";
+      muted = colorOption "rules, tree lines and the time axis" "dark-gray";
+      waiting = colorOption "queued units and finished-unit labels" "gray";
+      running = colorOption "running units and their bars" "yellow";
+      done = colorOption "finished units, stages and milestones" "green";
+      failed = colorOption "failed units" "light-red";
+      target = colorOption "targets in the tree" "cyan";
+    };
   };
 
   config = lib.mkIf cfg.enable {
-    environment.systemPackages = [ cfg.package ];
+    environment = {
+      systemPackages = [ cfg.package ];
+      etc."boot-tree.toml" = lib.mkIf (chosenColors != { }) { source = configFile; };
+    };
 
     systemd = {
       packages = [ cfg.package ];
@@ -37,6 +64,7 @@ in
       packages = [ cfg.package ];
       storePaths = [ (lib.getExe cfg.package) ];
       services.boot-tree.wantedBy = [ "sysinit.target" ];
+      contents."/etc/boot-tree.toml" = lib.mkIf (chosenColors != { }) { source = configFile; };
     };
   };
 }

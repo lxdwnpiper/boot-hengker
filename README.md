@@ -69,6 +69,43 @@ With `boot.initrd.systemd.enable` the unit is added to the initrd as well.
 To draw on another terminal, override `TTYPath=` with
 `systemctl edit boot-tree.service`.
 
+## Configuration
+
+Colours come from `/etc/boot-tree.toml` (another path with `--config`). Every
+key is optional; these are the defaults:
+
+```toml
+[palette]
+text = "white"        # running units, headings
+muted = "dark-gray"   # rules, tree lines, axis
+waiting = "gray"      # queued units, finished-unit labels
+running = "yellow"
+done = "green"
+failed = "light-red"
+target = "cyan"
+```
+
+Values are the 16 console colour names (`red`, `light-red`, `dark-gray`, …).
+The Linux console cannot show other colours, so to change what the names look
+like, set the console palette itself. That recolours every virtual terminal from
+the start of boot:
+
+- NixOS: `console.colors = [ "1d2021" "fb4934" … ];` (16 hex values);
+- elsewhere: the kernel parameters `vt.default_red=`, `vt.default_grn=` and
+  `vt.default_blu=`.
+
+On NixOS set the roles as options; unset ones keep their defaults:
+
+```nix
+services.boot-tree.palette = {
+  running = "light-yellow";
+  done = "light-green";
+};
+```
+
+On dracut and mkinitcpio systems the hooks copy `/etc/boot-tree.toml` into the
+initramfs, so rebuild it after editing.
+
 ## Testing
 
 Commands assume the dev shell is active (`direnv allow` once; `.envrc` runs
@@ -78,7 +115,7 @@ Commands assume the dev shell is active (`direnv allow` once; `.envrc` runs
 | --- | --- |
 | Unit and render snapshot tests | `cargo test` |
 | Scripted boot animation, no systemd needed | `cargo run --example demo` (`q` quits) |
-| Live against your user manager | `nix run .#demo-units -- start`, then `nix run . -- --user --target boot-tree-demo.target --hold-ms 3000` |
+| Live against your user manager | `nix run .#demo-units -- start`, then `nix run . -- --user --target boot-tree-demo.target --hold 3s` |
 | Boot a demo VM in a window | `env -u LD_LIBRARY_PATH nix run .#vm` |
 | Automated boot test with OCR | `nix build .#checks.x86_64-linux.boot` (screenshots in `result/`) |
 | Same test, interactively | `nix run .#checks.x86_64-linux.boot.driverInteractive`, then `test_script()` |

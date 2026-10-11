@@ -6,6 +6,7 @@ use std::{
 
 use boot_tree::{
     model::{ActiveState, Activity, BootState, JobResult, Phase, UnitFacts},
+    palette::Palette,
     view::BootView,
 };
 use ratatui::{
@@ -306,6 +307,7 @@ fn play(terminal: &mut DefaultTerminal) -> io::Result<()> {
             canvas.render_widget(
                 BootView {
                     state: &state,
+                    palette: &Palette::default(),
                     now: now(),
                     host: "demo",
                     frame,

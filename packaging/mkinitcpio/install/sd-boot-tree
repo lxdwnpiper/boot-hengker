@@ -3,6 +3,9 @@
 build() {
     add_binary boot-tree
     add_systemd_unit boot-tree.service
+    if [[ -f /etc/boot-tree.toml ]]; then
+        add_file /etc/boot-tree.toml
+    fi
     add_symlink /usr/lib/systemd/system/sysinit.target.wants/boot-tree.service \
         /usr/lib/systemd/system/boot-tree.service
 }

@@ -5,11 +5,12 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
     thread::sleep,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use boot_tree::{
     model::{BootState, Phase},
+    palette::Palette,
     view::BootView,
 };
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
@@ -30,15 +31,16 @@ use crate::{
 };
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(100);
-const FRAMES_PER_FULL_REPAINT: u64 = 20;
+const FULL_REPAINT_INTERVAL: Duration = Duration::from_secs(1);
 
 pub struct Options {
     pub scope: Scope,
     pub target: Option<String>,
     pub hold: Duration,
+    pub palette: Palette,
 }
 
-pub fn run(options: Options) -> Result<(), Error> {
+pub fn run(options: &Options) -> Result<(), Error> {
     let terminate = Arc::new(AtomicBool::new(false));
     flag::register(SIGTERM, Arc::clone(&terminate))?;
     let phase = match options.scope {
@@ -47,7 +49,7 @@ pub fn run(options: Options) -> Result<(), Error> {
         Scope::System => Phase::Host,
     };
     let mut state = BootState::new(phase);
-    let mut feed = Feed::new(options.scope, options.target);
+    let mut feed = Feed::new(options.scope, options.target.clone());
     let _quiet_kernel = (options.scope == Scope::System)
         .then(QuietKernelConsole::take)
         .flatten();
@@ -58,6 +60,7 @@ pub fn run(options: Options) -> Result<(), Error> {
         &mut feed,
         &mut terminal,
         &terminate,
+        &options.palette,
         options.hold,
     );
     ratatui::restore();
@@ -80,20 +83,29 @@ fn watch(
     feed: &mut Feed,
     terminal: &mut DefaultTerminal,
     terminate: &AtomicBool,
+    palette: &Palette,
     hold: Duration,
 ) -> Result<(), Error> {
     let host = uname().nodename().to_string_lossy().into_owned();
     let mut frame: u64 = 0;
+    let mut painted_connections = feed.connections;
+    let mut last_full_repaint = Instant::now();
     loop {
         feed.pump(state, FRAME_INTERVAL)?;
-        if frame.is_multiple_of(FRAMES_PER_FULL_REPAINT) {
+        if feed.session.is_none()
+            || feed.connections != painted_connections
+            || last_full_repaint.elapsed() >= FULL_REPAINT_INTERVAL
+        {
             terminal.backend_mut().clear_region(ClearType::All)?;
             terminal.swap_buffers();
+            painted_connections = feed.connections;
+            last_full_repaint = Instant::now();
         }
         terminal.draw(|canvas| {
             canvas.render_widget(
                 BootView {
                     state,
+                    palette,
                     now: monotonic_now(),
                     host: &host,
                     frame,

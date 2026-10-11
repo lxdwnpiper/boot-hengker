@@ -19,7 +19,7 @@ def "main start" [--units: path, --target: string] {
     install-units $units
     ^systemctl --user stop ...(unit-names $units)
     ^systemctl --user start --no-block $target
-    print $"started ($target); watch it with: boot-tree --user --target ($target) --hold-ms 3000"
+    print $"started ($target); watch it with: boot-tree --user --target ($target) --hold 3s"
 }
 
 def "main remove" [--units: path, --target: string] {

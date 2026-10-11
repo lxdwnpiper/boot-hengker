@@ -87,6 +87,7 @@ pub struct Activity {
 struct PendingJob {
     id: u32,
     queued_at: Duration,
+    brings_up: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -163,6 +164,14 @@ pub struct Tally {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FinishedRun {
+    pub label: String,
+    pub started_at: Duration,
+    pub finished_at: Duration,
+    pub failed: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FinishedStage {
     pub label: &'static str,
     pub finished_units: usize,
@@ -177,8 +186,9 @@ pub struct BootState {
     pub root: Option<String>,
     pub failed: Vec<String>,
     pub finished_stages: Vec<FinishedStage>,
+    pub finished_runs: Vec<FinishedRun>,
+    pub handoff_unit: Option<String>,
     root_job_seen: bool,
-    handoff_unit: Option<String>,
     milestone_targets: Vec<String>,
     finished_before_reconnect: usize,
     units: HashMap<String, UnitRecord>,
@@ -210,6 +220,7 @@ impl BootState {
             root: None,
             failed: Vec::new(),
             finished_stages: Vec::new(),
+            finished_runs: Vec::new(),
             root_job_seen: false,
             handoff_unit,
             milestone_targets,
@@ -258,7 +269,7 @@ impl BootState {
     }
 
     pub fn queue_job(&mut self, id: u32, unit: &str, at: Duration) {
-        self.queue_job_of_unknown_kind(id, unit, at);
+        self.enqueue(id, unit, at, true);
         if self.jobs.get(&id).is_some_and(|tracked| tracked == unit)
             && self.root.as_deref() == Some(unit)
         {
@@ -267,13 +278,21 @@ impl BootState {
     }
 
     pub fn queue_job_of_unknown_kind(&mut self, id: u32, unit: &str, at: Duration) {
+        self.enqueue(id, unit, at, false);
+    }
+
+    fn enqueue(&mut self, id: u32, unit: &str, at: Duration, brings_up: bool) {
         if self.jobs.contains_key(&id) {
             return;
         }
         let Some(record) = self.units.get_mut(unit) else {
             return;
         };
-        record.job = Some(PendingJob { id, queued_at: at });
+        record.job = Some(PendingJob {
+            id,
+            queued_at: at,
+            brings_up,
+        });
         record.outcome = None;
         self.jobs.insert(id, unit.to_owned());
     }
@@ -285,8 +304,25 @@ impl BootState {
         let Some(record) = self.units.get_mut(&unit) else {
             return;
         };
+        let started_at = record
+            .inactive_exit
+            .filter(|started| *started >= self.origin && *started <= at)
+            .filter(|_| record.job.is_some_and(|job| job.id == id && job.brings_up));
         if record.job.is_some_and(|job| job.id == id) {
             record.job = None;
+        }
+        if let Some(started_at) = started_at
+            && !record.facts.name.ends_with(".target")
+        {
+            self.finished_runs.push(FinishedRun {
+                label: display_label(&record.facts),
+                started_at,
+                finished_at: at,
+                failed: matches!(
+                    result,
+                    JobResult::Failed | JobResult::Timeout | JobResult::Dependency
+                ),
+            });
         }
         let outcome = match result {
             JobResult::Done => Outcome::Succeeded { at },
@@ -611,7 +647,10 @@ fn display_label(facts: &UnitFacts) -> String {
     if let Some(stem) = facts.name.strip_suffix(".service") {
         return stem.to_owned();
     }
-    if facts.name.ends_with(".device") && !facts.description.is_empty() {
+    let described_by_path = [".device", ".mount", ".swap", ".automount"]
+        .iter()
+        .any(|suffix| facts.name.ends_with(suffix));
+    if described_by_path && !facts.description.is_empty() {
         return facts.description.clone();
     }
     facts.name.clone()

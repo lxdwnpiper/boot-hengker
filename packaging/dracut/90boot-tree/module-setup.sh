@@ -12,5 +12,8 @@ depends() {
 install() {
     inst_binary boot-tree
     inst_simple "$systemdsystemunitdir/boot-tree.service"
+    if [[ -f /etc/boot-tree.toml ]]; then
+        inst_simple /etc/boot-tree.toml
+    fi
     $SYSTEMCTL -q --root "$initdir" enable boot-tree.service
 }
