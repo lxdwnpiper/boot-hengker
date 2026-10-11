@@ -8,6 +8,10 @@ use std::{
     time::Duration,
 };
 
+use boot_tree::{
+    model::{BootState, Phase},
+    view::BootView,
+};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     DefaultTerminal,
@@ -20,10 +24,8 @@ use crate::{
     console::ForegroundVt,
     error::Error,
     feed::{self, FeedOptions, JobKind, Update},
-    model::{BootState, Phase},
     sysroot::running_in_initrd,
     systemd::Scope,
-    view::BootView,
 };
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(100);

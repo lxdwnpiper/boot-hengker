@@ -20,7 +20,7 @@
     machine.wait_for_text("initrd")
     machine.screenshot("initrd")
 
-    machine.wait_for_text("demo-slow")
+    machine.wait_for_text("stage 2")
     machine.screenshot("stage-2")
 
     machine.wait_for_unit("greetd.service")

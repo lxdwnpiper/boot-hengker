@@ -415,6 +415,16 @@ impl BootState {
         }
     }
 
+    pub fn finished_stages(&self) -> Vec<MilestoneRow> {
+        self.frozen.iter().map(FrozenMilestone::row).collect()
+    }
+
+    pub fn current_stage_started_at(&self) -> Micros {
+        self.frozen
+            .last()
+            .map_or(self.origin, |frozen| frozen.reached_at)
+    }
+
     pub fn milestones(&self) -> Vec<MilestoneRow> {
         let mut finished: Vec<Micros> = self
             .units

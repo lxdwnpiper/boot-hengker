@@ -2,11 +2,9 @@ mod clock;
 mod console;
 mod error;
 mod feed;
-mod model;
 mod run;
 mod sysroot;
 mod systemd;
-mod view;
 
 use std::{process::ExitCode, time::Duration};
 

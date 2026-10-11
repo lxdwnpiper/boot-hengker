@@ -1,15 +1,13 @@
 use std::{iter, time::Duration};
 
+use boot_tree::model::{ActiveState, Activity, JobResult, Micros, UnitFacts};
 use dbus::{
     Message, MessageType, Path,
     arg::{AppendAll, PropMap, RefArg, Variant},
     channel::{BusType, Channel},
 };
 
-use crate::{
-    error::Error,
-    model::{ActiveState, Activity, JobResult, Micros, UnitFacts},
-};
+use crate::error::Error;
 
 const DESTINATION: &str = "org.freedesktop.systemd1";
 const MANAGER_PATH: &str = "/org/freedesktop/systemd1";

@@ -6,12 +6,12 @@ use std::{
     time::{Duration, Instant},
 };
 
+use boot_tree::model::{Activity, HANDOFF_UNIT, HOST_MILESTONES, JobResult, Micros, UnitFacts};
 use dbus::Path;
 
 use crate::{
     clock::monotonic_now,
     error::Error,
-    model::{Activity, HANDOFF_UNIT, HOST_MILESTONES, JobResult, Micros, UnitFacts},
     sysroot::{Sysroot, running_in_initrd},
     systemd::{Scope, Session, Signal, brings_unit_up},
 };

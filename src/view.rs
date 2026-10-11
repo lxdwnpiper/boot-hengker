@@ -1,10 +1,11 @@
-use std::iter::repeat_n;
+use std::iter::{once, repeat_n};
 
 use ratatui::{
     buffer::Buffer,
-    layout::Rect,
-    style::{Color, Modifier, Style},
-    widgets::Widget,
+    layout::{Constraint, Layout, Rect},
+    style::{Style, Stylize},
+    text::{Line, Span},
+    widgets::{Block, Borders, Paragraph, Row, Table, Widget},
 };
 
 use crate::model::{BootState, Micros, MilestoneRow, PendingRow, RowStatus, Tally};
@@ -12,14 +13,20 @@ use crate::model::{BootState, Micros, MilestoneRow, PendingRow, RowStatus, Tally
 const SPINNER: [char; 4] = ['|', '/', '-', '\\'];
 const DONE: char = '√';
 const FAILED: char = '×';
-const RUNNING_BAR: char = '█';
-const WAITING_BAR: char = '░';
+const BEAD: char = '■';
+const WAITING_BEAD: char = '·';
 const STILL_GOING: char = '▶';
-const ELLIPSIS: char = '…';
-const PHASE_ARROW: char = '→';
+const RUNNING_MARK: char = '►';
+const ROOT_SWITCH_MARK: char = '│';
+const RULE: char = '─';
 
+const DURATION_WIDTH: u16 = 8;
+const TIMELINE_LABEL_WIDTH: u16 = 28;
 const MIN_BAR_WIDTH: u16 = 12;
-const DURATION_WIDTH: usize = 7;
+const MIN_HEIGHT_FOR_TIMELINE: u16 = 12;
+const TIMELINE_CHROME_HEIGHT: u16 = 3;
+const HEADER_HEIGHT: u16 = 2;
+const FOOTER_HEIGHT: u16 = 2;
 const MAX_FAILED_ROWS: usize = 3;
 const AXIS_STEPS_SECONDS: [u64; 12] = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800, 3600];
 const AXIS_LABEL_SPACING: u64 = 8;
@@ -31,30 +38,316 @@ pub struct BootView<'a> {
     pub frame: u64,
 }
 
-struct Columns {
-    left: u16,
-    bar_x: u16,
-    bar_width: u16,
+impl Widget for BootView<'_> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let rows = self.state.pending_rows();
+        let milestones: Vec<MilestoneRow> = self
+            .state
+            .milestones()
+            .into_iter()
+            .filter(|row| row.reached_at.is_some())
+            .collect();
+        let units = timeline_units(&rows);
+        let failures = failure_lines(self.state.failed_units());
+        let stages = self.stage_lines(area.width);
+        let fixed = HEADER_HEIGHT + stages.len() as u16 + failures.len() as u16 + FOOTER_HEIGHT;
+        let heights = Heights::share(
+            area.height.saturating_sub(fixed),
+            rows.len() as u16,
+            timeline_need(area, milestones.len() + units.len()),
+        );
+
+        let [header, _, stage_area, tree, failed, _, timeline, footer] = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Length(HEADER_HEIGHT - 1),
+            Constraint::Length(stages.len() as u16),
+            Constraint::Length(heights.tree),
+            Constraint::Length(failures.len() as u16),
+            Constraint::Fill(1),
+            Constraint::Length(heights.timeline),
+            Constraint::Length(FOOTER_HEIGHT),
+        ])
+        .areas(area);
+
+        self.header().render(header, buf);
+        Paragraph::new(stages).render(stage_area, buf);
+        self.tree(&rows, tree.height).render(tree, buf);
+        Paragraph::new(failures).render(failed, buf);
+        if heights.timeline > 0 {
+            self.timeline(&milestones, &units, timeline.width)
+                .render(timeline, buf);
+        }
+        let root_switched = !self.state.finished_stages().is_empty();
+        footer_paragraph(self.state.tally(), footer.width, root_switched).render(footer, buf);
+    }
 }
 
-impl Columns {
-    fn for_width(width: u16) -> Self {
-        let left = (width * 11 / 20).clamp(40.min(width), 72);
-        let bar_x = left + 1;
-        let bar_width = width.saturating_sub(bar_x);
-        if bar_width < MIN_BAR_WIDTH {
+struct Heights {
+    tree: u16,
+    timeline: u16,
+}
+
+impl Heights {
+    fn share(free: u16, tree_need: u16, timeline_need: u16) -> Self {
+        if tree_need + timeline_need <= free {
             return Self {
-                left: width,
-                bar_x: width,
-                bar_width: 0,
+                tree: tree_need,
+                timeline: timeline_need,
             };
         }
+        let timeline = timeline_need.min((free / 2).max(free.saturating_sub(tree_need)));
         Self {
-            left,
-            bar_x,
-            bar_width,
+            tree: free - timeline,
+            timeline,
         }
     }
+}
+
+fn rule_line(width: u16, left: Vec<Span<'static>>, right: Vec<Span<'static>>) -> Line<'static> {
+    let used = Line::from(left.clone()).width() + Line::from(right.clone()).width();
+    let fill = Span::from(rule(usize::from(width).saturating_sub(used))).dark_gray();
+    Line::from(
+        left.into_iter()
+            .chain(once(fill))
+            .chain(right)
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn rule(length: usize) -> String {
+    repeat_n(RULE, length).collect()
+}
+
+impl BootView<'_> {
+    fn header(&self) -> Table<'static> {
+        let elapsed = format_duration(self.now.saturating_sub(self.state.origin()));
+        Table::new(
+            [Row::new([
+                Line::from(format!("boot-tree  {}", self.host)),
+                Line::from(elapsed).right_aligned(),
+            ])],
+            [Constraint::Fill(1), Constraint::Length(DURATION_WIDTH)],
+        )
+        .bold()
+    }
+
+    fn stage_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let finished = self.state.finished_stages().into_iter().map(|stage| {
+            let took = stage.reached_at.unwrap_or(stage.started_at) - stage.started_at;
+            rule_line(
+                width,
+                vec![
+                    Span::from(format!("{} ", rule(2))).dark_gray(),
+                    Span::from(stage.label).dark_gray(),
+                    Span::from(format!(" {} ", rule(2))).dark_gray(),
+                    Span::from(format!("{BEAD} done in {}", format_duration(took))).green(),
+                    Span::from(format!(" · {} ", unit_count(stage.finished_units))).dark_gray(),
+                ],
+                Vec::new(),
+            )
+        });
+        let running_for = self
+            .now
+            .saturating_sub(self.state.current_stage_started_at());
+        let current = rule_line(
+            width,
+            vec![
+                Span::from(format!("{} ", rule(2))).dark_gray(),
+                Span::from(self.state.phase().label()).bold(),
+                Span::raw(" "),
+            ],
+            vec![
+                Span::raw(" "),
+                Span::from(format_duration(running_for)).bold(),
+                Span::from(format!(" {}", rule(2))).dark_gray(),
+            ],
+        );
+        finished.chain(once(current)).collect()
+    }
+
+    fn tree<'a>(&self, rows: &'a [PendingRow], height: u16) -> Table<'a> {
+        let capacity = usize::from(height);
+        let shown = if rows.len() > capacity {
+            capacity.saturating_sub(1)
+        } else {
+            rows.len()
+        };
+        let hidden = rows.len() - shown;
+        let overflow =
+            (hidden > 0).then(|| Row::new([Line::from(format!("… {hidden} more")).dark_gray()]));
+        Table::new(
+            rows.iter()
+                .take(shown)
+                .map(|row| self.tree_row(row))
+                .chain(overflow),
+            [Constraint::Fill(1), Constraint::Length(DURATION_WIDTH)],
+        )
+    }
+
+    fn tree_row<'a>(&self, row: &'a PendingRow) -> Row<'a> {
+        let since = row.running_since.unwrap_or(row.queued_at);
+        Row::new([
+            Line::from(vec![
+                Span::from(tree_prefix(row)).dark_gray(),
+                status_marker(row, self.frame),
+                Span::styled(row.label.as_str(), label_style(row)),
+            ]),
+            Line::from(format_duration(self.now.saturating_sub(since)))
+                .style(label_style(row))
+                .right_aligned(),
+        ])
+    }
+
+    fn timeline<'a>(
+        &self,
+        milestones: &'a [MilestoneRow],
+        units: &[&'a PendingRow],
+        width: u16,
+    ) -> Table<'a> {
+        let axis = TimeAxis::new(
+            self.state.origin(),
+            self.now,
+            width.saturating_sub(TIMELINE_LABEL_WIDTH + 1),
+        );
+        let root_switches: Vec<Micros> = self
+            .state
+            .finished_stages()
+            .iter()
+            .filter_map(|stage| stage.reached_at)
+            .collect();
+        let axis_rows = [
+            Row::new([Line::default(), axis.labels()]),
+            Row::new([Line::default(), axis.ticks_line(&root_switches)]),
+        ];
+        let milestone_rows = milestones.iter().map(|row| {
+            Row::new([
+                Line::from(format!(
+                    "{DONE} {} ({})",
+                    row.label,
+                    unit_count(row.finished_units)
+                ))
+                .green(),
+                axis.bar(&milestone_segments(row), None, &root_switches),
+            ])
+        });
+        let unit_rows = units.iter().map(|row| {
+            Row::new([
+                Line::from(vec![
+                    timeline_marker(row),
+                    Span::styled(row.label.as_str(), label_style(row)),
+                ]),
+                axis.bar(
+                    &unit_segments(row, self.now),
+                    Some(self.now),
+                    &root_switches,
+                ),
+            ])
+        });
+        Table::new(
+            axis_rows.into_iter().chain(milestone_rows).chain(unit_rows),
+            [
+                Constraint::Length(TIMELINE_LABEL_WIDTH),
+                Constraint::Fill(1),
+            ],
+        )
+        .block(
+            Block::new()
+                .borders(Borders::TOP)
+                .border_style(Style::new().dark_gray())
+                .title(Line::from(" timeline ").dark_gray()),
+        )
+    }
+}
+
+fn timeline_need(screen: Rect, entries: usize) -> u16 {
+    let fits = screen.width >= TIMELINE_LABEL_WIDTH + 1 + MIN_BAR_WIDTH
+        && screen.height >= MIN_HEIGHT_FOR_TIMELINE
+        && entries > 0;
+    if fits {
+        TIMELINE_CHROME_HEIGHT + entries as u16
+    } else {
+        0
+    }
+}
+
+fn failure_lines(units: &[String]) -> Vec<Line<'static>> {
+    let hidden = units.len().saturating_sub(MAX_FAILED_ROWS);
+    units
+        .iter()
+        .take(MAX_FAILED_ROWS)
+        .map(|unit| format!("{FAILED} {unit} failed"))
+        .chain((hidden > 0).then(|| format!("{FAILED} {hidden} more failed")))
+        .map(|text| Line::from(text).red().bold())
+        .collect()
+}
+
+fn footer_paragraph(tally: Tally, width: u16, root_switched: bool) -> Paragraph<'static> {
+    let counts = format!(
+        "{DONE} {} done   {} running   {} waiting   {FAILED} {} failed",
+        tally.done, tally.running, tally.waiting, tally.failed
+    );
+    let switch_legend = if root_switched {
+        format!("  {ROOT_SWITCH_MARK} root switch")
+    } else {
+        String::new()
+    };
+    let legend = format!("{BEAD} running  {WAITING_BEAD} waiting{switch_legend}");
+    let gap = usize::from(width).saturating_sub(counts.chars().count() + legend.chars().count());
+    let counts_style = if tally.failed > 0 {
+        Style::new().red().bold()
+    } else {
+        Style::new()
+    };
+    let line = if gap >= 2 {
+        Line::from(vec![
+            Span::styled(counts, counts_style),
+            Span::raw(" ".repeat(gap)),
+            Span::from(legend).dark_gray(),
+        ])
+    } else {
+        Line::from(Span::styled(counts, counts_style))
+    };
+    Paragraph::new(line).block(
+        Block::new()
+            .borders(Borders::TOP)
+            .border_style(Style::new().dark_gray()),
+    )
+}
+
+struct Segment {
+    from: Micros,
+    to: Micros,
+    symbol: char,
+    style: Style,
+}
+
+fn milestone_segments(row: &MilestoneRow) -> Vec<Segment> {
+    row.reached_at
+        .map(|reached_at| Segment {
+            from: row.started_at,
+            to: reached_at,
+            symbol: BEAD,
+            style: Style::new().green(),
+        })
+        .into_iter()
+        .collect()
+}
+
+fn unit_segments(row: &PendingRow, now: Micros) -> Vec<Segment> {
+    let waiting_until = row.running_since.unwrap_or(now);
+    let waiting = (waiting_until > row.queued_at).then(|| Segment {
+        from: row.queued_at,
+        to: waiting_until,
+        symbol: WAITING_BEAD,
+        style: Style::new().dark_gray(),
+    });
+    let running = row.running_since.map(|since| Segment {
+        from: since,
+        to: now,
+        symbol: BEAD,
+        style: Style::new().yellow(),
+    });
+    waiting.into_iter().chain(running).collect()
 }
 
 struct TimeAxis {
@@ -64,6 +357,62 @@ struct TimeAxis {
     width: u16,
 }
 
+struct Stroke {
+    column: u16,
+    glyphs: String,
+    style: Style,
+}
+
+impl Stroke {
+    fn run(column: u16, length: u16, symbol: char, style: Style) -> Self {
+        Self {
+            column,
+            glyphs: repeat_n(symbol, usize::from(length)).collect(),
+            style,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+struct Glyph {
+    symbol: char,
+    style: Style,
+}
+
+const BLANK: Glyph = Glyph {
+    symbol: ' ',
+    style: Style::new(),
+};
+
+fn canvas_line(width: u16, strokes: impl IntoIterator<Item = Stroke>) -> Line<'static> {
+    let cells = strokes
+        .into_iter()
+        .fold(vec![BLANK; usize::from(width)], |mut cells, stroke| {
+            cells
+                .iter_mut()
+                .skip(usize::from(stroke.column))
+                .zip(stroke.glyphs.chars())
+                .for_each(|(cell, symbol)| {
+                    *cell = Glyph {
+                        symbol,
+                        style: stroke.style,
+                    };
+                });
+            cells
+        });
+    Line::from(
+        cells
+            .chunk_by(|left, right| left.style == right.style)
+            .map(|run| {
+                Span::styled(
+                    run.iter().map(|glyph| glyph.symbol).collect::<String>(),
+                    run[0].style,
+                )
+            })
+            .collect::<Vec<_>>(),
+    )
+}
+
 impl TimeAxis {
     fn new(origin: Micros, now: Micros, width: u16) -> Self {
         let span_seconds = now.saturating_sub(origin).div_ceil(1_000_000).max(1);
@@ -71,7 +420,7 @@ impl TimeAxis {
         let step_seconds = AXIS_STEPS_SECONDS
             .into_iter()
             .find(|step| span_seconds.div_ceil(*step) <= max_labels)
-            .unwrap_or(*AXIS_STEPS_SECONDS.last().expect("axis steps are not empty"));
+            .unwrap_or(AXIS_STEPS_SECONDS[AXIS_STEPS_SECONDS.len() - 1]);
         let end_seconds = span_seconds.div_ceil(step_seconds).max(1) * step_seconds;
         Self {
             origin,
@@ -87,32 +436,145 @@ impl TimeAxis {
         ((fraction * f64::from(self.width)) as u16).min(self.width.saturating_sub(1))
     }
 
-    fn ticks(&self) -> impl Iterator<Item = AxisTick> + '_ {
+    fn tick_offsets(&self) -> impl Iterator<Item = Micros> + '_ {
         (0..)
             .map(|index| index * self.step)
             .take_while(|offset| self.origin + offset <= self.end)
-            .map(|offset| AxisTick {
-                column: self.column(self.origin + offset),
-                offset,
+    }
+
+    fn root_switch_strokes(&self, root_switches: &[Micros]) -> Vec<Stroke> {
+        root_switches
+            .iter()
+            .map(|at| {
+                Stroke::run(
+                    self.column(*at),
+                    1,
+                    ROOT_SWITCH_MARK,
+                    Style::new().dark_gray(),
+                )
             })
+            .collect()
+    }
+
+    fn labels(&self) -> Line<'static> {
+        canvas_line(
+            self.width,
+            self.tick_offsets().map(|offset| {
+                let glyphs = format_axis_label(offset);
+                Stroke {
+                    column: self
+                        .column(self.origin + offset)
+                        .min(self.width.saturating_sub(glyphs.len() as u16)),
+                    glyphs,
+                    style: Style::new().dark_gray(),
+                }
+            }),
+        )
+    }
+
+    fn ticks_line(&self, root_switches: &[Micros]) -> Line<'static> {
+        canvas_line(
+            self.width,
+            self.root_switch_strokes(root_switches)
+                .into_iter()
+                .chain(self.tick_offsets().map(|offset| {
+                    Stroke::run(
+                        self.column(self.origin + offset),
+                        1,
+                        '|',
+                        Style::new().dark_gray(),
+                    )
+                })),
+        )
+    }
+
+    fn bar(
+        &self,
+        segments: &[Segment],
+        still_going_at: Option<Micros>,
+        root_switches: &[Micros],
+    ) -> Line<'static> {
+        let bars = segments.iter().map(|segment| {
+            let start = self.column(segment.from);
+            let end = self.column(segment.to).max(start + 1);
+            Stroke::run(start, end - start, segment.symbol, segment.style)
+        });
+        let still_going = still_going_at
+            .map(|now| Stroke::run(self.column(now), 1, STILL_GOING, Style::new().dark_gray()));
+        canvas_line(
+            self.width,
+            self.root_switch_strokes(root_switches)
+                .into_iter()
+                .chain(bars)
+                .chain(still_going),
+        )
     }
 }
 
-struct AxisTick {
-    column: u16,
-    offset: Micros,
+fn timeline_units(rows: &[PendingRow]) -> Vec<&PendingRow> {
+    let mut units: Vec<&PendingRow> = rows.iter().filter(|row| !is_target(row)).collect();
+    units.sort_by_key(|row| row.running_since.unwrap_or(Micros::MAX));
+    units
+}
+
+fn is_target(row: &PendingRow) -> bool {
+    row.label.ends_with(".target")
+}
+
+fn status_marker(row: &PendingRow, frame: u64) -> Span<'static> {
+    match (is_target(row), row.status) {
+        (true, _) => Span::raw(""),
+        (false, RowStatus::Running) => {
+            Span::from(format!("[{}] ", SPINNER[(frame % 4) as usize])).yellow()
+        }
+        (false, RowStatus::Waiting) => Span::from("[ ] ").dark_gray(),
+    }
+}
+
+fn timeline_marker(row: &PendingRow) -> Span<'static> {
+    match row.status {
+        RowStatus::Running => Span::from(format!("{RUNNING_MARK} ")).yellow(),
+        RowStatus::Waiting => Span::raw("  "),
+    }
+}
+
+fn label_style(row: &PendingRow) -> Style {
+    match (is_target(row), row.status) {
+        (true, _) => Style::new().cyan(),
+        (false, RowStatus::Running) => Style::new(),
+        (false, RowStatus::Waiting) => Style::new().dark_gray(),
+    }
+}
+
+fn tree_prefix(row: &PendingRow) -> String {
+    let ancestors = row
+        .is_last_sibling
+        .iter()
+        .skip(1)
+        .take(row.depth.saturating_sub(1))
+        .map(|ancestor_is_last| if *ancestor_is_last { "   " } else { "│  " });
+    let connector = (row.depth > 0).then(|| match row.is_last_sibling.last() {
+        Some(false) => "├─ ",
+        _ => "└─ ",
+    });
+    ancestors.chain(connector).chain(once("")).collect()
+}
+
+fn unit_count(count: usize) -> String {
+    match count {
+        1 => "1 unit".to_owned(),
+        count => format!("{count} units"),
+    }
 }
 
 fn format_duration(micros: Micros) -> String {
     let tenths = micros / 100_000;
-    if tenths < 600 {
-        return format!("{}.{}s", tenths / 10, tenths % 10);
-    }
     let seconds = micros / 1_000_000;
-    if seconds < 3600 {
-        return format!("{}m{:02}s", seconds / 60, seconds % 60);
+    match seconds {
+        0..60 => format!("{}.{}s", tenths / 10, tenths % 10),
+        60..3600 => format!("{}m{:02}s", seconds / 60, seconds % 60),
+        _ => format!("{}h{:02}m", seconds / 3600, seconds % 3600 / 60),
     }
-    format!("{}h{:02}m", seconds / 3600, seconds % 3600 / 60)
 }
 
 fn format_axis_label(offset: Micros) -> String {
@@ -121,309 +583,6 @@ fn format_axis_label(offset: Micros) -> String {
         format!("{seconds}s")
     } else {
         format!("{}m", seconds / 60)
-    }
-}
-
-fn truncate(text: &str, width: usize) -> String {
-    if text.chars().count() <= width {
-        return text.to_owned();
-    }
-    if width == 0 {
-        return String::new();
-    }
-    let mut kept: String = text.chars().take(width - 1).collect();
-    kept.push(ELLIPSIS);
-    kept
-}
-
-fn tree_prefix(row: &PendingRow) -> String {
-    let mut prefix: String = row
-        .is_last_sibling
-        .iter()
-        .skip(1)
-        .take(row.depth.saturating_sub(1))
-        .map(|ancestor_is_last| if *ancestor_is_last { "   " } else { "│  " })
-        .collect();
-    if row.depth > 0 {
-        let is_last = row.is_last_sibling.last().copied().unwrap_or(true);
-        prefix.push_str(if is_last { "└─ " } else { "├─ " });
-    }
-    prefix
-}
-
-struct Palette;
-
-impl Palette {
-    fn header() -> Style {
-        Style::new().add_modifier(Modifier::BOLD)
-    }
-
-    fn dim() -> Style {
-        Style::new().fg(Color::DarkGray)
-    }
-
-    fn running() -> Style {
-        Style::new().fg(Color::Yellow)
-    }
-
-    fn waiting() -> Style {
-        Style::new().fg(Color::DarkGray)
-    }
-
-    fn done() -> Style {
-        Style::new().fg(Color::Green)
-    }
-
-    fn failed() -> Style {
-        Style::new().fg(Color::Red).add_modifier(Modifier::BOLD)
-    }
-
-    fn target() -> Style {
-        Style::new().fg(Color::Cyan)
-    }
-}
-
-struct Painter<'b> {
-    buf: &'b mut Buffer,
-    area: Rect,
-}
-
-impl Painter<'_> {
-    fn text(&mut self, x: u16, y: u16, text: &str, style: Style) {
-        if y >= self.area.height || x >= self.area.width {
-            return;
-        }
-        let room = usize::from(self.area.width - x);
-        self.buf
-            .set_stringn(self.area.x + x, self.area.y + y, text, room, style);
-    }
-
-    fn right_aligned(&mut self, right_edge: u16, y: u16, text: &str, style: Style) {
-        let width = text.chars().count() as u16;
-        self.text(right_edge.saturating_sub(width), y, text, style);
-    }
-
-    fn fill(&mut self, x: u16, y: u16, length: u16, symbol: char, style: Style) {
-        let run: String = repeat_n(symbol, usize::from(length)).collect();
-        self.text(x, y, &run, style);
-    }
-}
-
-impl BootView<'_> {
-    fn draw_header(&self, painter: &mut Painter, columns: &Columns, axis: Option<&TimeAxis>) {
-        let title = format!(
-            "boot-tree  {} {PHASE_ARROW} {}",
-            self.host,
-            self.state.phase().label()
-        );
-        painter.text(0, 0, &title, Palette::header());
-        let elapsed = format_duration(self.now.saturating_sub(self.state.origin()));
-        painter.right_aligned(columns.left, 0, &elapsed, Palette::header());
-        let Some(axis) = axis else {
-            return;
-        };
-        axis.ticks().for_each(|tick| {
-            let label = format_axis_label(tick.offset);
-            let label_width = label.chars().count() as u16;
-            let x = columns.bar_x + tick.column.min(axis.width.saturating_sub(label_width));
-            painter.text(x, 0, &label, Palette::dim());
-            painter.text(columns.bar_x + tick.column, 1, "|", Palette::dim());
-        });
-    }
-
-    fn draw_pending(
-        &self,
-        painter: &mut Painter,
-        columns: &Columns,
-        axis: Option<&TimeAxis>,
-        y: u16,
-        row: &PendingRow,
-    ) {
-        let is_target = row.label.ends_with(".target");
-        let prefix = tree_prefix(row);
-        let marker = match (is_target, row.status) {
-            (true, _) => String::new(),
-            (false, RowStatus::Running) => format!("[{}] ", SPINNER[(self.frame % 4) as usize]),
-            (false, RowStatus::Waiting) => "[ ] ".to_owned(),
-        };
-        let label_style = match (is_target, row.status) {
-            (true, _) => Palette::target(),
-            (false, RowStatus::Running) => Style::new(),
-            (false, RowStatus::Waiting) => Palette::dim(),
-        };
-        let since = row.running_since.unwrap_or(row.queued_at);
-        let duration = format_duration(self.now.saturating_sub(since));
-        let fixed = prefix.chars().count() + marker.chars().count() + DURATION_WIDTH + 1;
-        let label_room = usize::from(columns.left).saturating_sub(fixed);
-        let mut x = 0;
-        painter.text(x, y, &prefix, Palette::dim());
-        x += prefix.chars().count() as u16;
-        let marker_style = if row.status == RowStatus::Running {
-            Palette::running()
-        } else {
-            Palette::dim()
-        };
-        painter.text(x, y, &marker, marker_style);
-        x += marker.chars().count() as u16;
-        painter.text(x, y, &truncate(&row.label, label_room), label_style);
-        painter.right_aligned(columns.left, y, &duration, label_style);
-        let Some(axis) = axis else {
-            return;
-        };
-        let queued = axis.column(row.queued_at);
-        let now = axis.column(self.now);
-        match row.running_since {
-            Some(running_since) => {
-                let started = axis.column(running_since);
-                if started > queued {
-                    painter.fill(
-                        columns.bar_x + queued,
-                        y,
-                        started - queued,
-                        WAITING_BAR,
-                        Palette::waiting(),
-                    );
-                }
-                painter.fill(
-                    columns.bar_x + started,
-                    y,
-                    now.saturating_sub(started).max(1),
-                    RUNNING_BAR,
-                    Palette::running(),
-                );
-            }
-            None => {
-                painter.fill(
-                    columns.bar_x + queued,
-                    y,
-                    now.saturating_sub(queued).max(1),
-                    WAITING_BAR,
-                    Palette::waiting(),
-                );
-            }
-        }
-        let arrow_x = (now + 1).min(axis.width.saturating_sub(1));
-        painter.text(
-            columns.bar_x + arrow_x,
-            y,
-            &STILL_GOING.to_string(),
-            Palette::dim(),
-        );
-    }
-}
-
-impl Painter<'_> {
-    fn milestone(
-        &mut self,
-        columns: &Columns,
-        axis: Option<&TimeAxis>,
-        y: u16,
-        row: &MilestoneRow,
-    ) {
-        let units = match row.finished_units {
-            1 => "1 unit".to_owned(),
-            count => format!("{count} units"),
-        };
-        let label = truncate(&row.label, 18);
-        let Some(reached_at) = row.reached_at else {
-            self.text(0, y, &format!("  {label:<18} {units:>10}"), Palette::dim());
-            return;
-        };
-        self.text(
-            0,
-            y,
-            &format!("{DONE} {label:<18} {units:>10}"),
-            Palette::done(),
-        );
-        let duration = format_duration(reached_at.saturating_sub(row.started_at));
-        self.right_aligned(columns.left, y, &duration, Palette::done());
-        if let Some(axis) = axis {
-            let start = axis.column(row.started_at);
-            let end = axis.column(reached_at);
-            self.fill(
-                columns.bar_x + start,
-                y,
-                end.saturating_sub(start).max(1),
-                RUNNING_BAR,
-                Palette::done(),
-            );
-        }
-    }
-
-    fn footer(&mut self, tally: Tally, y: u16) {
-        self.fill(0, y, self.area.width, '─', Palette::dim());
-        let counts = format!(
-            "{DONE} {} done   {} running   {} waiting   {FAILED} {} failed",
-            tally.done, tally.running, tally.waiting, tally.failed
-        );
-        let style = if tally.failed > 0 {
-            Palette::failed()
-        } else {
-            Style::new()
-        };
-        self.text(0, y + 1, &counts, style);
-        let legend = format!("{RUNNING_BAR} running  {WAITING_BAR} waiting");
-        let room_left = usize::from(self.area.width).saturating_sub(counts.chars().count());
-        if room_left > legend.chars().count() + 2 {
-            self.right_aligned(self.area.width, y + 1, &legend, Palette::dim());
-        }
-    }
-}
-
-impl Widget for BootView<'_> {
-    fn render(self, area: Rect, buf: &mut Buffer) {
-        let mut painter = Painter { buf, area };
-        let columns = Columns::for_width(area.width);
-        let axis = (columns.bar_width > 0)
-            .then(|| TimeAxis::new(self.state.origin(), self.now, columns.bar_width));
-        self.draw_header(&mut painter, &columns, axis.as_ref());
-
-        let milestones = self.state.milestones();
-        let failed = self.state.failed_units();
-        let shown_failed = failed.len().min(MAX_FAILED_ROWS);
-        let failed_lines = shown_failed + usize::from(failed.len() > MAX_FAILED_ROWS);
-        let footer_height = 2;
-        let bottom_height = (milestones.len() + failed_lines + footer_height) as u16;
-        let tree_top = 2;
-        let tree_bottom = area.height.saturating_sub(bottom_height + 1).max(tree_top);
-
-        let rows = self.state.pending_rows();
-        let capacity = usize::from(tree_bottom - tree_top);
-        let overflow = rows.len() > capacity;
-        let visible = if overflow {
-            capacity.saturating_sub(1)
-        } else {
-            rows.len()
-        };
-        rows.iter()
-            .take(visible)
-            .zip(tree_top..)
-            .for_each(|(row, y)| self.draw_pending(&mut painter, &columns, axis.as_ref(), y, row));
-        if overflow {
-            let hidden = rows.len() - visible;
-            painter.text(
-                0,
-                tree_top + visible as u16,
-                &format!("{ELLIPSIS} {hidden} more"),
-                Palette::dim(),
-            );
-        }
-
-        let milestones_top = area.height.saturating_sub(bottom_height);
-        milestones
-            .iter()
-            .zip(milestones_top..)
-            .for_each(|(milestone, y)| painter.milestone(&columns, axis.as_ref(), y, milestone));
-        let failed_top = milestones_top + milestones.len() as u16;
-        let hidden_failures = failed.len().saturating_sub(MAX_FAILED_ROWS);
-        failed
-            .iter()
-            .take(shown_failed)
-            .map(|unit| format!("{FAILED} {unit} failed"))
-            .chain((hidden_failures > 0).then(|| format!("{FAILED} {hidden_failures} more failed")))
-            .zip(failed_top..)
-            .for_each(|(line, y)| painter.text(0, y, &line, Palette::failed()));
-        painter.footer(self.state.tally(), failed_top + failed_lines as u16);
     }
 }
 
@@ -468,88 +627,144 @@ mod tests {
             .collect()
     }
 
+    fn running_since(since: Micros) -> Activity {
+        Activity {
+            state: Some(ActiveState::Activating),
+            inactive_exit: Some(since),
+            active_enter: None,
+        }
+    }
+
     fn boot_in_progress() -> BootState {
         let mut state = BootState::new(Phase::Host);
         state.set_root("graphical.target".to_owned());
-        state.track_unit(
-            facts("graphical.target", &["multi-user.target"]),
-            Activity::default(),
-        );
-        state.track_unit(
-            facts(
-                "multi-user.target",
-                &["docker.service", "systemd-rfkill.service"],
-            ),
-            Activity::default(),
-        );
-        state.track_unit(
-            facts("docker.service", &[]),
-            Activity {
-                state: Some(ActiveState::Activating),
-                inactive_exit: Some(9_000_000),
-                active_enter: None,
-            },
-        );
-        state.track_unit(
-            facts("systemd-rfkill.service", &[]),
-            Activity {
-                state: Some(ActiveState::Activating),
-                inactive_exit: Some(6_000_000),
-                active_enter: None,
-            },
-        );
-        state.track_unit(facts("sysinit.target", &[]), Activity::default());
-        state.track_unit(facts("nvidia-powerd.service", &[]), Activity::default());
         [
-            "graphical.target",
-            "multi-user.target",
-            "docker.service",
-            "systemd-rfkill.service",
-            "sysinit.target",
-            "nvidia-powerd.service",
+            (
+                facts("graphical.target", &["multi-user.target"]),
+                Activity::default(),
+            ),
+            (
+                facts(
+                    "multi-user.target",
+                    &["docker.service", "systemd-rfkill.service"],
+                ),
+                Activity::default(),
+            ),
+            (facts("docker.service", &[]), running_since(9_000_000)),
+            (
+                facts("systemd-rfkill.service", &[]),
+                running_since(6_000_000),
+            ),
+            (facts("sysinit.target", &[]), Activity::default()),
+            (facts("nvidia-powerd.service", &[]), Activity::default()),
         ]
         .into_iter()
         .zip(1..)
-        .for_each(|(unit, id)| state.queue_job(id, unit, 1_000_000));
+        .for_each(|((unit, activity), id)| {
+            let name = unit.name.clone();
+            state.track_unit(unit, activity);
+            state.queue_job(id, &name, 1_000_000);
+        });
         state.finish_job(5, JobResult::Done, 4_000_000);
         state.finish_job(6, JobResult::Failed, 5_000_000);
         state
     }
 
     #[test]
-    fn renders_tree_bars_milestones_and_footer() {
-        let lines = render(&boot_in_progress(), 12_400_000, 110, 14);
+    fn tree_on_top_timeline_below() {
+        let lines = render(&boot_in_progress(), 12_400_000, 110, 24);
         let screen = lines.join("\n");
+        assert!(lines[0].starts_with("boot-tree  ryzen"), "{screen}");
+        assert!(lines[0].ends_with("12.4s"), "{screen}");
+        assert!(lines[2].starts_with("── stage 2 ──"), "{screen}");
+        assert!(lines[2].ends_with("12.4s ──"), "{screen}");
+        assert!(lines[3].starts_with("graphical.target"), "{screen}");
+        assert!(lines[4].starts_with("└─ multi-user.target"), "{screen}");
+        assert!(lines[5].starts_with("   ├─ [/] systemd-rfkill"), "{screen}");
+        assert!(lines[6].starts_with("   └─ [/] docker"), "{screen}");
         assert!(
-            lines[0].starts_with("boot-tree  ryzen → stage 2"),
+            lines[7].starts_with("× nvidia-powerd.service failed"),
             "{screen}"
         );
-        assert!(lines[0].contains("12.4s"), "{screen}");
-        assert!(lines[2].starts_with("graphical.target"), "{screen}");
-        assert!(lines[3].starts_with("└─ multi-user.target"), "{screen}");
-        assert!(lines[4].starts_with("   ├─ [/] systemd-rfkill"), "{screen}");
-        assert!(lines[5].starts_with("   └─ [/] docker"), "{screen}");
-        assert!(lines[4].contains('█') && lines[4].contains('▶'), "{screen}");
-        assert!(screen.contains("√ sysinit.target"), "{screen}");
+        let timeline = lines
+            .iter()
+            .position(|line| line.contains(" timeline "))
+            .expect("timeline panel");
+        assert_eq!(timeline, 24 - 2 - 3 - 3, "{screen}");
+        assert!(lines[timeline + 1].contains("0s"), "{screen}");
+        assert!(
+            lines[timeline + 3].starts_with("√ sysinit.target (1 unit)"),
+            "{screen}"
+        );
+        assert!(lines[timeline + 3].contains('■'), "{screen}");
+        assert!(
+            lines[timeline + 4].starts_with("► systemd-rfkill"),
+            "{screen}"
+        );
+        assert!(
+            lines[timeline + 4].contains("·■") && lines[timeline + 4].ends_with('▶'),
+            "{screen}"
+        );
+        assert!(lines[timeline + 5].starts_with("► docker"), "{screen}");
+        assert!(!screen.contains("root switch"), "{screen}");
         assert!(
             screen.contains("× nvidia-powerd.service failed"),
             "{screen}"
         );
         assert!(
-            screen.contains("√ 1 done   2 running   2 waiting   × 1 failed"),
+            lines[23].starts_with("√ 1 done   2 running   2 waiting   × 1 failed"),
             "{screen}"
         );
     }
 
     #[test]
     fn narrow_screens_drop_the_timeline() {
-        let lines = render(&boot_in_progress(), 12_400_000, 50, 14);
+        let lines = render(&boot_in_progress(), 12_400_000, 36, 24);
         assert!(
             lines.iter().all(|line| !line.contains('█')),
             "{}",
             lines.join("\n")
         );
-        assert!(lines[4].contains("systemd-rfkill"));
+        assert!(lines[5].contains("systemd-rfkill"));
+    }
+
+    #[test]
+    fn finished_stages_collapse_into_a_summary_rule() {
+        let mut state = BootState::new(Phase::Initrd);
+        state.set_root("initrd.target".to_owned());
+        state.track_unit(facts("initrd.target", &[]), Activity::default());
+        state.queue_job(1, "initrd.target", 0);
+        state.finish_job(1, JobResult::Done, 6_000_000);
+        state.switch_root(7_200_000);
+        state.set_root("graphical.target".to_owned());
+        state.track_unit(facts("graphical.target", &[]), Activity::default());
+        state.queue_job(2, "graphical.target", 7_300_000);
+        let lines = render(&state, 17_300_000, 110, 24);
+        let screen = lines.join("\n");
+        assert!(
+            lines[2].starts_with("── initrd ── ■ done in 7.2s · 1 unit ──"),
+            "{screen}"
+        );
+        assert!(lines[3].starts_with("── stage 2 ──"), "{screen}");
+        assert!(lines[3].ends_with("10.1s ──"), "{screen}");
+        assert!(lines[4].starts_with("graphical.target"), "{screen}");
+        let timeline = lines
+            .iter()
+            .position(|line| line.contains(" timeline "))
+            .expect("timeline panel");
+        let marker_column = |line: &str| line.chars().position(|symbol| symbol == '│');
+        let switch_column = marker_column(&lines[timeline + 2]).expect("root switch marker");
+        assert!(
+            lines[timeline + 3].starts_with("√ initrd (1 unit)"),
+            "{screen}"
+        );
+        assert_eq!(
+            marker_column(&lines[timeline + 3]),
+            Some(switch_column),
+            "{screen}"
+        );
+        assert!(lines[timeline + 3].contains("■│"), "{screen}");
+        assert!(screen.contains("│ root switch"), "{screen}");
     }
 
     #[test]
@@ -560,7 +775,7 @@ mod tests {
             state.track_unit(facts(&name, &[]), Activity::default());
             state.queue_job(id, &name, 0);
         });
-        let lines = render(&state, 1_000_000, 110, 12);
+        let lines = render(&state, 1_000_000, 110, 20);
         assert!(
             lines.iter().any(|line| line.starts_with("… ")),
             "{}",
