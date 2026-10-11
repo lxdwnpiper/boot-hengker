@@ -396,7 +396,7 @@ mod tests {
         let wide = render(&state, 5000 * MS, 110, 24);
         assert!(
             wide[4].starts_with(
-                "└─ [ ] systemd-poweroff → final.target → shutdown.target → local-fs.target → \
+                "└─ [ ] systemd-poweroff ─ final.target ─ shutdown.target ─ local-fs.target ─ \
                  demo-disk"
             ),
             "{}",
@@ -409,7 +409,7 @@ mod tests {
         );
         let narrow = render(&state, 5000 * MS, 60, 24);
         assert!(
-            narrow[4].starts_with("└─ [ ] systemd-poweroff → … → demo-disk"),
+            narrow[4].starts_with("└─ [ ] systemd-poweroff ─ … ─ demo-disk"),
             "{}",
             narrow.join("\n")
         );

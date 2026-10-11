@@ -25,6 +25,8 @@ in
   networking.hostName = "bootvine-demo";
   system.stateVersion = "26.05";
 
+  boot.consoleLogLevel = lib.mkForce 3;
+
   boot.initrd.systemd = {
     enable = true;
     services.demo-initrd-probe = {

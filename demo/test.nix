@@ -29,6 +29,8 @@
 
     machine.wait_for_text("stage 2")
     machine.screenshot("stage-2")
+    quieted = machine.succeed("cut -f1 /proc/sys/kernel/printk").strip()
+    assert quieted == "1", f"stage 2 sysctl reopened the kernel console: {quieted}"
 
     machine.wait_for_unit("greetd.service")
     machine.wait_until_succeeds("systemctl show -p ActiveState --value bootvine | grep -qx inactive")

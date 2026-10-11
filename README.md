@@ -12,7 +12,9 @@ It needs systemd ≥ 246 as PID 1, libdbus and a virtual terminal (it draws on
 tty12). With a systemd initrd it starts about a second after the kernel and
 follows the boot through the switch to the real root; without one it starts in
 stage 2. While it runs it quiets the kernel console and systemd's status
-output, and restores both when it hands the console back.
+output, and restores both when it hands the console back. Kernel messages from
+before it starts still reach the screen; boot with `quiet`, or set
+`boot.consoleLogLevel = 3` on NixOS, to keep those to errors.
 
 It also follows shutdowns and reboots: the units being stopped, nested under
 the units that have to stop first, until systemd hands over to

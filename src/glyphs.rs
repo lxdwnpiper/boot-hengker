@@ -19,7 +19,7 @@ const STILL_GOING: [char; 2] = ['▶', '>'];
 const RUNNING_MARK: [char; 3] = ['►', '▶', '>'];
 const ROOT_SWITCH_MARK: [char; 2] = ['│', '|'];
 const ELLIPSIS: [&str; 2] = ["…", "..."];
-const CHAIN_LINK: [&str; 2] = ["→", "->"];
+const CHAIN_LINK: [&str; 2] = ["─", "-"];
 
 impl Default for Glyphs {
     fn default() -> Self {
@@ -83,7 +83,7 @@ mod tests {
         assert_eq!(glyphs.done, '√');
         assert_eq!(glyphs.failed, 'x');
         assert_eq!(glyphs.ellipsis, "...");
-        assert_eq!(glyphs.chain_link, "→");
+        assert_eq!(glyphs.chain_link, "─");
     }
 
     #[test]

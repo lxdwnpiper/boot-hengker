@@ -9,7 +9,6 @@ use std::{
 };
 
 use bootvine::{
-    glyphs::Glyphs,
     model::{BootState, Phase},
     palette::Palette,
     view::BootView,
@@ -25,7 +24,7 @@ use signal_hook::{consts::SIGTERM, flag};
 
 use crate::{
     clock::monotonic_now,
-    console::{ForegroundVt, QuietKernelConsole, font_characters},
+    console::{Console, ForegroundVt},
     error::Error,
     feed::Feed,
     sysroot::INITRD_RELEASE,
@@ -63,13 +62,8 @@ pub fn run(options: &Options) -> Result<(), Error> {
     };
     let mut state = BootState::new(phase);
     let mut feed = Feed::new(options.scope, options.target.clone());
-    let _quiet_kernel = (options.scope == Scope::System)
-        .then(QuietKernelConsole::take)
-        .flatten();
+    let mut console = Console::take(options.scope == Scope::System);
     let _foreground = ForegroundVt::take();
-    let glyphs = font_characters().map_or_else(Glyphs::default, |characters| {
-        Glyphs::fitting(|symbol| symbol.is_ascii() || characters.contains(&symbol))
-    });
     let mut terminal = ratatui::try_init()?;
     let watched = watch(
         &mut state,
@@ -77,7 +71,7 @@ pub fn run(options: &Options) -> Result<(), Error> {
         &mut terminal,
         &terminate,
         &options.palette,
-        &glyphs,
+        &mut console,
         options.hold,
     );
     ratatui::restore();
@@ -116,7 +110,7 @@ fn watch(
     terminal: &mut DefaultTerminal,
     terminate: &AtomicBool,
     palette: &Palette,
-    glyphs: &Glyphs,
+    console: &mut Console,
     hold: Duration,
 ) -> Result<(), Error> {
     let host = uname().nodename().to_string_lossy().into_owned();
@@ -127,12 +121,15 @@ fn watch(
         feed.pump(state, FRAME_INTERVAL)?;
         let repaint_due = feed.connections != painted_connections
             || last_full_repaint.elapsed() >= FULL_REPAINT_INTERVAL;
+        if repaint_due {
+            console.keep_up();
+        }
         let completed = terminal.draw(|canvas| {
             canvas.render_widget(
                 BootView {
                     state,
                     palette,
-                    glyphs,
+                    glyphs: &console.glyphs,
                     now: monotonic_now(),
                     host: &host,
                     frame,

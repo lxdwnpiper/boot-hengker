@@ -1,5 +1,6 @@
 use std::{collections::HashSet, fs, ptr};
 
+use bootvine::glyphs::Glyphs;
 use rustix::{
     io::Errno,
     ioctl::{Getter, IntegerSetter, Opcode, Updater, ioctl},
@@ -15,17 +16,57 @@ const VIRTUAL_TERMINAL_PREFIX: &str = "/dev/tty";
 const KERNEL_PRINTK: &str = "/proc/sys/kernel/printk";
 const ALERTS_ONLY: &str = "1";
 
-pub struct QuietKernelConsole {
+pub struct Console {
+    quiet_kernel: Option<QuietKernelConsole>,
+    pub glyphs: Glyphs,
+}
+
+impl Console {
+    pub fn take(quiets_kernel: bool) -> Self {
+        Self {
+            quiet_kernel: quiets_kernel.then(QuietKernelConsole::take).flatten(),
+            glyphs: font_glyphs(),
+        }
+    }
+
+    pub fn keep_up(&mut self) {
+        if let Some(quiet_kernel) = &mut self.quiet_kernel {
+            quiet_kernel.keep_quiet();
+        }
+        self.glyphs = font_glyphs();
+    }
+}
+
+struct QuietKernelConsole {
     previous_level: String,
 }
 
+fn console_level() -> Option<String> {
+    let levels = fs::read_to_string(KERNEL_PRINTK).ok()?;
+    levels.split_whitespace().next().map(ToOwned::to_owned)
+}
+
 impl QuietKernelConsole {
-    pub fn take() -> Option<Self> {
-        let levels = fs::read_to_string(KERNEL_PRINTK).ok()?;
-        let previous_level = levels.split_whitespace().next()?.to_owned();
+    fn take() -> Option<Self> {
+        let previous_level = console_level()?;
         fs::write(KERNEL_PRINTK, ALERTS_ONLY).ok()?;
         Some(Self { previous_level })
     }
+
+    fn keep_quiet(&mut self) {
+        let Some(level) = console_level() else {
+            return;
+        };
+        if level != ALERTS_ONLY && fs::write(KERNEL_PRINTK, ALERTS_ONLY).is_ok() {
+            self.previous_level = level;
+        }
+    }
+}
+
+fn font_glyphs() -> Glyphs {
+    font_characters().map_or_else(Glyphs::default, |characters| {
+        Glyphs::fitting(|symbol| symbol.is_ascii() || characters.contains(&symbol))
+    })
 }
 
 impl Drop for QuietKernelConsole {
@@ -51,7 +92,7 @@ fn read_unicode_map(map: &mut UnicodeMap) -> Result<(), Errno> {
     unsafe { ioctl(stdin(), Updater::<GIO_UNIMAP, UnicodeMap>::new(map)) }
 }
 
-pub fn font_characters() -> Option<HashSet<char>> {
+fn font_characters() -> Option<HashSet<char>> {
     let mut probe = UnicodeMap {
         count: 0,
         pairs: ptr::null_mut(),
