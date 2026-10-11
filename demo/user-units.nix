@@ -23,6 +23,10 @@ let
           "${coreutils}/bin/sleep ${spec.seconds}"
         ]
         ++ lib.optional (spec.fails or false) "${coreutils}/bin/false";
+      }
+      // lib.optionalAttrs (spec ? stopSeconds) {
+        RemainAfterExit = true;
+        ExecStop = "${coreutils}/bin/sleep ${spec.stopSeconds}";
       };
     });
 

@@ -1,0 +1,17 @@
+[Unit]
+Description=Live dependency tree of shutdown jobs
+DefaultDependencies=no
+After=bootvine.service display-manager.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/bootvine --shutdown
+StandardInput=tty
+StandardOutput=tty
+StandardError=journal
+TTYPath=/dev/tty12
+TTYReset=yes
+TTYVTDisallocate=no
+
+[Install]
+WantedBy=shutdown.target

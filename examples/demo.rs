@@ -5,7 +5,7 @@ use std::{
 };
 
 use bootvine::{
-    model::{ActiveState, Activity, BootState, JobResult, Phase, UnitFacts},
+    model::{ActiveState, Activity, BootState, JobKind, JobResult, Phase, UnitFacts},
     palette::Palette,
     view::BootView,
 };
@@ -177,6 +177,7 @@ impl ScriptedJob {
             name: self.step.unit.to_owned(),
             description: self.step.unit.to_owned(),
             after: self.step.after.iter().map(ToString::to_string).collect(),
+            before: Vec::new(),
         }
     }
 
@@ -214,7 +215,7 @@ impl Script {
         jobs.iter()
             .for_each(|job| state.track_unit(job.facts(), Activity::default()));
         jobs.iter()
-            .for_each(|job| state.queue_job(job.id, job.step.unit, now));
+            .for_each(|job| state.queue_job(job.id, job.step.unit, JobKind::BringsUp, now));
         Self {
             jobs,
             started: HashMap::new(),
@@ -254,6 +255,7 @@ impl Script {
                     state: Some(ActiveState::Activating),
                     inactive_exit: Some(now),
                     active_enter: None,
+                    active_exit: None,
                 },
             );
         });
@@ -273,6 +275,7 @@ impl Script {
                         state: Some(job.settled_state()),
                         inactive_exit: None,
                         active_enter: Some(now),
+                        active_exit: None,
                     },
                 );
                 state.finish_job(job.id, job.outcome(), now);

@@ -35,6 +35,7 @@ const FULL_REPAINT_INTERVAL: Duration = Duration::from_secs(1);
 
 pub struct Options {
     pub scope: Scope,
+    pub shutdown: bool,
     pub target: Option<String>,
     pub hold: Duration,
     pub palette: Palette,
@@ -44,6 +45,7 @@ pub fn run(options: &Options) -> Result<(), Error> {
     let terminate = Arc::new(AtomicBool::new(false));
     flag::register(SIGTERM, Arc::clone(&terminate))?;
     if options.scope == Scope::System
+        && !options.shutdown
         && Session::open(Scope::System)
             .and_then(|session| session.boot_in_progress())
             .is_ok_and(|booting| !booting)
@@ -52,6 +54,7 @@ pub fn run(options: &Options) -> Result<(), Error> {
         return Ok(());
     }
     let phase = match options.scope {
+        _ if options.shutdown => Phase::Shutdown,
         Scope::User => Phase::User,
         Scope::System if Path::new(INITRD_RELEASE).exists() => Phase::Initrd,
         Scope::System => Phase::Host,

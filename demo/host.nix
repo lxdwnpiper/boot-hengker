@@ -14,6 +14,10 @@ let
         "${pkgs.coreutils}/bin/sleep ${spec.seconds}"
       ]
       ++ lib.optional (spec.fails or false) "${pkgs.coreutils}/bin/false";
+    }
+    // lib.optionalAttrs (spec ? stopSeconds) {
+      RemainAfterExit = true;
+      ExecStop = "${pkgs.coreutils}/bin/sleep ${spec.stopSeconds}";
     };
   };
 in
@@ -64,7 +68,7 @@ in
   };
 
   systemd.services = lib.mapAttrs (_: demoService) demoUnits.services // {
-    display-manager.after = [ "multi-user.target" ];
+    greetd.after = [ "multi-user.target" ];
   };
 
   services.greetd = {

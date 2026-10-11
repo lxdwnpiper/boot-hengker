@@ -29,6 +29,7 @@ const ROOT_SWITCH_MARK: char = '│';
 const RULE: char = '─';
 const RULE_STUB: &str = "──";
 const KERNEL_ORIGIN_LABEL: &str = "kernel";
+const SHUTDOWN_SUCCESSOR: &str = "systemd-shutdown";
 
 const DURATION_WIDTH: u16 = 8;
 const TIMELINE_LABEL_WIDTH: u16 = 28;
@@ -149,6 +150,12 @@ impl Widget for BootView<'_> {
     }
 }
 
+struct Conclusion<'a> {
+    finished: &'static str,
+    took: Duration,
+    handed_to: &'a str,
+}
+
 struct Heights {
     tree: u16,
     timeline: u16,
@@ -236,28 +243,38 @@ impl BootView<'_> {
             .finished_stages
             .last()
             .map_or(self.state.origin, |stage| stage.reached_at);
-        let current = if self.state.is_complete() {
-            let handed_to = self
-                .state
-                .handoff_unit
-                .as_deref()
-                .or(self.state.root.as_deref())
-                .unwrap_or("the console");
+        let conclusion = match self.state.manager_exited_at {
+            Some(exited_at) => Some(Conclusion {
+                finished: "shutdown",
+                took: exited_at.saturating_sub(self.state.origin),
+                handed_to: SHUTDOWN_SUCCESSOR,
+            }),
+            None => self.state.is_complete().then(|| Conclusion {
+                finished: "boot",
+                took: self.now.saturating_sub(self.state.origin),
+                handed_to: self
+                    .state
+                    .handoff_unit
+                    .as_deref()
+                    .or(self.state.root.as_deref())
+                    .unwrap_or("the console"),
+            }),
+        };
+        let current = if let Some(conclusion) = conclusion {
             self.rule_line(
                 width,
                 vec![
                     Span::styled(format!("{RULE_STUB} "), Style::new().fg(self.palette.muted)),
                     Span::styled(
                         format!(
-                            "{BEAD} boot finished in {}",
-                            ELAPSED.unsigned_duration_to_string(
-                                &self.now.saturating_sub(self.state.origin)
-                            )
+                            "{BEAD} {} finished in {}",
+                            conclusion.finished,
+                            ELAPSED.unsigned_duration_to_string(&conclusion.took)
                         ),
                         Style::new().fg(self.palette.done).bold(),
                     ),
                     Span::styled(
-                        format!(" · handing over to {handed_to} "),
+                        format!(" · handing over to {} ", conclusion.handed_to),
                         Style::new().fg(self.palette.text),
                     ),
                 ],
@@ -715,7 +732,7 @@ mod tests {
     use ratatui::{Terminal, backend::TestBackend};
 
     use super::*;
-    use crate::model::{ActiveState, Activity, JobResult, Phase, UnitFacts};
+    use crate::model::{ActiveState, Activity, JobKind, JobResult, Phase, UnitFacts};
 
     const MS: Duration = Duration::from_millis(1);
 
@@ -724,6 +741,7 @@ mod tests {
             name: name.to_owned(),
             description: String::new(),
             after: after.iter().map(ToString::to_string).collect(),
+            before: Vec::new(),
         }
     }
 
@@ -759,6 +777,7 @@ mod tests {
             state: Some(ActiveState::Activating),
             inactive_exit: Some(since),
             active_enter: None,
+            active_exit: None,
         }
     }
 
@@ -792,7 +811,7 @@ mod tests {
         .for_each(|((unit, activity), id)| {
             let name = unit.name.clone();
             state.track_unit(unit, activity);
-            state.queue_job(id, &name, 1000 * MS);
+            state.queue_job(id, &name, JobKind::BringsUp, 1000 * MS);
         });
         state.finish_job(6, JobResult::Done, 4000 * MS);
         state.finish_job(7, JobResult::Failed, 5000 * MS);
@@ -866,12 +885,12 @@ mod tests {
         let mut state = BootState::new(Phase::Initrd);
         state.set_root("initrd.target".to_owned());
         state.track_unit(facts("initrd.target", &[]), Activity::default());
-        state.queue_job(1, "initrd.target", Duration::ZERO);
+        state.queue_job(1, "initrd.target", JobKind::BringsUp, Duration::ZERO);
         state.finish_job(1, JobResult::Done, 6000 * MS);
         state.switch_root(7200 * MS);
         state.set_root("graphical.target".to_owned());
         state.track_unit(facts("graphical.target", &[]), Activity::default());
-        state.queue_job(2, "graphical.target", 7300 * MS);
+        state.queue_job(2, "graphical.target", JobKind::BringsUp, 7300 * MS);
         let lines = render(&state, 17_300 * MS, 110, 24);
         let screen = lines.join("\n");
         assert!(lines[0].ends_with("17.3s"), "{screen}");
@@ -905,7 +924,7 @@ mod tests {
         let mut state = BootState::new(Phase::Host);
         state.set_root("graphical.target".to_owned());
         state.track_unit(facts("graphical.target", &[]), Activity::default());
-        state.queue_job(1, "graphical.target", Duration::ZERO);
+        state.queue_job(1, "graphical.target", JobKind::BringsUp, Duration::ZERO);
         state.finish_job(1, JobResult::Done, 9000 * MS);
         let lines = render(&state, 9500 * MS, 110, 24);
         assert!(
@@ -918,12 +937,42 @@ mod tests {
     }
 
     #[test]
+    fn shutdown_in_progress_names_its_stage() {
+        let mut state = BootState::new(Phase::Shutdown);
+        state.origin = 20_000 * MS;
+        state.set_root("poweroff.target".to_owned());
+        state.track_unit(facts("poweroff.target", &[]), Activity::default());
+        state.queue_job(1, "poweroff.target", JobKind::BringsUp, 20_000 * MS);
+        let lines = render(&state, 21_500 * MS, 110, 24);
+        assert!(
+            lines[2].starts_with("── shutdown ─") && lines[2].ends_with(" 1.5s ──"),
+            "{}",
+            lines.join("\n")
+        );
+    }
+
+    #[test]
+    fn shutdown_announces_the_handover_once_the_manager_exits() {
+        let mut state = BootState::new(Phase::Shutdown);
+        state.origin = 20_000 * MS;
+        state.manager_exited_at = Some(24_200 * MS);
+        let lines = render(&state, 30_000 * MS, 110, 24);
+        assert!(
+            lines[2].starts_with(
+                "── ■ shutdown finished in 4.2s · handing over to systemd-shutdown ──"
+            ),
+            "{}",
+            lines.join("\n")
+        );
+    }
+
+    #[test]
     fn overflowing_trees_are_cut_with_a_count() {
         let mut state = BootState::new(Phase::Host);
         (0..30).for_each(|id| {
             let name = format!("unit{id:02}.service");
             state.track_unit(facts(&name, &[]), Activity::default());
-            state.queue_job(id, &name, Duration::ZERO);
+            state.queue_job(id, &name, JobKind::BringsUp, Duration::ZERO);
         });
         let lines = render(&state, 1000 * MS, 110, 20);
         assert!(

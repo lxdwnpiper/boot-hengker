@@ -1,6 +1,6 @@
 use std::{iter, time::Duration};
 
-use bootvine::model::{ActiveState, Activity, JobResult, UnitFacts};
+use bootvine::model::{ActiveState, Activity, JobKind, JobResult, UnitFacts};
 use dbus::{
     Message, MessageType, Path,
     arg::{AppendAll, PropMap, RefArg, Variant},
@@ -54,7 +54,7 @@ pub struct FetchedUnit {
 pub struct JobListing {
     pub id: u32,
     pub unit: String,
-    pub brings_unit_up: bool,
+    pub kind: JobKind,
 }
 
 type ListedJob = (u32, String, String, String, Path<'static>, Path<'static>);
@@ -64,8 +64,16 @@ impl From<ListedJob> for JobListing {
         Self {
             id,
             unit,
-            brings_unit_up: kind != STOP_JOB,
+            kind: job_kind(&kind),
         }
+    }
+}
+
+fn job_kind(raw: &str) -> JobKind {
+    if raw == STOP_JOB {
+        JobKind::TakesDown
+    } else {
+        JobKind::BringsUp
     }
 }
 
@@ -169,7 +177,7 @@ impl Session {
         Ok(listed.into_iter().map(JobListing::from).collect())
     }
 
-    pub fn job_brings_unit_up(&self, job: &Path) -> Result<bool, Error> {
+    pub fn job_kind(&self, job: &Path) -> Result<JobKind, Error> {
         let reply = self.call(
             DESTINATION,
             job,
@@ -178,7 +186,7 @@ impl Session {
             (JOB_INTERFACE, "JobType"),
         )?;
         let kind: Variant<String> = reply.read1()?;
-        Ok(kind.0 != STOP_JOB)
+        Ok(job_kind(&kind.0))
     }
 
     pub fn fetch_unit(&self, name: &str) -> Result<FetchedUnit, Error> {
@@ -206,20 +214,23 @@ impl Session {
                 .and_then(|value| value.0.as_str())
                 .map(ToOwned::to_owned)
         };
-        let after = properties
-            .get("After")
-            .and_then(|value| value.0.as_iter())
-            .map(|items| {
-                items
-                    .filter_map(|item| item.as_str().map(ToOwned::to_owned))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let names = |property: &str| {
+            properties
+                .get(property)
+                .and_then(|value| value.0.as_iter())
+                .map(|items| {
+                    items
+                        .filter_map(|item| item.as_str().map(ToOwned::to_owned))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
         Ok(FetchedUnit {
             facts: UnitFacts {
                 name: text("Id").unwrap_or_else(|| name.to_owned()),
                 description: text("Description").unwrap_or_default(),
-                after,
+                after: names("After"),
+                before: names("Before"),
             },
             activity: activity_from(&properties),
             path,
@@ -305,5 +316,6 @@ fn activity_from(properties: &PropMap) -> Activity {
             .map(ActiveState::parse),
         inactive_exit: monotonic("InactiveExitTimestampMonotonic"),
         active_enter: monotonic("ActiveEnterTimestampMonotonic"),
+        active_exit: monotonic("ActiveExitTimestampMonotonic"),
     }
 }

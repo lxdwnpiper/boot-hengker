@@ -13,6 +13,10 @@ follows the boot through the switch to the real root; without one it starts in
 stage 2. While it runs it quiets the kernel console and systemd's status
 output, and restores both when it hands the console back.
 
+It also follows shutdowns and reboots: the units being stopped, nested under
+the units that have to stop first, until systemd hands over to
+`systemd-shutdown`.
+
 ## Try
 
 ```sh
@@ -29,7 +33,8 @@ On NixOS, import `nixosModules.default` from the flake and set
 goes into the initrd as well.
 
 Elsewhere, install the binary to `/usr/bin` and the package's `lib/` under
-`/usr/lib`, then `systemctl enable bootvine.service`. To start it in the
+`/usr/lib`, then `systemctl enable bootvine.service bootvine-shutdown.service`.
+To start it in the
 initrd, add `bootvine` to `add_dracutmodules` (dracut) or `sd-bootvine` after
 `systemd` in `HOOKS` (mkinitcpio), and rebuild the initramfs.
 

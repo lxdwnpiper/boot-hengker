@@ -22,6 +22,11 @@ def "main start" [--units: path, --target: string] {
     print $"started ($target); watch it with: bootvine --user --target ($target) --hold 3s"
 }
 
+def "main stop" [--units: path, --target: string] {
+    ^systemctl --user stop --no-block ...(unit-names $units)
+    print $"stopping ($target); watch it with: bootvine --user --shutdown --target ($target)"
+}
+
 def "main remove" [--units: path, --target: string] {
     ^systemctl --user stop ...(unit-names $units)
     unit-names $units | each {|name| rm -f (user-unit-dir | path join $name) } | ignore
@@ -29,5 +34,5 @@ def "main remove" [--units: path, --target: string] {
 }
 
 def main [--units: path, --target: string] {
-    print "usage: bootvine-demo-units (start | remove)"
+    print "usage: bootvine-demo-units (start | stop | remove)"
 }

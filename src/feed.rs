@@ -6,7 +6,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-use bootvine::model::{BootState, HANDOFF_UNIT, HOST_MILESTONES};
+use bootvine::model::{
+    BootState, HANDOFF_UNIT, HOST_MILESTONES, JobKind, Phase, SHUTDOWN_MILESTONES,
+};
 use dbus::Path;
 
 use crate::{
@@ -18,6 +20,14 @@ use crate::{
 
 const RECONNECT_PATIENCE: Duration = Duration::from_secs(60);
 const SWITCH_ROOT_UNIT: &str = "initrd-switch-root.service";
+const SHUTDOWN_ROOTS: [&str; 5] = [
+    "poweroff.target",
+    "reboot.target",
+    "halt.target",
+    "kexec.target",
+    "soft-reboot.target",
+];
+const SHUTDOWN_FALLBACK_ROOT: &str = "shutdown.target";
 const SILENT_STATUS: &str = "no";
 const CONFIGURED_STATUS: &str = "";
 
@@ -49,6 +59,10 @@ impl Feed {
     }
 
     pub fn pump(&mut self, state: &mut BootState, wait: Duration) -> Result<(), Error> {
+        if state.manager_exited_at.is_some() {
+            sleep(wait);
+            return Ok(());
+        }
         let Some(session) = self.session.take() else {
             return self.connect_or_wait(state, wait);
         };
@@ -87,6 +101,9 @@ impl Feed {
                 self.unit_paths.clear();
                 state.switch_root(monotonic_now());
             }
+            None if state.phase == Phase::Shutdown => {
+                state.manager_exited_at = Some(monotonic_now());
+            }
             None => state.forget_jobs(),
         }
         self.reconnect_deadline = Instant::now() + RECONNECT_PATIENCE;
@@ -99,9 +116,28 @@ impl Feed {
         if self.scope == Scope::System {
             session.set_show_status(SILENT_STATUS).ok();
         }
+        let shutting_down = state.phase == Phase::Shutdown;
+        let jobs: Vec<_> = session
+            .list_jobs()?
+            .into_iter()
+            .filter(|job| shutting_down || job.kind == JobKind::BringsUp)
+            .collect();
         let requested_root = match &self.target {
             Some(target) => target.clone(),
+            None if shutting_down => SHUTDOWN_ROOTS
+                .into_iter()
+                .find(|root| {
+                    jobs.iter()
+                        .any(|job| job.unit == *root && job.kind == JobKind::BringsUp)
+                })
+                .unwrap_or(SHUTDOWN_FALLBACK_ROOT)
+                .to_owned(),
             None => session.default_target()?,
+        };
+        let milestones: &[&str] = if shutting_down {
+            &SHUTDOWN_MILESTONES
+        } else {
+            &HOST_MILESTONES
         };
         if !self.gave_origin {
             state.origin = if session.boot_in_progress()? {
@@ -117,24 +153,19 @@ impl Feed {
         if let Some(handoff) = self.track(&session, state, HANDOFF_UNIT) {
             state.set_handoff(handoff);
         }
-        let jobs: Vec<_> = session
-            .list_jobs()?
-            .into_iter()
-            .filter(|job| job.brings_unit_up)
-            .collect();
         jobs.iter()
             .map(|job| job.unit.as_str())
-            .chain(HOST_MILESTONES)
+            .chain(milestones.iter().copied())
             .for_each(|unit| {
                 self.track(&session, state, unit);
             });
         state.set_root(root.clone());
         let now = monotonic_now();
         jobs.iter()
-            .for_each(|job| state.queue_job(job.id, &job.unit, now));
+            .for_each(|job| state.queue_job(job.id, &job.unit, job.kind, now));
         eprintln!(
             "bootvine: watching {root} in {} as pid {} over {}",
-            if self.in_initrd { "initrd" } else { "stage 2" },
+            state.phase.label(),
             process::id(),
             if session.peer_to_peer {
                 "the private socket"
@@ -162,18 +193,15 @@ impl Feed {
     fn apply(&mut self, session: &Session, state: &mut BootState, signal: Signal) {
         match signal {
             Signal::JobNew { id, job, unit } => {
-                let brings_unit_up = session.job_brings_unit_up(&job);
-                if brings_unit_up.as_ref().is_ok_and(|up| !up) {
+                let kind = session.job_kind(&job).unwrap_or(JobKind::Unknown);
+                if kind == JobKind::TakesDown && state.phase != Phase::Shutdown {
                     return;
                 }
                 let unit = self.track(session, state, &unit).unwrap_or(unit);
                 if self.in_initrd && unit == SWITCH_ROOT_UNIT {
                     self.sysroot = Sysroot::hold().ok();
                 }
-                match brings_unit_up {
-                    Ok(_) => state.queue_job(id, &unit, monotonic_now()),
-                    Err(_) => state.queue_job_of_unknown_kind(id, &unit, monotonic_now()),
-                }
+                state.queue_job(id, &unit, kind, monotonic_now());
             }
             Signal::JobRemoved { id, result } => state.finish_job(id, result, monotonic_now()),
             Signal::UnitChanged { path, activity } => {

@@ -4,10 +4,14 @@
   enableOCR = true;
 
   nodes.machine =
-    { lib, ... }:
+    { lib, pkgs, ... }:
+    let
+      lingerFor = seconds: lib.mkForce "${pkgs.coreutils}/bin/sleep ${seconds}";
+    in
     {
       imports = [ demoHost ];
       systemd.settings.Manager.ShowStatus = lib.mkForce true;
+      systemd.services.demo-db.serviceConfig.ExecStop = lingerFor "20";
       virtualisation = {
         memorySize = 2048;
         qemu.options = [
@@ -51,5 +55,10 @@
     assert "boot already finished" in machine.succeed("journalctl -u bootvine -o cat"), "a restart after boot did not stand down"
     still_foreground = machine.succeed("cat /sys/class/tty/tty0/active").strip()
     assert still_foreground == foreground, f"a restart after boot took the console: {foreground} -> {still_foreground}"
+
+    machine.succeed("systemctl poweroff --no-block")
+    machine.wait_for_text("demo-db")
+    machine.screenshot("shutdown")
+    machine.wait_for_shutdown()
   '';
 }

@@ -76,9 +76,11 @@
             };
             strictDeps = true;
             postInstall = ''
-              install -Dm644 packaging/systemd/bootvine.service $out/lib/systemd/system/bootvine.service
-              substituteInPlace $out/lib/systemd/system/bootvine.service \
-                --replace-fail /usr/bin/bootvine $out/bin/bootvine
+              for unit in bootvine.service bootvine-shutdown.service; do
+                install -Dm644 packaging/systemd/$unit $out/lib/systemd/system/$unit
+                substituteInPlace $out/lib/systemd/system/$unit \
+                  --replace-fail /usr/bin/bootvine $out/bin/bootvine
+              done
               install -Dm755 packaging/dracut/90bootvine/module-setup.sh \
                 $out/lib/dracut/modules.d/90bootvine/module-setup.sh
               install -Dm644 packaging/mkinitcpio/install/sd-bootvine \

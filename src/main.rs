@@ -24,6 +24,11 @@ struct Cli {
     user: bool,
     #[arg(
         long,
+        help = "Follow a shutdown instead of a boot; started by bootvine-shutdown.service"
+    )]
+    shutdown: bool,
+    #[arg(
+        long,
         help = "Root unit of the tree; defaults to the manager's default target"
     )]
     target: Option<String>,
@@ -62,6 +67,7 @@ fn main() -> ExitCode {
     };
     let options = Options {
         scope: if cli.user { Scope::User } else { Scope::System },
+        shutdown: cli.shutdown,
         target: cli.target,
         hold: cli.hold,
         palette: config.palette,

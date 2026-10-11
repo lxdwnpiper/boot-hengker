@@ -8,6 +8,7 @@ pub enum Phase {
     Initrd,
     Host,
     User,
+    Shutdown,
 }
 
 impl Phase {
@@ -17,6 +18,7 @@ impl Phase {
             Self::Initrd => "initrd",
             Self::Host => "stage 2",
             Self::User => "user",
+            Self::Shutdown => "shutdown",
         }
     }
 }
@@ -74,6 +76,7 @@ pub struct UnitFacts {
     pub name: String,
     pub description: String,
     pub after: Vec<String>,
+    pub before: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -81,13 +84,21 @@ pub struct Activity {
     pub state: Option<ActiveState>,
     pub inactive_exit: Option<Duration>,
     pub active_enter: Option<Duration>,
+    pub active_exit: Option<Duration>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JobKind {
+    BringsUp,
+    TakesDown,
+    Unknown,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PendingJob {
     id: u32,
     queued_at: Duration,
-    brings_up: bool,
+    kind: JobKind,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -103,6 +114,7 @@ struct UnitRecord {
     state: ActiveState,
     inactive_exit: Option<Duration>,
     active_enter: Option<Duration>,
+    active_exit: Option<Duration>,
     job: Option<PendingJob>,
     outcome: Option<Outcome>,
 }
@@ -118,6 +130,16 @@ impl UnitRecord {
         if activity.active_enter.is_some() {
             self.active_enter = activity.active_enter;
         }
+        if activity.active_exit.is_some() {
+            self.active_exit = activity.active_exit;
+        }
+    }
+
+    fn transition_started(&self, kind: JobKind) -> Option<Duration> {
+        match kind {
+            JobKind::TakesDown => self.active_exit,
+            JobKind::BringsUp | JobKind::Unknown => self.inactive_exit,
+        }
     }
 
     fn running_since(&self) -> Option<Duration> {
@@ -126,7 +148,11 @@ impl UnitRecord {
             self.state,
             ActiveState::Activating | ActiveState::Deactivating | ActiveState::Reloading
         );
-        transitioning.then(|| self.inactive_exit.unwrap_or(job.queued_at))
+        transitioning.then(|| self.transition_started(job.kind).unwrap_or(job.queued_at))
+    }
+
+    fn takes_down(&self) -> bool {
+        self.job.is_some_and(|job| job.kind == JobKind::TakesDown)
     }
 }
 
@@ -188,6 +214,7 @@ pub struct BootState {
     pub finished_stages: Vec<FinishedStage>,
     pub finished_runs: Vec<FinishedRun>,
     pub handoff_unit: Option<String>,
+    pub manager_exited_at: Option<Duration>,
     root_job_seen: bool,
     milestone_targets: Vec<String>,
     finished_before_reconnect: usize,
@@ -202,6 +229,8 @@ pub const HOST_MILESTONES: [&str; 4] = [
     "graphical.target",
 ];
 
+pub const SHUTDOWN_MILESTONES: [&str; 3] = ["shutdown.target", "umount.target", "final.target"];
+
 pub const HANDOFF_UNIT: &str = "display-manager.service";
 
 impl BootState {
@@ -211,6 +240,13 @@ impl BootState {
             Phase::Initrd | Phase::Host => (
                 HOST_MILESTONES.iter().map(ToString::to_string).collect(),
                 Some(HANDOFF_UNIT.to_owned()),
+            ),
+            Phase::Shutdown => (
+                SHUTDOWN_MILESTONES
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect(),
+                None,
             ),
             Phase::User => (Vec::new(), None),
         };
@@ -223,6 +259,7 @@ impl BootState {
             finished_runs: Vec::new(),
             root_job_seen: false,
             handoff_unit,
+            manager_exited_at: None,
             milestone_targets,
             finished_before_reconnect: 0,
             units: HashMap::new(),
@@ -255,6 +292,7 @@ impl BootState {
                 state: ActiveState::Inactive,
                 inactive_exit: None,
                 active_enter: None,
+                active_exit: None,
                 job: None,
                 outcome: None,
             });
@@ -268,20 +306,17 @@ impl BootState {
         }
     }
 
-    pub fn queue_job(&mut self, id: u32, unit: &str, at: Duration) {
-        self.enqueue(id, unit, at, true);
-        if self.jobs.get(&id).is_some_and(|tracked| tracked == unit)
+    pub fn queue_job(&mut self, id: u32, unit: &str, kind: JobKind, at: Duration) {
+        self.enqueue(id, unit, kind, at);
+        if kind == JobKind::BringsUp
+            && self.jobs.get(&id).is_some_and(|tracked| tracked == unit)
             && self.root.as_deref() == Some(unit)
         {
             self.root_job_seen = true;
         }
     }
 
-    pub fn queue_job_of_unknown_kind(&mut self, id: u32, unit: &str, at: Duration) {
-        self.enqueue(id, unit, at, false);
-    }
-
-    fn enqueue(&mut self, id: u32, unit: &str, at: Duration, brings_up: bool) {
+    fn enqueue(&mut self, id: u32, unit: &str, kind: JobKind, at: Duration) {
         if self.jobs.contains_key(&id) {
             return;
         }
@@ -291,7 +326,7 @@ impl BootState {
         record.job = Some(PendingJob {
             id,
             queued_at: at,
-            brings_up,
+            kind,
         });
         record.outcome = None;
         self.jobs.insert(id, unit.to_owned());
@@ -305,9 +340,10 @@ impl BootState {
             return;
         };
         let started_at = record
-            .inactive_exit
-            .filter(|started| *started >= self.origin && *started <= at)
-            .filter(|_| record.job.is_some_and(|job| job.id == id && job.brings_up));
+            .job
+            .filter(|job| job.id == id && job.kind != JobKind::Unknown)
+            .and_then(|job| record.transition_started(job.kind))
+            .filter(|started| *started >= self.origin && *started <= at);
         if record.job.is_some_and(|job| job.id == id) {
             record.job = None;
         }
@@ -370,7 +406,7 @@ impl BootState {
 
     #[must_use]
     pub fn is_complete(&self) -> bool {
-        if self.phase == Phase::Initrd {
+        if matches!(self.phase, Phase::Initrd | Phase::Shutdown) {
             return false;
         }
         if let Some(handoff) = self
@@ -484,9 +520,7 @@ impl BootState {
         let root = self.root.as_deref().filter(|root| pending.contains(root));
         let blocked_by_pending: HashSet<&str> = pending
             .iter()
-            .flat_map(|name| self.units[*name].facts.after.iter())
-            .map(String::as_str)
-            .filter(|dependency| pending.contains(dependency))
+            .flat_map(|name| self.waits_for(name, &pending))
             .collect();
         let mut unblocked: Vec<&str> = pending
             .iter()
@@ -548,12 +582,10 @@ impl BootState {
             queued_at: job.queued_at,
             running_since,
         });
-        let candidates: Vec<&str> = record
-            .facts
-            .after
-            .iter()
-            .map(String::as_str)
-            .filter(|dependency| pending.contains(dependency) && !visited.contains(dependency))
+        let candidates: Vec<&str> = self
+            .waits_for(unit, pending)
+            .into_iter()
+            .filter(|dependency| !visited.contains(dependency))
             .collect();
         let mut children: Vec<&str> = candidates
             .iter()
@@ -585,21 +617,31 @@ impl BootState {
             if !seen.insert(unit) {
                 continue;
             }
-            let Some(record) = self.units.get(unit) else {
-                continue;
-            };
-            let mut next = record
-                .facts
-                .after
-                .iter()
-                .map(String::as_str)
-                .filter(|after| pending.contains(after));
-            if next.clone().any(|after| after == dependency) {
+            let next = self.waits_for(unit, pending);
+            if next.contains(&dependency) {
                 return true;
             }
-            frontier.extend(next.by_ref());
+            frontier.extend(next);
         }
         false
+    }
+
+    fn waits_for<'a>(&'a self, waiter: &str, pending: &HashSet<&str>) -> Vec<&'a str> {
+        let Some(record) = self.units.get(waiter) else {
+            return Vec::new();
+        };
+        let pending_job = |dependency: &&'a str| pending.contains(dependency);
+        let taking_down = |dependency: &&'a str| self.units[*dependency].takes_down();
+        let after = record.facts.after.iter().map(String::as_str);
+        let before = record.facts.before.iter().map(String::as_str);
+        if record.takes_down() {
+            before.filter(pending_job).filter(taking_down).collect()
+        } else {
+            after
+                .filter(pending_job)
+                .chain(before.filter(pending_job).filter(taking_down))
+                .collect()
+        }
     }
 
     fn sort_siblings(&self, names: &mut [&str]) {
@@ -667,6 +709,7 @@ mod tests {
             name: name.to_owned(),
             description: format!("{name} description"),
             after: after.iter().map(ToString::to_string).collect(),
+            before: Vec::new(),
         }
     }
 
@@ -675,6 +718,7 @@ mod tests {
             state: Some(ActiveState::Activating),
             inactive_exit: Some(since),
             active_enter: None,
+            active_exit: None,
         }
     }
 
@@ -710,7 +754,7 @@ mod tests {
         .for_each(|((unit, activity), id)| {
             let name = unit.name.clone();
             state.track_unit(unit, activity);
-            state.queue_job(id, &name, 500 * MS);
+            state.queue_job(id, &name, JobKind::BringsUp, 500 * MS);
         });
         state
     }
@@ -747,6 +791,7 @@ mod tests {
                 state: Some(ActiveState::Active),
                 inactive_exit: None,
                 active_enter: Some(4000 * MS),
+                active_exit: None,
             },
         );
         let rows = state.pending_rows();
@@ -784,7 +829,7 @@ mod tests {
     fn display_manager_activation_hands_the_console_over() {
         let mut state = sample();
         state.track_unit(facts(HANDOFF_UNIT, &[]), Activity::default());
-        state.queue_job(20, HANDOFF_UNIT, 500 * MS);
+        state.queue_job(20, HANDOFF_UNIT, JobKind::BringsUp, 500 * MS);
         assert!(!state.is_complete());
         state.update_activity(HANDOFF_UNIT, activating(6000 * MS));
         assert!(state.is_complete());
@@ -796,8 +841,8 @@ mod tests {
         state.set_root("initrd.target".to_owned());
         state.track_unit(facts("initrd.target", &[]), Activity::default());
         state.track_unit(facts("sysroot.mount", &[]), Activity::default());
-        state.queue_job(1, "initrd.target", Duration::ZERO);
-        state.queue_job(2, "sysroot.mount", Duration::ZERO);
+        state.queue_job(1, "initrd.target", JobKind::BringsUp, Duration::ZERO);
+        state.queue_job(2, "sysroot.mount", JobKind::BringsUp, Duration::ZERO);
         state.finish_job(2, JobResult::Done, 1000 * MS);
         state.finish_job(1, JobResult::Done, 1500 * MS);
         assert!(!state.is_complete());
@@ -825,10 +870,11 @@ mod tests {
                 name: "dev-nvme1n1.device".to_owned(),
                 description: "Lexar SSD NM790 2TB".to_owned(),
                 after: Vec::new(),
+                before: Vec::new(),
             },
             Activity::default(),
         );
-        state.queue_job(1, "dev-nvme1n1.device", Duration::ZERO);
+        state.queue_job(1, "dev-nvme1n1.device", JobKind::BringsUp, Duration::ZERO);
         assert_eq!(state.pending_rows()[0].label, "Lexar SSD NM790 2TB");
     }
 
@@ -850,7 +896,7 @@ mod tests {
         .for_each(|(unit, id)| {
             let name = unit.name.clone();
             state.track_unit(unit, Activity::default());
-            state.queue_job(id, &name, Duration::ZERO);
+            state.queue_job(id, &name, JobKind::BringsUp, Duration::ZERO);
         });
         let outline: Vec<String> = state
             .pending_rows()
@@ -860,13 +906,138 @@ mod tests {
         assert_eq!(outline, ["demo.target", "  report", "    web", "      db"]);
     }
 
+    fn ordered(name: &str, after: &[&str], before: &[&str]) -> UnitFacts {
+        UnitFacts {
+            before: before.iter().map(ToString::to_string).collect(),
+            ..facts(name, after)
+        }
+    }
+
+    fn outline(state: &BootState) -> Vec<String> {
+        state
+            .pending_rows()
+            .into_iter()
+            .map(|row| format!("{}{}", "  ".repeat(row.depth), row.label))
+            .collect()
+    }
+
+    #[test]
+    fn stopping_units_wait_on_what_was_ordered_after_them() {
+        let mut state = BootState::new(Phase::Shutdown);
+        state.set_root("poweroff.target".to_owned());
+        [
+            (
+                ordered("poweroff.target", &["shutdown.target"], &[]),
+                JobKind::BringsUp,
+            ),
+            (
+                ordered("shutdown.target", &[], &["poweroff.target"]),
+                JobKind::BringsUp,
+            ),
+            (
+                ordered("network.target", &[], &["web.service"]),
+                JobKind::TakesDown,
+            ),
+            (
+                ordered("web.service", &["network.target"], &[]),
+                JobKind::TakesDown,
+            ),
+        ]
+        .into_iter()
+        .zip(1..)
+        .for_each(|((unit, kind), id)| {
+            let name = unit.name.clone();
+            state.track_unit(unit, Activity::default());
+            state.queue_job(id, &name, kind, Duration::ZERO);
+        });
+        assert_eq!(
+            outline(&state),
+            [
+                "poweroff.target",
+                "  shutdown.target",
+                "network.target",
+                "  web",
+            ]
+        );
+    }
+
+    #[test]
+    fn starting_units_wait_on_stops_in_either_direction() {
+        let mut state = BootState::new(Phase::Shutdown);
+        state.set_root("shutdown.target".to_owned());
+        [
+            (
+                ordered("shutdown.target", &[], &["db.service"]),
+                JobKind::BringsUp,
+            ),
+            (
+                ordered("db.service", &["shutdown.target"], &[]),
+                JobKind::TakesDown,
+            ),
+        ]
+        .into_iter()
+        .zip(1..)
+        .for_each(|((unit, kind), id)| {
+            let name = unit.name.clone();
+            state.track_unit(unit, Activity::default());
+            state.queue_job(id, &name, kind, Duration::ZERO);
+        });
+        assert_eq!(outline(&state), ["shutdown.target", "  db"]);
+    }
+
+    #[test]
+    fn stopped_units_join_the_timeline_from_when_they_began_stopping() {
+        let mut state = BootState::new(Phase::Shutdown);
+        state.origin = 1000 * MS;
+        state.track_unit(facts("db.service", &[]), Activity::default());
+        state.queue_job(1, "db.service", JobKind::TakesDown, 1000 * MS);
+        state.update_activity(
+            "db.service",
+            Activity {
+                state: Some(ActiveState::Deactivating),
+                active_exit: Some(1200 * MS),
+                ..Activity::default()
+            },
+        );
+        assert_eq!(state.pending_rows()[0].running_since, Some(1200 * MS));
+        state.finish_job(1, JobResult::Done, 1700 * MS);
+        assert_eq!(
+            state.finished_runs,
+            [FinishedRun {
+                label: "db".to_owned(),
+                started_at: 1200 * MS,
+                finished_at: 1700 * MS,
+                failed: false,
+            }]
+        );
+    }
+
+    #[test]
+    fn shutdown_counts_toward_its_own_milestones_and_never_completes() {
+        let mut state = BootState::new(Phase::Shutdown);
+        state.set_root("poweroff.target".to_owned());
+        ["poweroff.target", "shutdown.target", "db.service"]
+            .into_iter()
+            .for_each(|name| state.track_unit(facts(name, &[]), Activity::default()));
+        state.queue_job(1, "poweroff.target", JobKind::BringsUp, Duration::ZERO);
+        state.queue_job(2, "shutdown.target", JobKind::BringsUp, Duration::ZERO);
+        state.queue_job(3, "db.service", JobKind::TakesDown, Duration::ZERO);
+        state.finish_job(3, JobResult::Done, 500 * MS);
+        state.finish_job(2, JobResult::Done, 600 * MS);
+        state.finish_job(1, JobResult::Done, 700 * MS);
+        let milestones = state.milestones();
+        assert_eq!(milestones[0].label, "shutdown.target");
+        assert_eq!(milestones[0].finished_units, 2);
+        assert!(!state.is_complete());
+    }
+
     #[test]
     fn ordering_cycles_do_not_repeat_units() {
         let mut state = BootState::new(Phase::Host);
         state.track_unit(facts("a.service", &["b.service"]), Activity::default());
         state.track_unit(facts("b.service", &["a.service"]), Activity::default());
-        state.queue_job(1, "a.service", Duration::ZERO);
-        state.queue_job(2, "b.service", Duration::ZERO);
+        state.queue_job(1, "a.service", JobKind::BringsUp, Duration::ZERO);
+        state.queue_job(2, "b.service", JobKind::BringsUp, Duration::ZERO);
         assert_eq!(state.pending_rows().len(), 2);
     }
 }
