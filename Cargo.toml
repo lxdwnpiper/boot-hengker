@@ -1,0 +1,24 @@
+[package]
+edition = "2024"
+name = "boot-tree"
+version = "0.1.0"
+
+[lints.clippy]
+absolute_paths = "warn"
+pedantic = { priority = -1, level = "warn" }
+cast_possible_truncation = "allow"
+cast_precision_loss = "allow"
+cast_sign_loss = "allow"
+needless_for_each = "allow"
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+crossterm = "0.29"
+dbus = "0.9"
+ratatui = "0.30"
+rustix = { version = "1", features = ["fs", "process", "stdio", "system", "termios", "time"] }
+signal-hook = "0.4"
+
+[profile.release]
+lto = "thin"
+strip = true
