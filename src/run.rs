@@ -24,7 +24,7 @@ use signal_hook::{consts::SIGTERM, flag};
 
 use crate::{
     clock::monotonic_now,
-    console::{Console, ForegroundVt},
+    console::Console,
     error::Error,
     feed::Feed,
     sysroot::INITRD_RELEASE,
@@ -63,7 +63,6 @@ pub fn run(options: &Options) -> Result<(), Error> {
     let mut state = BootState::new(phase);
     let mut feed = Feed::new(options.scope, options.target.clone());
     let mut console = Console::take(options.scope == Scope::System);
-    let _foreground = ForegroundVt::take();
     let mut terminal = ratatui::try_init()?;
     let watched = watch(
         &mut state,
@@ -119,6 +118,7 @@ fn watch(
     let mut last_full_repaint = Instant::now();
     loop {
         feed.pump(state, FRAME_INTERVAL)?;
+        console.make_way_for_password_prompts();
         let repaint_due = feed.connections != painted_connections
             || last_full_repaint.elapsed() >= FULL_REPAINT_INTERVAL;
         if repaint_due {

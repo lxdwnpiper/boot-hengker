@@ -116,6 +116,9 @@
         {
           package = self.packages.${system}.default;
           boot = pkgs.testers.runNixOSTest (import ./demo/test.nix { inherit demoHost; });
+          luks = pkgs.testers.runNixOSTest (
+            import ./demo/luks-test.nix { bootvineModule = self.nixosModules.default; }
+          );
         }
       );
 

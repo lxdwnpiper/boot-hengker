@@ -15,17 +15,55 @@ const VT_WAITACTIVE: Opcode = 0x5607;
 const VIRTUAL_TERMINAL_PREFIX: &str = "/dev/tty";
 const KERNEL_PRINTK: &str = "/proc/sys/kernel/printk";
 const ALERTS_ONLY: &str = "1";
+const PASSWORD_REQUESTS: &str = "/run/systemd/ask-password";
+const PASSWORD_REQUEST_PREFIX: &str = "ask.";
 
 pub struct Console {
     quiet_kernel: Option<QuietKernelConsole>,
+    foreground: Option<ForegroundVt>,
+    yields_to_password_prompts: bool,
     pub glyphs: Glyphs,
 }
 
 impl Console {
-    pub fn take(quiets_kernel: bool) -> Self {
+    pub fn take(for_system: bool) -> Self {
+        let prompt_showing = for_system && password_requested();
         Self {
-            quiet_kernel: quiets_kernel.then(QuietKernelConsole::take).flatten(),
+            quiet_kernel: for_system.then(QuietKernelConsole::take).flatten(),
+            foreground: if prompt_showing {
+                None
+            } else {
+                ForegroundVt::take()
+            },
+            yields_to_password_prompts: for_system,
             glyphs: font_glyphs(),
+        }
+    }
+
+    pub fn make_way_for_password_prompts(&mut self) {
+        if !self.yields_to_password_prompts {
+            return;
+        }
+        if password_requested() {
+            self.step_aside();
+        } else {
+            self.come_forward();
+        }
+    }
+
+    fn step_aside(&mut self) {
+        if self.foreground.take().is_some() {
+            eprintln!("bootvine: stepping aside for a password prompt");
+        }
+    }
+
+    fn come_forward(&mut self) {
+        if self.foreground.is_some() {
+            return;
+        }
+        self.foreground = ForegroundVt::take();
+        if self.foreground.is_some() {
+            eprintln!("bootvine: password prompt answered, taking the console back");
         }
     }
 
@@ -61,6 +99,17 @@ impl QuietKernelConsole {
             self.previous_level = level;
         }
     }
+}
+
+fn password_requested() -> bool {
+    fs::read_dir(PASSWORD_REQUESTS).is_ok_and(|entries| {
+        entries.flatten().any(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(PASSWORD_REQUEST_PREFIX)
+        })
+    })
 }
 
 fn font_glyphs() -> Glyphs {
@@ -123,12 +172,12 @@ struct VtState {
     _state: u16,
 }
 
-pub struct ForegroundVt {
+struct ForegroundVt {
     previous: u16,
 }
 
 impl ForegroundVt {
-    pub fn take() -> Option<Self> {
+    fn take() -> Option<Self> {
         let name = ttyname(stdin(), Vec::new()).ok()?;
         let own: u16 = name
             .to_str()
