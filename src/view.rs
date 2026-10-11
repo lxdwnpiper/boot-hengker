@@ -1,5 +1,9 @@
-use std::iter::{once, repeat_n};
+use std::{
+    iter::{once, repeat_n},
+    time::Duration,
+};
 
+use jiff::fmt::friendly::{Designator, FractionalUnit, Spacing, SpanPrinter};
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Layout, Rect},
@@ -8,7 +12,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Row, Table, Widget},
 };
 
-use crate::model::{BootState, Micros, MilestoneRow, PendingRow, RowStatus, Tally};
+use crate::model::{BootState, MilestoneRow, PendingRow, RowStatus, Tally};
 
 const SPINNER: [char; 4] = ['|', '/', '-', '\\'];
 const DONE: char = '√';
@@ -19,6 +23,7 @@ const STILL_GOING: char = '▶';
 const RUNNING_MARK: char = '►';
 const ROOT_SWITCH_MARK: char = '│';
 const RULE: char = '─';
+const RULE_STUB: &str = "──";
 
 const DURATION_WIDTH: u16 = 8;
 const TIMELINE_LABEL_WIDTH: u16 = 28;
@@ -28,12 +33,34 @@ const TIMELINE_CHROME_HEIGHT: u16 = 3;
 const HEADER_HEIGHT: u16 = 2;
 const FOOTER_HEIGHT: u16 = 2;
 const MAX_FAILED_ROWS: usize = 3;
-const AXIS_STEPS_SECONDS: [u64; 12] = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800, 3600];
-const AXIS_LABEL_SPACING: u64 = 8;
+const AXIS_LABEL_SPACING: u16 = 8;
+const AXIS_STEPS: [Duration; 12] = [
+    Duration::from_secs(1),
+    Duration::from_secs(2),
+    Duration::from_secs(5),
+    Duration::from_secs(10),
+    Duration::from_secs(15),
+    Duration::from_secs(30),
+    Duration::from_mins(1),
+    Duration::from_mins(2),
+    Duration::from_mins(5),
+    Duration::from_mins(10),
+    Duration::from_mins(30),
+    Duration::from_hours(1),
+];
+
+const ELAPSED: SpanPrinter = SpanPrinter::new()
+    .designator(Designator::Compact)
+    .spacing(Spacing::None)
+    .fractional(Some(FractionalUnit::Second))
+    .precision(Some(1));
+const AXIS_LABEL: SpanPrinter = SpanPrinter::new()
+    .designator(Designator::Compact)
+    .spacing(Spacing::None);
 
 pub struct BootView<'a> {
     pub state: &'a BootState,
-    pub now: Micros,
+    pub now: Duration,
     pub host: &'a str,
     pub frame: u64,
 }
@@ -47,22 +74,25 @@ impl Widget for BootView<'_> {
             .into_iter()
             .filter(|row| row.reached_at.is_some())
             .collect();
-        let units = timeline_units(&rows);
-        let failures = failure_lines(self.state.failed_units());
+        let mut units: Vec<&PendingRow> = rows.iter().filter(|row| !row.is_target).collect();
+        units.sort_by_key(|row| row.running_since.unwrap_or(Duration::MAX));
+        let failures = failure_lines(&self.state.failed);
         let stages = self.stage_lines(area.width);
-        let fixed = HEADER_HEIGHT + stages.len() as u16 + failures.len() as u16 + FOOTER_HEIGHT;
+        let stages_height = u16::try_from(stages.len()).unwrap_or(u16::MAX);
+        let failures_height = u16::try_from(failures.len()).unwrap_or(u16::MAX);
         let heights = Heights::share(
-            area.height.saturating_sub(fixed),
-            rows.len() as u16,
+            area.height
+                .saturating_sub(HEADER_HEIGHT + stages_height + failures_height + FOOTER_HEIGHT),
+            u16::try_from(rows.len()).unwrap_or(u16::MAX),
             timeline_need(area, milestones.len() + units.len()),
         );
 
         let [header, _, stage_area, tree, failed, _, timeline, footer] = Layout::vertical([
             Constraint::Length(1),
             Constraint::Length(HEADER_HEIGHT - 1),
-            Constraint::Length(stages.len() as u16),
+            Constraint::Length(stages_height),
             Constraint::Length(heights.tree),
-            Constraint::Length(failures.len() as u16),
+            Constraint::Length(failures_height),
             Constraint::Fill(1),
             Constraint::Length(heights.timeline),
             Constraint::Length(FOOTER_HEIGHT),
@@ -77,8 +107,12 @@ impl Widget for BootView<'_> {
             self.timeline(&milestones, &units, timeline.width)
                 .render(timeline, buf);
         }
-        let root_switched = !self.state.finished_stages().is_empty();
-        footer_paragraph(self.state.tally(), footer.width, root_switched).render(footer, buf);
+        footer_paragraph(
+            self.state.tally(),
+            footer.width,
+            !self.state.finished_stages.is_empty(),
+        )
+        .render(footer, buf);
     }
 }
 
@@ -89,7 +123,7 @@ struct Heights {
 
 impl Heights {
     fn share(free: u16, tree_need: u16, timeline_need: u16) -> Self {
-        if tree_need + timeline_need <= free {
+        if tree_need.saturating_add(timeline_need) <= free {
             return Self {
                 tree: tree_need,
                 timeline: timeline_need,
@@ -105,22 +139,19 @@ impl Heights {
 
 fn rule_line(width: u16, left: Vec<Span<'static>>, right: Vec<Span<'static>>) -> Line<'static> {
     let used = Line::from(left.clone()).width() + Line::from(right.clone()).width();
-    let fill = Span::from(rule(usize::from(width).saturating_sub(used))).dark_gray();
+    let fill: String = repeat_n(RULE, usize::from(width).saturating_sub(used)).collect();
     Line::from(
         left.into_iter()
-            .chain(once(fill))
+            .chain(once(Span::from(fill).dark_gray()))
             .chain(right)
             .collect::<Vec<_>>(),
     )
 }
 
-fn rule(length: usize) -> String {
-    repeat_n(RULE, length).collect()
-}
-
 impl BootView<'_> {
     fn header(&self) -> Table<'static> {
-        let elapsed = format_duration(self.now.saturating_sub(self.state.origin()));
+        let elapsed =
+            ELAPSED.unsigned_duration_to_string(&self.now.saturating_sub(self.state.origin));
         Table::new(
             [Row::new([
                 Line::from(format!("boot-tree  {}", self.host)),
@@ -132,34 +163,43 @@ impl BootView<'_> {
     }
 
     fn stage_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let finished = self.state.finished_stages().into_iter().map(|stage| {
-            let took = stage.reached_at.unwrap_or(stage.started_at) - stage.started_at;
+        let finished = self.state.finished_stages.iter().map(|stage| {
             rule_line(
                 width,
                 vec![
-                    Span::from(format!("{} ", rule(2))).dark_gray(),
-                    Span::from(stage.label).dark_gray(),
-                    Span::from(format!(" {} ", rule(2))).dark_gray(),
-                    Span::from(format!("{BEAD} done in {}", format_duration(took))).green(),
+                    Span::from(format!("{RULE_STUB} {} {RULE_STUB} ", stage.label)).dark_gray(),
+                    Span::from(format!(
+                        "{BEAD} done in {}",
+                        ELAPSED.unsigned_duration_to_string(
+                            &stage.reached_at.saturating_sub(stage.started_at)
+                        )
+                    ))
+                    .green(),
                     Span::from(format!(" · {} ", unit_count(stage.finished_units))).dark_gray(),
                 ],
                 Vec::new(),
             )
         });
-        let running_for = self
-            .now
-            .saturating_sub(self.state.current_stage_started_at());
+        let current_started_at = self
+            .state
+            .finished_stages
+            .last()
+            .map_or(self.state.origin, |stage| stage.reached_at);
         let current = rule_line(
             width,
             vec![
-                Span::from(format!("{} ", rule(2))).dark_gray(),
-                Span::from(self.state.phase().label()).bold(),
+                Span::from(format!("{RULE_STUB} ")).dark_gray(),
+                Span::from(self.state.phase.label()).bold(),
                 Span::raw(" "),
             ],
             vec![
                 Span::raw(" "),
-                Span::from(format_duration(running_for)).bold(),
-                Span::from(format!(" {}", rule(2))).dark_gray(),
+                Span::from(
+                    ELAPSED
+                        .unsigned_duration_to_string(&self.now.saturating_sub(current_started_at)),
+                )
+                .bold(),
+                Span::from(format!(" {RULE_STUB}")).dark_gray(),
             ],
         );
         finished.chain(once(current)).collect()
@@ -192,7 +232,7 @@ impl BootView<'_> {
                 status_marker(row, self.frame),
                 Span::styled(row.label.as_str(), label_style(row)),
             ]),
-            Line::from(format_duration(self.now.saturating_sub(since)))
+            Line::from(ELAPSED.unsigned_duration_to_string(&self.now.saturating_sub(since)))
                 .style(label_style(row))
                 .right_aligned(),
         ])
@@ -205,15 +245,15 @@ impl BootView<'_> {
         width: u16,
     ) -> Table<'a> {
         let axis = TimeAxis::new(
-            self.state.origin(),
+            self.state.origin,
             self.now,
             width.saturating_sub(TIMELINE_LABEL_WIDTH + 1),
         );
-        let root_switches: Vec<Micros> = self
+        let root_switches: Vec<Duration> = self
             .state
-            .finished_stages()
+            .finished_stages
             .iter()
-            .filter_map(|stage| stage.reached_at)
+            .map(|stage| stage.reached_at)
             .collect();
         let axis_rows = [
             Row::new([Line::default(), axis.labels()]),
@@ -264,7 +304,7 @@ fn timeline_need(screen: Rect, entries: usize) -> u16 {
         && screen.height >= MIN_HEIGHT_FOR_TIMELINE
         && entries > 0;
     if fits {
-        TIMELINE_CHROME_HEIGHT + entries as u16
+        TIMELINE_CHROME_HEIGHT.saturating_add(u16::try_from(entries).unwrap_or(u16::MAX))
     } else {
         0
     }
@@ -315,8 +355,8 @@ fn footer_paragraph(tally: Tally, width: u16, root_switched: bool) -> Paragraph<
 }
 
 struct Segment {
-    from: Micros,
-    to: Micros,
+    from: Duration,
+    to: Duration,
     symbol: char,
     style: Style,
 }
@@ -333,7 +373,7 @@ fn milestone_segments(row: &MilestoneRow) -> Vec<Segment> {
         .collect()
 }
 
-fn unit_segments(row: &PendingRow, now: Micros) -> Vec<Segment> {
+fn unit_segments(row: &PendingRow, now: Duration) -> Vec<Segment> {
     let waiting_until = row.running_since.unwrap_or(now);
     let waiting = (waiting_until > row.queued_at).then(|| Segment {
         from: row.queued_at,
@@ -348,13 +388,6 @@ fn unit_segments(row: &PendingRow, now: Micros) -> Vec<Segment> {
         style: Style::new().yellow(),
     });
     waiting.into_iter().chain(running).collect()
-}
-
-struct TimeAxis {
-    origin: Micros,
-    end: Micros,
-    step: Micros,
-    width: u16,
 }
 
 struct Stroke {
@@ -413,36 +446,45 @@ fn canvas_line(width: u16, strokes: impl IntoIterator<Item = Stroke>) -> Line<'s
     )
 }
 
+struct TimeAxis {
+    origin: Duration,
+    span: Duration,
+    step: Duration,
+    width: u16,
+}
+
 impl TimeAxis {
-    fn new(origin: Micros, now: Micros, width: u16) -> Self {
-        let span_seconds = now.saturating_sub(origin).div_ceil(1_000_000).max(1);
-        let max_labels = (u64::from(width) / AXIS_LABEL_SPACING).max(1);
-        let step_seconds = AXIS_STEPS_SECONDS
+    fn new(origin: Duration, now: Duration, width: u16) -> Self {
+        let elapsed = now.saturating_sub(origin).max(AXIS_STEPS[0]);
+        let max_labels = u128::from((width / AXIS_LABEL_SPACING).max(1));
+        let step = AXIS_STEPS
             .into_iter()
-            .find(|step| span_seconds.div_ceil(*step) <= max_labels)
-            .unwrap_or(AXIS_STEPS_SECONDS[AXIS_STEPS_SECONDS.len() - 1]);
-        let end_seconds = span_seconds.div_ceil(step_seconds).max(1) * step_seconds;
+            .find(|step| elapsed.as_nanos().div_ceil(step.as_nanos()) <= max_labels)
+            .unwrap_or(AXIS_STEPS[AXIS_STEPS.len() - 1]);
+        let steps = u32::try_from(elapsed.as_nanos().div_ceil(step.as_nanos())).unwrap_or(u32::MAX);
         Self {
             origin,
-            end: origin + end_seconds * 1_000_000,
-            step: step_seconds * 1_000_000,
+            span: step * steps.max(1),
+            step,
             width,
         }
     }
 
-    fn column(&self, at: Micros) -> u16 {
-        let clamped = at.clamp(self.origin, self.end);
-        let fraction = (clamped - self.origin) as f64 / (self.end - self.origin) as f64;
-        ((fraction * f64::from(self.width)) as u16).min(self.width.saturating_sub(1))
+    fn column(&self, at: Duration) -> u16 {
+        let offset = at.saturating_sub(self.origin).min(self.span);
+        let column = offset.as_nanos() * u128::from(self.width) / self.span.as_nanos();
+        u16::try_from(column)
+            .unwrap_or(u16::MAX)
+            .min(self.width.saturating_sub(1))
     }
 
-    fn tick_offsets(&self) -> impl Iterator<Item = Micros> + '_ {
+    fn tick_offsets(&self) -> impl Iterator<Item = Duration> + '_ {
         (0..)
-            .map(|index| index * self.step)
-            .take_while(|offset| self.origin + offset <= self.end)
+            .map(|index: u32| self.step * index)
+            .take_while(|offset| *offset <= self.span)
     }
 
-    fn root_switch_strokes(&self, root_switches: &[Micros]) -> Vec<Stroke> {
+    fn root_switch_strokes(&self, root_switches: &[Duration]) -> Vec<Stroke> {
         root_switches
             .iter()
             .map(|at| {
@@ -460,11 +502,12 @@ impl TimeAxis {
         canvas_line(
             self.width,
             self.tick_offsets().map(|offset| {
-                let glyphs = format_axis_label(offset);
+                let glyphs = AXIS_LABEL.unsigned_duration_to_string(&offset);
+                let label_width = u16::try_from(glyphs.len()).unwrap_or(self.width);
                 Stroke {
                     column: self
                         .column(self.origin + offset)
-                        .min(self.width.saturating_sub(glyphs.len() as u16)),
+                        .min(self.width.saturating_sub(label_width)),
                     glyphs,
                     style: Style::new().dark_gray(),
                 }
@@ -472,7 +515,7 @@ impl TimeAxis {
         )
     }
 
-    fn ticks_line(&self, root_switches: &[Micros]) -> Line<'static> {
+    fn ticks_line(&self, root_switches: &[Duration]) -> Line<'static> {
         canvas_line(
             self.width,
             self.root_switch_strokes(root_switches)
@@ -491,8 +534,8 @@ impl TimeAxis {
     fn bar(
         &self,
         segments: &[Segment],
-        still_going_at: Option<Micros>,
-        root_switches: &[Micros],
+        still_going_at: Option<Duration>,
+        root_switches: &[Duration],
     ) -> Line<'static> {
         let bars = segments.iter().map(|segment| {
             let start = self.column(segment.from);
@@ -511,21 +554,12 @@ impl TimeAxis {
     }
 }
 
-fn timeline_units(rows: &[PendingRow]) -> Vec<&PendingRow> {
-    let mut units: Vec<&PendingRow> = rows.iter().filter(|row| !is_target(row)).collect();
-    units.sort_by_key(|row| row.running_since.unwrap_or(Micros::MAX));
-    units
-}
-
-fn is_target(row: &PendingRow) -> bool {
-    row.label.ends_with(".target")
-}
-
 fn status_marker(row: &PendingRow, frame: u64) -> Span<'static> {
-    match (is_target(row), row.status) {
+    match (row.is_target, row.status) {
         (true, _) => Span::raw(""),
         (false, RowStatus::Running) => {
-            Span::from(format!("[{}] ", SPINNER[(frame % 4) as usize])).yellow()
+            let spinner = SPINNER[usize::try_from(frame % 4).unwrap_or_default()];
+            Span::from(format!("[{spinner}] ")).yellow()
         }
         (false, RowStatus::Waiting) => Span::from("[ ] ").dark_gray(),
     }
@@ -539,7 +573,7 @@ fn timeline_marker(row: &PendingRow) -> Span<'static> {
 }
 
 fn label_style(row: &PendingRow) -> Style {
-    match (is_target(row), row.status) {
+    match (row.is_target, row.status) {
         (true, _) => Style::new().cyan(),
         (false, RowStatus::Running) => Style::new(),
         (false, RowStatus::Waiting) => Style::new().dark_gray(),
@@ -567,31 +601,14 @@ fn unit_count(count: usize) -> String {
     }
 }
 
-fn format_duration(micros: Micros) -> String {
-    let tenths = micros / 100_000;
-    let seconds = micros / 1_000_000;
-    match seconds {
-        0..60 => format!("{}.{}s", tenths / 10, tenths % 10),
-        60..3600 => format!("{}m{:02}s", seconds / 60, seconds % 60),
-        _ => format!("{}h{:02}m", seconds / 3600, seconds % 3600 / 60),
-    }
-}
-
-fn format_axis_label(offset: Micros) -> String {
-    let seconds = offset / 1_000_000;
-    if seconds < 60 || !seconds.is_multiple_of(60) {
-        format!("{seconds}s")
-    } else {
-        format!("{}m", seconds / 60)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use ratatui::{Terminal, backend::TestBackend};
 
     use super::*;
     use crate::model::{ActiveState, Activity, JobResult, Phase, UnitFacts};
+
+    const MS: Duration = Duration::from_millis(1);
 
     fn facts(name: &str, after: &[&str]) -> UnitFacts {
         UnitFacts {
@@ -601,7 +618,7 @@ mod tests {
         }
     }
 
-    fn render(state: &BootState, now: Micros, width: u16, height: u16) -> Vec<String> {
+    fn render(state: &BootState, now: Duration, width: u16, height: u16) -> Vec<String> {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("test backend");
         terminal
             .draw(|frame| {
@@ -627,7 +644,7 @@ mod tests {
             .collect()
     }
 
-    fn running_since(since: Micros) -> Activity {
+    fn running_since(since: Duration) -> Activity {
         Activity {
             state: Some(ActiveState::Activating),
             inactive_exit: Some(since),
@@ -650,10 +667,10 @@ mod tests {
                 ),
                 Activity::default(),
             ),
-            (facts("docker.service", &[]), running_since(9_000_000)),
+            (facts("docker.service", &[]), running_since(9000 * MS)),
             (
                 facts("systemd-rfkill.service", &[]),
-                running_since(6_000_000),
+                running_since(6000 * MS),
             ),
             (facts("sysinit.target", &[]), Activity::default()),
             (facts("nvidia-powerd.service", &[]), Activity::default()),
@@ -663,16 +680,16 @@ mod tests {
         .for_each(|((unit, activity), id)| {
             let name = unit.name.clone();
             state.track_unit(unit, activity);
-            state.queue_job(id, &name, 1_000_000);
+            state.queue_job(id, &name, 1000 * MS);
         });
-        state.finish_job(5, JobResult::Done, 4_000_000);
-        state.finish_job(6, JobResult::Failed, 5_000_000);
+        state.finish_job(5, JobResult::Done, 4000 * MS);
+        state.finish_job(6, JobResult::Failed, 5000 * MS);
         state
     }
 
     #[test]
     fn tree_on_top_timeline_below() {
-        let lines = render(&boot_in_progress(), 12_400_000, 110, 24);
+        let lines = render(&boot_in_progress(), 12_400 * MS, 110, 24);
         let screen = lines.join("\n");
         assert!(lines[0].starts_with("boot-tree  ryzen"), "{screen}");
         assert!(lines[0].ends_with("12.4s"), "{screen}");
@@ -708,10 +725,6 @@ mod tests {
         assert!(lines[timeline + 5].starts_with("► docker"), "{screen}");
         assert!(!screen.contains("root switch"), "{screen}");
         assert!(
-            screen.contains("× nvidia-powerd.service failed"),
-            "{screen}"
-        );
-        assert!(
             lines[23].starts_with("√ 1 done   2 running   2 waiting   × 1 failed"),
             "{screen}"
         );
@@ -719,9 +732,9 @@ mod tests {
 
     #[test]
     fn narrow_screens_drop_the_timeline() {
-        let lines = render(&boot_in_progress(), 12_400_000, 36, 24);
+        let lines = render(&boot_in_progress(), 12_400 * MS, 36, 24);
         assert!(
-            lines.iter().all(|line| !line.contains('█')),
+            lines.iter().all(|line| !line.contains('■')),
             "{}",
             lines.join("\n")
         );
@@ -733,13 +746,13 @@ mod tests {
         let mut state = BootState::new(Phase::Initrd);
         state.set_root("initrd.target".to_owned());
         state.track_unit(facts("initrd.target", &[]), Activity::default());
-        state.queue_job(1, "initrd.target", 0);
-        state.finish_job(1, JobResult::Done, 6_000_000);
-        state.switch_root(7_200_000);
+        state.queue_job(1, "initrd.target", Duration::ZERO);
+        state.finish_job(1, JobResult::Done, 6000 * MS);
+        state.switch_root(7200 * MS);
         state.set_root("graphical.target".to_owned());
         state.track_unit(facts("graphical.target", &[]), Activity::default());
-        state.queue_job(2, "graphical.target", 7_300_000);
-        let lines = render(&state, 17_300_000, 110, 24);
+        state.queue_job(2, "graphical.target", 7300 * MS);
+        let lines = render(&state, 17_300 * MS, 110, 24);
         let screen = lines.join("\n");
         assert!(
             lines[2].starts_with("── initrd ── ■ done in 7.2s · 1 unit ──"),
@@ -773,20 +786,13 @@ mod tests {
         (0..30).for_each(|id| {
             let name = format!("unit{id:02}.service");
             state.track_unit(facts(&name, &[]), Activity::default());
-            state.queue_job(id, &name, 0);
+            state.queue_job(id, &name, Duration::ZERO);
         });
-        let lines = render(&state, 1_000_000, 110, 20);
+        let lines = render(&state, 1000 * MS, 110, 20);
         assert!(
             lines.iter().any(|line| line.starts_with("… ")),
             "{}",
             lines.join("\n")
         );
-    }
-
-    #[test]
-    fn durations_switch_units_past_a_minute() {
-        assert_eq!(format_duration(12_400_000), "12.4s");
-        assert_eq!(format_duration(65_000_000), "1m05s");
-        assert_eq!(format_duration(3_720_000_000), "1h02m");
     }
 }

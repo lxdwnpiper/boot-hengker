@@ -1,168 +1,134 @@
 use std::{
     collections::HashMap,
+    path::Path as FilePath,
     process,
-    sync::mpsc::Sender,
-    thread::{self, JoinHandle},
+    thread::sleep,
     time::{Duration, Instant},
 };
 
-use boot_tree::model::{Activity, HANDOFF_UNIT, HOST_MILESTONES, JobResult, Micros, UnitFacts};
+use boot_tree::model::{BootState, HANDOFF_UNIT, HOST_MILESTONES};
 use dbus::Path;
 
 use crate::{
     clock::monotonic_now,
     error::Error,
-    sysroot::{Sysroot, running_in_initrd},
-    systemd::{Scope, Session, Signal, brings_unit_up},
+    sysroot::{INITRD_RELEASE, Sysroot},
+    systemd::{Scope, Session, Signal},
 };
 
-const RECEIVE_TIMEOUT: Duration = Duration::from_millis(100);
-const RECONNECT_INTERVAL: Duration = Duration::from_millis(50);
 const RECONNECT_PATIENCE: Duration = Duration::from_secs(60);
 const SWITCH_ROOT_UNIT: &str = "initrd-switch-root.service";
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum JobKind {
-    BringsUp,
-    Unknown,
-}
-
-pub enum Update {
-    Root(String),
-    Handoff(String),
-    Origin(Micros),
-    Unit {
-        facts: UnitFacts,
-        activity: Activity,
-    },
-    JobQueued {
-        id: u32,
-        unit: String,
-        at: Micros,
-        kind: JobKind,
-    },
-    JobFinished {
-        id: u32,
-        result: JobResult,
-        at: Micros,
-    },
-    Activity {
-        unit: String,
-        activity: Activity,
-    },
-    RootSwitched {
-        at: Micros,
-    },
-    Resubscribed,
-    Ended(Error),
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum OriginChoice {
-    FromManager,
-    Keep,
-}
-
-pub struct FeedOptions {
-    pub scope: Scope,
-    pub target: Option<String>,
-}
-
-pub fn spawn(options: FeedOptions, sender: Sender<Update>) -> JoinHandle<()> {
-    thread::spawn(move || {
-        let ended = Feed::new(options, sender.clone()).run();
-        let _ = sender.send(Update::Ended(ended));
-    })
-}
-
-struct Feed {
-    options: FeedOptions,
-    sender: Sender<Update>,
+pub struct Feed {
+    scope: Scope,
+    target: Option<String>,
+    session: Option<Session>,
     unit_paths: HashMap<Path<'static>, String>,
     in_initrd: bool,
     sysroot: Option<Sysroot>,
+    gave_origin: bool,
+    reconnect_deadline: Instant,
 }
 
 impl Feed {
-    fn new(options: FeedOptions, sender: Sender<Update>) -> Self {
+    pub fn new(scope: Scope, target: Option<String>) -> Self {
         Self {
-            in_initrd: options.scope == Scope::System && running_in_initrd(),
-            options,
-            sender,
+            in_initrd: scope == Scope::System && FilePath::new(INITRD_RELEASE).exists(),
+            scope,
+            target,
+            session: None,
             unit_paths: HashMap::new(),
             sysroot: None,
+            gave_origin: false,
+            reconnect_deadline: Instant::now() + RECONNECT_PATIENCE,
         }
     }
 
-    fn send(&self, update: Update) {
-        let _ = self.sender.send(update);
-    }
-
-    fn run(mut self) -> Error {
-        let mut session = match self.connect_patiently(OriginChoice::FromManager) {
-            Ok(session) => session,
-            Err(error) => return error,
+    pub fn pump(&mut self, state: &mut BootState, wait: Duration) -> Result<(), Error> {
+        let Some(session) = self.session.take() else {
+            return self.connect_or_wait(state, wait);
         };
-        loop {
-            match session.receive(RECEIVE_TIMEOUT) {
-                Ok(signals) => signals
+        match session.receive(wait) {
+            Ok(signals) => {
+                signals
                     .into_iter()
-                    .for_each(|signal| self.apply(&session, signal)),
-                Err(_) => match self.reconnect() {
-                    Ok(reconnected) => session = reconnected,
-                    Err(error) => return error,
-                },
+                    .for_each(|signal| self.apply(&session, state, signal));
+                self.session = Some(session);
             }
+            Err(_) => self.lose_connection(state)?,
+        }
+        Ok(())
+    }
+
+    fn connect_or_wait(&mut self, state: &mut BootState, wait: Duration) -> Result<(), Error> {
+        match self.connect(state) {
+            Ok(session) => {
+                self.session = Some(session);
+                Ok(())
+            }
+            Err(_) if Instant::now() < self.reconnect_deadline => {
+                sleep(wait);
+                Ok(())
+            }
+            Err(_) => Err(Error::ManagerUnreachable),
         }
     }
 
-    fn connect(&mut self, origin: OriginChoice) -> Result<Session, Error> {
-        let session = Session::open(self.options.scope)?;
+    fn lose_connection(&mut self, state: &mut BootState) -> Result<(), Error> {
+        match self.sysroot.take() {
+            Some(sysroot) => {
+                sysroot.enter()?;
+                self.in_initrd = false;
+                self.unit_paths.clear();
+                state.switch_root(monotonic_now());
+            }
+            None => state.forget_jobs(),
+        }
+        self.reconnect_deadline = Instant::now() + RECONNECT_PATIENCE;
+        Ok(())
+    }
+
+    fn connect(&mut self, state: &mut BootState) -> Result<Session, Error> {
+        let session = Session::open(self.scope)?;
         session.subscribe()?;
-        let requested_root = match &self.options.target {
+        let requested_root = match &self.target {
             Some(target) => target.clone(),
             None => session.default_target()?,
         };
-        if origin == OriginChoice::FromManager {
-            let boot_in_progress = session.boot_in_progress()?;
-            self.send(Update::Origin(if boot_in_progress {
-                0
+        if !self.gave_origin {
+            state.origin = if session.boot_in_progress()? {
+                Duration::ZERO
             } else {
                 monotonic_now()
-            }));
+            };
+            self.gave_origin = true;
         }
         let root = self
-            .track(&session, &requested_root)
+            .track(&session, state, &requested_root)
             .unwrap_or(requested_root);
-        self.send(Update::Root(root.clone()));
-        if let Some(handoff) = self.track(&session, HANDOFF_UNIT) {
-            self.send(Update::Handoff(handoff));
+        if let Some(handoff) = self.track(&session, state, HANDOFF_UNIT) {
+            state.set_handoff(handoff);
         }
         let jobs: Vec<_> = session
             .list_jobs()?
             .into_iter()
-            .filter(|job| brings_unit_up(&job.kind))
+            .filter(|job| job.brings_unit_up)
             .collect();
         jobs.iter()
             .map(|job| job.unit.as_str())
             .chain(HOST_MILESTONES)
             .for_each(|unit| {
-                self.track(&session, unit);
+                self.track(&session, state, unit);
             });
+        state.set_root(root.clone());
         let now = monotonic_now();
-        jobs.into_iter().for_each(|job| {
-            self.send(Update::JobQueued {
-                id: job.id,
-                unit: job.unit,
-                at: now,
-                kind: JobKind::BringsUp,
-            });
-        });
+        jobs.iter()
+            .for_each(|job| state.queue_job(job.id, &job.unit, now));
         eprintln!(
             "boot-tree: watching {root} in {} as pid {} over {}",
             if self.in_initrd { "initrd" } else { "stage 2" },
             process::id(),
-            if session.is_peer_to_peer() {
+            if session.peer_to_peer {
                 "the private socket"
             } else {
                 "the bus"
@@ -171,33 +137,7 @@ impl Feed {
         Ok(session)
     }
 
-    fn reconnect(&mut self) -> Result<Session, Error> {
-        match self.sysroot.take() {
-            Some(sysroot) => {
-                sysroot.enter()?;
-                self.in_initrd = false;
-                self.unit_paths.clear();
-                self.send(Update::RootSwitched {
-                    at: monotonic_now(),
-                });
-            }
-            None => self.send(Update::Resubscribed),
-        }
-        self.connect_patiently(OriginChoice::Keep)
-    }
-
-    fn connect_patiently(&mut self, origin: OriginChoice) -> Result<Session, Error> {
-        let deadline = Instant::now() + RECONNECT_PATIENCE;
-        loop {
-            match self.connect(origin) {
-                Ok(session) => return Ok(session),
-                Err(_) if Instant::now() < deadline => thread::sleep(RECONNECT_INTERVAL),
-                Err(_) => return Err(Error::ManagerUnreachable),
-            }
-        }
-    }
-
-    fn track(&mut self, session: &Session, unit: &str) -> Option<String> {
+    fn track(&mut self, session: &Session, state: &mut BootState, unit: &str) -> Option<String> {
         if let Some(known) = self.unit_paths.values().find(|known| *known == unit) {
             return Some(known.clone());
         }
@@ -207,46 +147,30 @@ impl Feed {
             return Some(canonical);
         }
         self.unit_paths.insert(fetched.path, canonical.clone());
-        self.send(Update::Unit {
-            facts: fetched.facts,
-            activity: fetched.activity,
-        });
+        state.track_unit(fetched.facts, fetched.activity);
         Some(canonical)
     }
 
-    fn apply(&mut self, session: &Session, signal: Signal) {
+    fn apply(&mut self, session: &Session, state: &mut BootState, signal: Signal) {
         match signal {
             Signal::JobNew { id, job, unit } => {
-                let kind = session.job_kind(&job);
-                if kind.as_deref().is_ok_and(|kind| !brings_unit_up(kind)) {
+                let brings_unit_up = session.job_brings_unit_up(&job);
+                if brings_unit_up.as_ref().is_ok_and(|up| !up) {
                     return;
                 }
-                let unit = self.track(session, &unit).unwrap_or(unit);
+                let unit = self.track(session, state, &unit).unwrap_or(unit);
                 if self.in_initrd && unit == SWITCH_ROOT_UNIT {
                     self.sysroot = Sysroot::hold().ok();
                 }
-                self.send(Update::JobQueued {
-                    id,
-                    unit,
-                    at: monotonic_now(),
-                    kind: if kind.is_ok() {
-                        JobKind::BringsUp
-                    } else {
-                        JobKind::Unknown
-                    },
-                });
+                match brings_unit_up {
+                    Ok(_) => state.queue_job(id, &unit, monotonic_now()),
+                    Err(_) => state.queue_job_of_unknown_kind(id, &unit, monotonic_now()),
+                }
             }
-            Signal::JobRemoved { id, result } => self.send(Update::JobFinished {
-                id,
-                result,
-                at: monotonic_now(),
-            }),
+            Signal::JobRemoved { id, result } => state.finish_job(id, result, monotonic_now()),
             Signal::UnitChanged { path, activity } => {
                 if let Some(unit) = self.unit_paths.get(&path) {
-                    self.send(Update::Activity {
-                        unit: unit.clone(),
-                        activity,
-                    });
+                    state.update_activity(unit, activity);
                 }
             }
         }

@@ -1,4 +1,4 @@
-use std::{os::fd::OwnedFd, path::Path};
+use std::os::fd::OwnedFd;
 
 use rustix::{
     fs::{Mode, OFlags, open},
@@ -7,11 +7,7 @@ use rustix::{
 };
 
 const SYSROOT: &str = "/sysroot";
-const INITRD_RELEASE: &str = "/etc/initrd-release";
-
-pub fn running_in_initrd() -> bool {
-    Path::new(INITRD_RELEASE).exists()
-}
+pub const INITRD_RELEASE: &str = "/etc/initrd-release";
 
 pub struct Sysroot {
     directory: OwnedFd,

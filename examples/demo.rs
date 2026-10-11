@@ -5,7 +5,7 @@ use std::{
 };
 
 use boot_tree::{
-    model::{ActiveState, Activity, BootState, JobResult, Micros, Phase, UnitFacts},
+    model::{ActiveState, Activity, BootState, JobResult, Phase, UnitFacts},
     view::BootView,
 };
 use ratatui::{
@@ -19,24 +19,24 @@ const FINAL_FRAME: Duration = Duration::from_secs(3);
 struct Step {
     unit: &'static str,
     after: &'static [&'static str],
-    work_ms: u64,
+    work: Duration,
     fails: bool,
 }
 
-const fn step(unit: &'static str, after: &'static [&'static str], work_ms: u64) -> Step {
+const fn step(unit: &'static str, after: &'static [&'static str], work: Duration) -> Step {
     Step {
         unit,
         after,
-        work_ms,
+        work,
         fails: false,
     }
 }
 
-const fn failing(unit: &'static str, after: &'static [&'static str], work_ms: u64) -> Step {
+const fn failing(unit: &'static str, after: &'static [&'static str], work: Duration) -> Step {
     Step {
         unit,
         after,
-        work_ms,
+        work,
         fails: true,
     }
 }
@@ -45,32 +45,48 @@ const INITRD: &[Step] = &[
     step(
         "initrd.target",
         &["initrd-fs.target", "initrd-root-device.target"],
-        0,
+        Duration::ZERO,
     ),
-    step("initrd-fs.target", &["sysroot.mount"], 0),
+    step("initrd-fs.target", &["sysroot.mount"], Duration::ZERO),
     step(
         "initrd-root-device.target",
         &["dev-disk-by\\x2dlabel-nixos.device"],
-        0,
+        Duration::ZERO,
     ),
-    step("sysroot.mount", &["systemd-fsck-root.service"], 300),
+    step(
+        "sysroot.mount",
+        &["systemd-fsck-root.service"],
+        Duration::from_millis(300),
+    ),
     step(
         "systemd-fsck-root.service",
         &["dev-disk-by\\x2dlabel-nixos.device"],
-        500,
+        Duration::from_millis(500),
     ),
-    step("dev-disk-by\\x2dlabel-nixos.device", &[], 1200),
-    step("systemd-udevd.service", &[], 400),
-    step("demo-initrd-probe.service", &[], 2500),
+    step(
+        "dev-disk-by\\x2dlabel-nixos.device",
+        &[],
+        Duration::from_millis(1200),
+    ),
+    step("systemd-udevd.service", &[], Duration::from_millis(400)),
+    step(
+        "demo-initrd-probe.service",
+        &[],
+        Duration::from_millis(2500),
+    ),
 ];
 
 const HOST: &[Step] = &[
     step(
         "graphical.target",
         &["multi-user.target", "display-manager.service"],
-        0,
+        Duration::ZERO,
     ),
-    step("display-manager.service", &["multi-user.target"], 400),
+    step(
+        "display-manager.service",
+        &["multi-user.target"],
+        Duration::from_millis(400),
+    ),
     step(
         "multi-user.target",
         &[
@@ -81,43 +97,71 @@ const HOST: &[Step] = &[
             "nvidia-powerd.service",
             "systemd-rfkill.service",
         ],
-        0,
+        Duration::ZERO,
     ),
-    step("basic.target", &["sysinit.target"], 0),
+    step("basic.target", &["sysinit.target"], Duration::ZERO),
     step(
         "sysinit.target",
         &[
             "systemd-tmpfiles-setup.service",
             "systemd-udev-trigger.service",
         ],
-        0,
+        Duration::ZERO,
     ),
-    step("systemd-tmpfiles-setup.service", &[], 600),
-    step("systemd-udev-trigger.service", &[], 900),
-    step("NetworkManager.service", &["basic.target"], 1500),
+    step(
+        "systemd-tmpfiles-setup.service",
+        &[],
+        Duration::from_millis(600),
+    ),
+    step(
+        "systemd-udev-trigger.service",
+        &[],
+        Duration::from_millis(900),
+    ),
+    step(
+        "NetworkManager.service",
+        &["basic.target"],
+        Duration::from_millis(1500),
+    ),
     step(
         "NetworkManager-wait-online.service",
         &["NetworkManager.service"],
-        3500,
+        Duration::from_millis(3500),
     ),
     step(
         "network-online.target",
         &["NetworkManager-wait-online.service"],
-        0,
+        Duration::ZERO,
     ),
-    step("tailscaled.service", &["network-online.target"], 1200),
-    step("containerd.service", &["basic.target"], 800),
+    step(
+        "tailscaled.service",
+        &["network-online.target"],
+        Duration::from_millis(1200),
+    ),
+    step(
+        "containerd.service",
+        &["basic.target"],
+        Duration::from_millis(800),
+    ),
     step(
         "docker.service",
         &["containerd.service", "network-online.target"],
-        1500,
+        Duration::from_millis(1500),
     ),
-    failing("nvidia-powerd.service", &["basic.target"], 700),
-    step("sys-devices-virtual-misc-rfkill.device", &[], 4000),
+    failing(
+        "nvidia-powerd.service",
+        &["basic.target"],
+        Duration::from_millis(700),
+    ),
+    step(
+        "sys-devices-virtual-misc-rfkill.device",
+        &[],
+        Duration::from_millis(4000),
+    ),
     step(
         "systemd-rfkill.service",
         &["sys-devices-virtual-misc-rfkill.device"],
-        300,
+        Duration::from_millis(300),
     ),
 ];
 
@@ -154,12 +198,12 @@ impl ScriptedJob {
 
 struct Script {
     jobs: Vec<ScriptedJob>,
-    started: HashMap<&'static str, Micros>,
+    started: HashMap<&'static str, Duration>,
     finished: HashSet<&'static str>,
 }
 
 impl Script {
-    fn begin(steps: &'static [Step], first_job: u32, state: &mut BootState, now: Micros) -> Self {
+    fn begin(steps: &'static [Step], first_job: u32, state: &mut BootState, now: Duration) -> Self {
         let jobs: Vec<ScriptedJob> = steps
             .iter()
             .zip(first_job..)
@@ -177,10 +221,6 @@ impl Script {
         }
     }
 
-    fn is_finished(&self) -> bool {
-        self.finished.len() == self.jobs.len()
-    }
-
     fn is_ready(&self, job: &ScriptedJob) -> bool {
         !self.started.contains_key(job.step.unit)
             && job
@@ -190,15 +230,15 @@ impl Script {
                 .all(|dependency| self.finished.contains(dependency))
     }
 
-    fn is_due(&self, job: &ScriptedJob, now: Micros) -> bool {
+    fn is_due(&self, job: &ScriptedJob, now: Duration) -> bool {
         !self.finished.contains(job.step.unit)
             && self
                 .started
                 .get(job.step.unit)
-                .is_some_and(|started| now >= started + job.step.work_ms * 1_000)
+                .is_some_and(|started| now >= *started + job.step.work)
     }
 
-    fn advance(&mut self, state: &mut BootState, now: Micros) {
+    fn advance(&mut self, state: &mut BootState, now: Duration) {
         let starting: Vec<&'static str> = self
             .jobs
             .iter()
@@ -251,14 +291,14 @@ fn wants_to_quit() -> io::Result<bool> {
 
 fn play(terminal: &mut DefaultTerminal) -> io::Result<()> {
     let clock = Instant::now();
-    let now = || clock.elapsed().as_micros() as Micros;
+    let now = || clock.elapsed();
     let mut state = BootState::new(Phase::Initrd);
     let mut script = Script::begin(INITRD, 1, &mut state, now());
     let mut frame = 0;
     let mut completed_at = None;
     loop {
         script.advance(&mut state, now());
-        if state.phase() == Phase::Initrd && script.is_finished() {
+        if state.phase == Phase::Initrd && script.finished.len() == script.jobs.len() {
             state.switch_root(now());
             script = Script::begin(HOST, 1000, &mut state, now());
         }

@@ -1,6 +1,6 @@
 use std::{iter, time::Duration};
 
-use boot_tree::model::{ActiveState, Activity, JobResult, Micros, UnitFacts};
+use boot_tree::model::{ActiveState, Activity, JobResult, UnitFacts};
 use dbus::{
     Message, MessageType, Path,
     arg::{AppendAll, PropMap, RefArg, Variant},
@@ -20,6 +20,7 @@ const BUS_DESTINATION: &str = "org.freedesktop.DBus";
 const BUS_PATH: &str = "/org/freedesktop/DBus";
 const PRIVATE_SOCKET: &str = "unix:path=/run/systemd/private";
 const SIGNAL_RULE: &str = "type='signal',path_namespace='/org/freedesktop/systemd1'";
+const STOP_JOB: &str = "stop";
 const CALL_TIMEOUT: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -53,24 +54,24 @@ pub struct FetchedUnit {
 pub struct JobListing {
     pub id: u32,
     pub unit: String,
-    pub kind: String,
-}
-
-pub fn brings_unit_up(job_kind: &str) -> bool {
-    job_kind != "stop"
+    pub brings_unit_up: bool,
 }
 
 type ListedJob = (u32, String, String, String, Path<'static>, Path<'static>);
 
 impl From<ListedJob> for JobListing {
     fn from((id, unit, kind, ..): ListedJob) -> Self {
-        Self { id, unit, kind }
+        Self {
+            id,
+            unit,
+            brings_unit_up: kind != STOP_JOB,
+        }
     }
 }
 
 pub struct Session {
     channel: Channel,
-    peer_to_peer: bool,
+    pub peer_to_peer: bool,
 }
 
 impl Session {
@@ -92,7 +93,7 @@ impl Session {
             channel: Channel::get_private(bus)?,
             peer_to_peer: false,
         };
-        session.call_at(
+        session.call(
             BUS_DESTINATION,
             BUS_PATH,
             BUS_DESTINATION,
@@ -102,11 +103,7 @@ impl Session {
         Ok(session)
     }
 
-    pub fn is_peer_to_peer(&self) -> bool {
-        self.peer_to_peer
-    }
-
-    fn call_at(
+    fn call(
         &self,
         destination: &str,
         path: &str,
@@ -121,31 +118,31 @@ impl Session {
         Ok(self.channel.send_with_reply_and_block(call, CALL_TIMEOUT)?)
     }
 
-    fn call(
-        &self,
-        path: &str,
-        interface: &str,
-        member: &str,
-        arguments: impl AppendAll,
-    ) -> Result<Message, Error> {
-        self.call_at(DESTINATION, path, interface, member, arguments)
-    }
-
-    fn call_manager(&self, member: &str) -> Result<Message, Error> {
-        self.call(MANAGER_PATH, MANAGER_INTERFACE, member, ())
-    }
-
     pub fn subscribe(&self) -> Result<(), Error> {
-        self.call_manager("Subscribe")?;
+        self.call(
+            DESTINATION,
+            MANAGER_PATH,
+            MANAGER_INTERFACE,
+            "Subscribe",
+            (),
+        )?;
         Ok(())
     }
 
     pub fn default_target(&self) -> Result<String, Error> {
-        Ok(self.call_manager("GetDefaultTarget")?.read1()?)
+        let reply = self.call(
+            DESTINATION,
+            MANAGER_PATH,
+            MANAGER_INTERFACE,
+            "GetDefaultTarget",
+            (),
+        )?;
+        Ok(reply.read1()?)
     }
 
     pub fn boot_in_progress(&self) -> Result<bool, Error> {
         let reply = self.call(
+            DESTINATION,
             MANAGER_PATH,
             PROPERTIES_INTERFACE,
             "Get",
@@ -156,49 +153,82 @@ impl Session {
     }
 
     pub fn list_jobs(&self) -> Result<Vec<JobListing>, Error> {
-        let listed: Vec<ListedJob> = self.call_manager("ListJobs")?.read1()?;
+        let reply = self.call(DESTINATION, MANAGER_PATH, MANAGER_INTERFACE, "ListJobs", ())?;
+        let listed: Vec<ListedJob> = reply.read1()?;
         Ok(listed.into_iter().map(JobListing::from).collect())
     }
 
-    pub fn job_kind(&self, job: &Path) -> Result<String, Error> {
-        let reply = self.call(job, PROPERTIES_INTERFACE, "Get", (JOB_INTERFACE, "JobType"))?;
+    pub fn job_brings_unit_up(&self, job: &Path) -> Result<bool, Error> {
+        let reply = self.call(
+            DESTINATION,
+            job,
+            PROPERTIES_INTERFACE,
+            "Get",
+            (JOB_INTERFACE, "JobType"),
+        )?;
         let kind: Variant<String> = reply.read1()?;
-        Ok(kind.0)
+        Ok(kind.0 != STOP_JOB)
     }
 
     pub fn fetch_unit(&self, name: &str) -> Result<FetchedUnit, Error> {
         let path: Path<'static> = self
-            .call(MANAGER_PATH, MANAGER_INTERFACE, "GetUnit", (name,))?
+            .call(
+                DESTINATION,
+                MANAGER_PATH,
+                MANAGER_INTERFACE,
+                "GetUnit",
+                (name,),
+            )?
             .read1()?;
         let properties: PropMap = self
-            .call(&path, PROPERTIES_INTERFACE, "GetAll", (UNIT_INTERFACE,))?
+            .call(
+                DESTINATION,
+                &path,
+                PROPERTIES_INTERFACE,
+                "GetAll",
+                (UNIT_INTERFACE,),
+            )?
             .read1()?;
+        let text = |property: &str| {
+            properties
+                .get(property)
+                .and_then(|value| value.0.as_str())
+                .map(ToOwned::to_owned)
+        };
+        let after = properties
+            .get("After")
+            .and_then(|value| value.0.as_iter())
+            .map(|items| {
+                items
+                    .filter_map(|item| item.as_str().map(ToOwned::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default();
         Ok(FetchedUnit {
-            path,
             facts: UnitFacts {
-                name: text_property(&properties, "Id").unwrap_or_else(|| name.to_owned()),
-                description: text_property(&properties, "Description").unwrap_or_default(),
-                after: list_property(&properties, "After"),
+                name: text("Id").unwrap_or_else(|| name.to_owned()),
+                description: text("Description").unwrap_or_default(),
+                after,
             },
             activity: activity_from(&properties),
+            path,
         })
     }
 
     pub fn receive(&self, timeout: Duration) -> Result<Vec<Signal>, Error> {
-        let queued = self.drain();
+        let drain = || -> Vec<Signal> {
+            iter::from_fn(|| self.channel.pop_message())
+                .filter_map(|message| parse_signal(&message))
+                .collect()
+        };
+        let queued = drain();
         if !queued.is_empty() {
             return Ok(queued);
         }
         if self.channel.read_write(Some(timeout)).is_err() || !self.channel.is_connected() {
             return Err(Error::Disconnected);
         }
-        Ok(self.drain())
-    }
-
-    fn drain(&self) -> Vec<Signal> {
-        iter::from_fn(|| self.channel.pop_message())
-            .filter_map(|message| parse_signal(&message))
-            .collect()
+        Ok(drain())
     }
 }
 
@@ -249,32 +279,20 @@ fn parse_signal(message: &Message) -> Option<Signal> {
     }
 }
 
-fn text_property(properties: &PropMap, name: &str) -> Option<String> {
-    properties.get(name)?.0.as_str().map(ToOwned::to_owned)
-}
-
-fn list_property(properties: &PropMap, name: &str) -> Vec<String> {
-    let Some(items) = properties.get(name).and_then(|value| value.0.as_iter()) else {
-        return Vec::new();
-    };
-    items
-        .filter_map(|item| item.as_str())
-        .map(ToOwned::to_owned)
-        .collect()
-}
-
-fn timestamp_property(properties: &PropMap, name: &str) -> Option<Micros> {
-    properties
-        .get(name)?
-        .0
-        .as_u64()
-        .and_then(Activity::timestamp)
-}
-
 fn activity_from(properties: &PropMap) -> Activity {
+    let monotonic = |property: &str| {
+        properties
+            .get(property)
+            .and_then(|value| value.0.as_u64())
+            .filter(|micros| *micros != 0)
+            .map(Duration::from_micros)
+    };
     Activity {
-        state: text_property(properties, "ActiveState").map(|raw| ActiveState::parse(&raw)),
-        inactive_exit: timestamp_property(properties, "InactiveExitTimestampMonotonic"),
-        active_enter: timestamp_property(properties, "ActiveEnterTimestampMonotonic"),
+        state: properties
+            .get("ActiveState")
+            .and_then(|value| value.0.as_str())
+            .map(ActiveState::parse),
+        inactive_exit: monotonic("InactiveExitTimestampMonotonic"),
+        active_enter: monotonic("ActiveEnterTimestampMonotonic"),
     }
 }

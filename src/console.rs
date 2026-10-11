@@ -23,32 +23,29 @@ pub struct ForegroundVt {
 
 impl ForegroundVt {
     pub fn take() -> Option<Self> {
-        let own = own_vt_number()?;
-        let previous = active_vt().ok()?;
-        if previous != own {
+        let name = ttyname(stdin(), Vec::new()).ok()?;
+        let own: u16 = name
+            .to_str()
+            .ok()?
+            .strip_prefix(VIRTUAL_TERMINAL_PREFIX)?
+            .parse()
+            .ok()
+            .filter(|number| *number > 0)?;
+        let state: VtState =
+            unsafe { ioctl(stdin(), Getter::<VT_GETSTATE, VtState>::new()) }.ok()?;
+        if state.active != own {
             activate(own).ok()?;
         }
-        Some(Self { previous })
+        Some(Self {
+            previous: state.active,
+        })
     }
+}
 
-    pub fn give_back(self) {
+impl Drop for ForegroundVt {
+    fn drop(&mut self) {
         let _ = activate(self.previous);
     }
-}
-
-fn own_vt_number() -> Option<u16> {
-    let name = ttyname(stdin(), Vec::new()).ok()?;
-    name.to_str()
-        .ok()?
-        .strip_prefix(VIRTUAL_TERMINAL_PREFIX)?
-        .parse()
-        .ok()
-        .filter(|number| *number > 0)
-}
-
-fn active_vt() -> Result<u16, Errno> {
-    let state: VtState = unsafe { ioctl(stdin(), Getter::<VT_GETSTATE, VtState>::new()) }?;
-    Ok(state.active)
 }
 
 fn activate(number: u16) -> Result<(), Errno> {
