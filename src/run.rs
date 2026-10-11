@@ -27,7 +27,7 @@ use crate::{
     error::Error,
     feed::Feed,
     sysroot::INITRD_RELEASE,
-    systemd::Scope,
+    systemd::{Scope, Session},
 };
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(100);
@@ -43,6 +43,14 @@ pub struct Options {
 pub fn run(options: &Options) -> Result<(), Error> {
     let terminate = Arc::new(AtomicBool::new(false));
     flag::register(SIGTERM, Arc::clone(&terminate))?;
+    if options.scope == Scope::System
+        && Session::open(Scope::System)
+            .and_then(|session| session.boot_in_progress())
+            .is_ok_and(|booting| !booting)
+    {
+        eprintln!("bootvine: boot already finished, leaving the console alone");
+        return Ok(());
+    }
     let phase = match options.scope {
         Scope::User => Phase::User,
         Scope::System if Path::new(INITRD_RELEASE).exists() => Phase::Initrd,

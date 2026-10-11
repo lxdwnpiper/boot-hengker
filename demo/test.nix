@@ -44,5 +44,12 @@
     show_status = machine.succeed("systemctl show -p ShowStatus --value").strip()
     assert show_status == "yes", f"systemd status output was not restored: {show_status}"
     machine.screenshot("handed-over")
+
+    foreground = machine.succeed("cat /sys/class/tty/tty0/active").strip()
+    machine.succeed("systemctl restart bootvine")
+    machine.wait_until_succeeds("systemctl show -p ActiveState --value bootvine | grep -qx inactive", timeout=10)
+    assert "boot already finished" in machine.succeed("journalctl -u bootvine -o cat"), "a restart after boot did not stand down"
+    still_foreground = machine.succeed("cat /sys/class/tty/tty0/active").strip()
+    assert still_foreground == foreground, f"a restart after boot took the console: {foreground} -> {still_foreground}"
   '';
 }
