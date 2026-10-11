@@ -9,6 +9,7 @@ use std::{
 };
 
 use bootvine::{
+    glyphs::Glyphs,
     model::{BootState, Phase},
     palette::Palette,
     view::BootView,
@@ -24,7 +25,7 @@ use signal_hook::{consts::SIGTERM, flag};
 
 use crate::{
     clock::monotonic_now,
-    console::{ForegroundVt, QuietKernelConsole},
+    console::{ForegroundVt, QuietKernelConsole, font_characters},
     error::Error,
     feed::Feed,
     sysroot::INITRD_RELEASE,
@@ -66,6 +67,9 @@ pub fn run(options: &Options) -> Result<(), Error> {
         .then(QuietKernelConsole::take)
         .flatten();
     let _foreground = ForegroundVt::take();
+    let glyphs = font_characters().map_or_else(Glyphs::default, |characters| {
+        Glyphs::fitting(|symbol| symbol.is_ascii() || characters.contains(&symbol))
+    });
     let mut terminal = ratatui::try_init()?;
     let watched = watch(
         &mut state,
@@ -73,6 +77,7 @@ pub fn run(options: &Options) -> Result<(), Error> {
         &mut terminal,
         &terminate,
         &options.palette,
+        &glyphs,
         options.hold,
     );
     ratatui::restore();
@@ -111,6 +116,7 @@ fn watch(
     terminal: &mut DefaultTerminal,
     terminate: &AtomicBool,
     palette: &Palette,
+    glyphs: &Glyphs,
     hold: Duration,
 ) -> Result<(), Error> {
     let host = uname().nodename().to_string_lossy().into_owned();
@@ -126,6 +132,7 @@ fn watch(
                 BootView {
                     state,
                     palette,
+                    glyphs,
                     now: monotonic_now(),
                     host: &host,
                     frame,

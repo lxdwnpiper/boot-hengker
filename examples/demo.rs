@@ -5,6 +5,7 @@ use std::{
 };
 
 use bootvine::{
+    glyphs::Glyphs,
     model::{ActiveState, Activity, BootState, JobKind, JobResult, Phase, UnitFacts},
     palette::Palette,
     view::BootView,
@@ -311,6 +312,7 @@ fn play(terminal: &mut DefaultTerminal) -> io::Result<()> {
                 BootView {
                     state: &state,
                     palette: &Palette::default(),
+                    glyphs: &Glyphs::default(),
                     now: now(),
                     host: "demo",
                     frame,

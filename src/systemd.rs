@@ -273,12 +273,20 @@ fn parse_signal(message: &Message) -> Option<Signal> {
     }
     let interface = message.interface()?;
     let member = message.member()?;
-    match (&*interface, &*member) {
-        (MANAGER_INTERFACE, "JobNew") => {
+    match &*interface {
+        MANAGER_INTERFACE => parse_job_signal(message, &member),
+        PROPERTIES_INTERFACE if &*member == "PropertiesChanged" => parse_unit_change(message),
+        _ => None,
+    }
+}
+
+fn parse_job_signal(message: &Message, member: &str) -> Option<Signal> {
+    match member {
+        "JobNew" => {
             let (id, job, unit): (u32, Path<'static>, String) = message.read3().ok()?;
             Some(Signal::JobNew { id, job, unit })
         }
-        (MANAGER_INTERFACE, "JobRemoved") => {
+        "JobRemoved" => {
             let (id, _job, _unit, result): (u32, Path<'static>, String, String) =
                 message.read4().ok()?;
             Some(Signal::JobRemoved {
@@ -286,19 +294,20 @@ fn parse_signal(message: &Message) -> Option<Signal> {
                 result: JobResult::parse(&result),
             })
         }
-        (PROPERTIES_INTERFACE, "PropertiesChanged") => {
-            let (changed_interface, changed, _invalidated): (String, PropMap, Vec<String>) =
-                message.read3().ok()?;
-            if changed_interface != UNIT_INTERFACE {
-                return None;
-            }
-            Some(Signal::UnitChanged {
-                path: message.path()?.into_static(),
-                activity: activity_from(&changed),
-            })
-        }
         _ => None,
     }
+}
+
+fn parse_unit_change(message: &Message) -> Option<Signal> {
+    let (changed_interface, changed, _invalidated): (String, PropMap, Vec<String>) =
+        message.read3().ok()?;
+    if changed_interface != UNIT_INTERFACE {
+        return None;
+    }
+    Some(Signal::UnitChanged {
+        path: message.path()?.into_static(),
+        activity: activity_from(&changed),
+    })
 }
 
 fn activity_from(properties: &PropMap) -> Activity {

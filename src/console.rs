@@ -1,12 +1,13 @@
-use std::fs;
+use std::{collections::HashSet, fs, ptr};
 
 use rustix::{
     io::Errno,
-    ioctl::{Getter, IntegerSetter, Opcode, ioctl},
+    ioctl::{Getter, IntegerSetter, Opcode, Updater, ioctl},
     stdio::stdin,
     termios::ttyname,
 };
 
+const GIO_UNIMAP: Opcode = 0x4B66;
 const VT_GETSTATE: Opcode = 0x5603;
 const VT_ACTIVATE: Opcode = 0x5606;
 const VT_WAITACTIVE: Opcode = 0x5607;
@@ -31,6 +32,47 @@ impl Drop for QuietKernelConsole {
     fn drop(&mut self) {
         let _ = fs::write(KERNEL_PRINTK, &self.previous_level);
     }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct UnicodePair {
+    unicode: u16,
+    _font_position: u16,
+}
+
+#[repr(C)]
+struct UnicodeMap {
+    count: u16,
+    pairs: *mut UnicodePair,
+}
+
+fn read_unicode_map(map: &mut UnicodeMap) -> Result<(), Errno> {
+    unsafe { ioctl(stdin(), Updater::<GIO_UNIMAP, UnicodeMap>::new(map)) }
+}
+
+pub fn font_characters() -> Option<HashSet<char>> {
+    let mut probe = UnicodeMap {
+        count: 0,
+        pairs: ptr::null_mut(),
+    };
+    let _ = read_unicode_map(&mut probe);
+    if probe.count == 0 {
+        return None;
+    }
+    let mut pairs = vec![UnicodePair::default(); usize::from(probe.count)];
+    let mut map = UnicodeMap {
+        count: probe.count,
+        pairs: pairs.as_mut_ptr(),
+    };
+    read_unicode_map(&mut map).ok()?;
+    Some(
+        pairs
+            .iter()
+            .take(usize::from(map.count))
+            .filter_map(|pair| char::from_u32(u32::from(pair.unicode)))
+            .collect(),
+    )
 }
 
 #[repr(C)]

@@ -1,6 +1,8 @@
 use std::{
     collections::{HashMap, HashSet},
+    iter::{self, Peekable},
     time::Duration,
+    vec::IntoIter,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -171,6 +173,7 @@ pub struct PendingRow {
     pub status: RowStatus,
     pub queued_at: Duration,
     pub running_since: Option<Duration>,
+    pub chain: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -437,11 +440,17 @@ impl BootState {
             ..Tally::default()
         };
         self.units.values().fold(carried, |mut tally, record| {
-            match (record.job, record.running_since(), record.outcome) {
-                (Some(_), Some(_), _) => tally.running += 1,
-                (Some(_), None, _) => tally.waiting += 1,
-                (None, _, Some(Outcome::Succeeded { .. } | Outcome::Abandoned)) => tally.done += 1,
-                _ => {}
+            if record.job.is_some() {
+                if record.running_since().is_some() {
+                    tally.running += 1;
+                } else {
+                    tally.waiting += 1;
+                }
+            } else if matches!(
+                record.outcome,
+                Some(Outcome::Succeeded { .. } | Outcome::Abandoned)
+            ) {
+                tally.done += 1;
             }
             tally
         })
@@ -581,6 +590,7 @@ impl BootState {
             },
             queued_at: job.queued_at,
             running_since,
+            chain: Vec::new(),
         });
         let candidates: Vec<&str> = self
             .waits_for(unit, pending)
@@ -709,6 +719,78 @@ pub fn paths_to_running(rows: Vec<PendingRow>) -> Vec<PendingRow> {
     relink_siblings(survivors)
 }
 
+const MIN_FOLDED_LINKS: usize = 2;
+
+struct TreeNode {
+    row: PendingRow,
+    children: Vec<TreeNode>,
+}
+
+impl TreeNode {
+    fn is_chain_link(&self) -> bool {
+        self.row.status == RowStatus::Waiting && self.children.len() == 1
+    }
+
+    fn foldable_links(&self) -> usize {
+        let mut links = 0;
+        let mut cursor = self;
+        while cursor.is_chain_link() && cursor.children[0].is_chain_link() {
+            links += 1;
+            cursor = &cursor.children[0];
+        }
+        links
+    }
+
+    fn fold(mut self, may_absorb: bool) -> Self {
+        let links = if may_absorb { self.foldable_links() } else { 0 };
+        if links >= MIN_FOLDED_LINKS {
+            let (chain, below) = (0..links).fold(
+                (Vec::new(), self.children),
+                |(mut chain, mut children), _| {
+                    let only = children.remove(0);
+                    chain.push(only.row.label);
+                    (chain, only.children)
+                },
+            );
+            self.row.chain = chain;
+            self.children = below;
+        }
+        self.children = self
+            .children
+            .into_iter()
+            .map(|child| child.fold(true))
+            .collect();
+        self
+    }
+
+    fn flatten_into(self, depth: usize, rows: &mut Vec<PendingRow>) {
+        rows.push(PendingRow { depth, ..self.row });
+        self.children
+            .into_iter()
+            .for_each(|child| child.flatten_into(depth + 1, rows));
+    }
+}
+
+fn grow_forest(rows: &mut Peekable<IntoIter<PendingRow>>, depth: usize) -> Vec<TreeNode> {
+    iter::from_fn(|| {
+        let row = rows.next_if(|row| row.depth == depth)?;
+        Some(TreeNode {
+            row,
+            children: grow_forest(rows, depth + 1),
+        })
+    })
+    .collect()
+}
+
+#[must_use]
+pub fn fold_chains(rows: Vec<PendingRow>) -> Vec<PendingRow> {
+    let mut flattened = Vec::new();
+    grow_forest(&mut rows.into_iter().peekable(), 0)
+        .into_iter()
+        .for_each(|root| root.fold(false).flatten_into(0, &mut flattened));
+    relink_siblings(flattened)
+}
+
 fn relink_siblings(rows: Vec<PendingRow>) -> Vec<PendingRow> {
     let mut later_sibling: Vec<bool> = Vec::new();
     let mut is_last: Vec<bool> = rows
@@ -751,6 +833,8 @@ fn display_label(facts: &UnitFacts) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::iter::once;
+
     use super::*;
 
     const MS: Duration = Duration::from_millis(1);
@@ -853,6 +937,86 @@ mod tests {
             .map(|row| *row.is_last_sibling.last().unwrap())
             .collect();
         assert_eq!(lasts, [true, true, false, true, true]);
+    }
+
+    fn chain_state(waits: &[(&str, &[&str])], running: &str) -> BootState {
+        let mut state = BootState::new(Phase::Host);
+        state.set_root(waits[0].0.to_owned());
+        waits.iter().zip(1..).for_each(|((name, after), id)| {
+            let activity = if *name == running {
+                activating(Duration::ZERO)
+            } else {
+                Activity::default()
+            };
+            state.track_unit(facts(name, after), activity);
+            state.queue_job(id, name, JobKind::BringsUp, Duration::ZERO);
+        });
+        state
+    }
+
+    fn folded_outline(state: &BootState) -> Vec<String> {
+        fold_chains(paths_to_running(state.pending_rows()))
+            .into_iter()
+            .map(|row| {
+                let chain = once(row.label.as_str())
+                    .chain(row.chain.iter().map(String::as_str))
+                    .collect::<Vec<_>>()
+                    .join(" > ");
+                format!("{}{chain}", "  ".repeat(row.depth))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn single_child_waiting_chains_fold_into_one_row() {
+        let state = chain_state(
+            &[
+                ("root.target", &["a.service"]),
+                ("a.service", &["b.target"]),
+                ("b.target", &["c.service"]),
+                ("c.service", &["d.service"]),
+                ("d.service", &[]),
+            ],
+            "d.service",
+        );
+        assert_eq!(
+            folded_outline(&state),
+            ["root.target", "  a > b.target > c", "    d"]
+        );
+    }
+
+    #[test]
+    fn branches_and_short_chains_stay_unfolded() {
+        let state = chain_state(
+            &[
+                ("root.target", &["a.service"]),
+                ("a.service", &["b.service", "c.service"]),
+                ("b.service", &["d.service"]),
+                ("c.service", &[]),
+                ("d.service", &[]),
+            ],
+            "d.service",
+        );
+        let mut both = chain_state(
+            &[
+                ("root.target", &["a.service"]),
+                ("a.service", &["b.service", "c.service"]),
+                ("b.service", &[]),
+                ("c.service", &[]),
+            ],
+            "b.service",
+        );
+        both.update_activity("c.service", activating(Duration::ZERO));
+        assert_eq!(
+            folded_outline(&state),
+            ["root.target", "  a", "    b", "      d"]
+        );
+        let rows = fold_chains(paths_to_running(both.pending_rows()));
+        let lasts: Vec<bool> = rows
+            .iter()
+            .map(|row| *row.is_last_sibling.last().unwrap())
+            .collect();
+        assert_eq!(lasts, [true, true, false, true]);
     }
 
     #[test]
