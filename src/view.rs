@@ -14,7 +14,7 @@ use ratatui::{
 };
 
 use crate::{
-    model::{BootState, FinishedRun, MilestoneRow, PendingRow, RowStatus, Tally},
+    model::{BootState, FinishedRun, MilestoneRow, PendingRow, RowStatus, Tally, paths_to_running},
     palette::Palette,
 };
 
@@ -36,6 +36,7 @@ const TIMELINE_LABEL_WIDTH: u16 = 28;
 const MIN_BAR_WIDTH: u16 = 12;
 const MIN_HEIGHT_FOR_TIMELINE: u16 = 12;
 const TIMELINE_CHROME_HEIGHT: u16 = 3;
+const MIN_TIMELINE_HEIGHT: u16 = TIMELINE_CHROME_HEIGHT + 4;
 const HEADER_HEIGHT: u16 = 2;
 const FOOTER_HEIGHT: u16 = 2;
 const MAX_FAILED_ROWS: usize = 3;
@@ -80,7 +81,10 @@ struct TimelineContent<'a> {
 
 impl Widget for BootView<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let rows = self.state.pending_rows();
+        let all_rows = self.state.pending_rows();
+        let pending_count = all_rows.len();
+        let rows = paths_to_running(all_rows);
+        let folded = pending_count - rows.len();
         let mut running: Vec<&PendingRow> = rows
             .iter()
             .filter(|row| !row.is_target && row.status == RowStatus::Running)
@@ -108,7 +112,7 @@ impl Widget for BootView<'_> {
         let heights = Heights::share(
             area.height
                 .saturating_sub(HEADER_HEIGHT + stages_height + failures_height + FOOTER_HEIGHT),
-            u16::try_from(rows.len()).unwrap_or(u16::MAX),
+            u16::try_from(rows.len() + usize::from(folded > 0)).unwrap_or(u16::MAX),
             timeline_need,
         );
 
@@ -126,7 +130,7 @@ impl Widget for BootView<'_> {
 
         self.header().render(header, buf);
         Paragraph::new(stages).render(stage_area, buf);
-        self.tree(&rows, tree.height).render(tree, buf);
+        self.tree(&rows, folded, tree.height).render(tree, buf);
         Paragraph::new(failures).render(failed, buf);
         if heights.timeline > 0 {
             let bar_rows = usize::from(heights.timeline.saturating_sub(TIMELINE_CHROME_HEIGHT));
@@ -169,7 +173,9 @@ impl Heights {
                 timeline: timeline_need,
             };
         }
-        let timeline = timeline_need.min((free / 2).max(free.saturating_sub(tree_need)));
+        let timeline = timeline_need
+            .min(free.saturating_sub(tree_need).max(MIN_TIMELINE_HEIGHT))
+            .min(free);
         Self {
             tree: free - timeline,
             timeline,
@@ -342,14 +348,14 @@ impl BootView<'_> {
         }
     }
 
-    fn tree<'a>(&self, rows: &'a [PendingRow], height: u16) -> Table<'a> {
+    fn tree<'a>(&self, rows: &'a [PendingRow], folded: usize, height: u16) -> Table<'a> {
         let capacity = usize::from(height);
-        let shown = if rows.len() > capacity {
-            capacity.saturating_sub(1)
+        let shown = if rows.len() + usize::from(folded > 0) > capacity {
+            capacity.saturating_sub(1).min(rows.len())
         } else {
             rows.len()
         };
-        let hidden = rows.len() - shown;
+        let hidden = rows.len() - shown + folded;
         let overflow = (hidden > 0).then(|| {
             Row::new([Line::styled(
                 format!("… {hidden} more"),
@@ -829,8 +835,8 @@ mod tests {
         assert!(lines[3].starts_with("graphical.target"), "{screen}");
         assert!(lines[4].starts_with("└─ multi-user.target"), "{screen}");
         assert!(lines[5].starts_with("   ├─ [/] systemd-rfkill"), "{screen}");
-        assert!(lines[6].starts_with("   ├─ [/] docker"), "{screen}");
-        assert!(lines[7].starts_with("   └─ [ ] web"), "{screen}");
+        assert!(lines[6].starts_with("   └─ [/] docker"), "{screen}");
+        assert!(lines[7].starts_with("… 1 more"), "{screen}");
         assert!(
             lines[8].starts_with("× nvidia-powerd.service failed"),
             "{screen}"
@@ -964,6 +970,15 @@ mod tests {
             "{}",
             lines.join("\n")
         );
+    }
+
+    #[test]
+    fn a_long_tree_keeps_the_room_and_leaves_the_timeline_a_strip() {
+        let heights = Heights::share(30, 40, 50);
+        assert_eq!(heights.timeline, MIN_TIMELINE_HEIGHT);
+        assert_eq!(heights.tree, 30 - MIN_TIMELINE_HEIGHT);
+        let heights = Heights::share(30, 12, 50);
+        assert_eq!((heights.tree, heights.timeline), (12, 18));
     }
 
     #[test]

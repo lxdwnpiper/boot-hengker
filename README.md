@@ -6,6 +6,7 @@ units still pending and a timeline of the ones that ran.
 
 ![The initrd: pending units on top, the timeline below](docs/initrd.png)
 ![Stage 2: the initrd collapsed, a failed unit, three still running](docs/stage-2.png)
+![Shutdown: the unit still stopping at the end of the chain waiting on it](docs/shutdown.png)
 
 It needs systemd ≥ 246 as PID 1, libdbus and a virtual terminal (it draws on
 tty12). With a systemd initrd it starts about a second after the kernel and

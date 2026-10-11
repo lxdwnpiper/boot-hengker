@@ -685,6 +685,57 @@ impl MilestoneWalk {
     }
 }
 
+#[must_use]
+pub fn paths_to_running(rows: Vec<PendingRow>) -> Vec<PendingRow> {
+    let mut kept_below: Vec<bool> = Vec::new();
+    let mut kept: Vec<bool> = rows
+        .iter()
+        .rev()
+        .map(|row| {
+            let descendant_kept = kept_below.iter().skip(row.depth + 1).any(|kept| *kept);
+            kept_below.resize(row.depth + 1, false);
+            let anchors_the_tree = row.depth == 0 && row.is_target;
+            let keep = row.status == RowStatus::Running || descendant_kept || anchors_the_tree;
+            kept_below[row.depth] |= keep;
+            keep
+        })
+        .collect();
+    kept.reverse();
+    let survivors: Vec<PendingRow> = rows
+        .into_iter()
+        .zip(kept)
+        .filter_map(|(row, keep)| keep.then_some(row))
+        .collect();
+    relink_siblings(survivors)
+}
+
+fn relink_siblings(rows: Vec<PendingRow>) -> Vec<PendingRow> {
+    let mut later_sibling: Vec<bool> = Vec::new();
+    let mut is_last: Vec<bool> = rows
+        .iter()
+        .rev()
+        .map(|row| {
+            let last = !later_sibling.get(row.depth).copied().unwrap_or(false);
+            later_sibling.resize(row.depth + 1, false);
+            later_sibling[row.depth] = true;
+            last
+        })
+        .collect();
+    is_last.reverse();
+    let mut ancestry: Vec<bool> = Vec::new();
+    rows.into_iter()
+        .zip(is_last)
+        .map(|(row, last)| {
+            ancestry.truncate(row.depth);
+            ancestry.push(last);
+            PendingRow {
+                is_last_sibling: ancestry.clone(),
+                ..row
+            }
+        })
+        .collect()
+}
+
 fn display_label(facts: &UnitFacts) -> String {
     if let Some(stem) = facts.name.strip_suffix(".service") {
         return stem.to_owned();
@@ -778,6 +829,43 @@ mod tests {
                 "      nm",
             ]
         );
+    }
+
+    #[test]
+    fn only_chains_leading_to_running_units_stay_in_view() {
+        let rows = paths_to_running(sample().pending_rows());
+        let outline: Vec<String> = rows
+            .iter()
+            .map(|row| format!("{}{}", "  ".repeat(row.depth), row.label))
+            .collect();
+        assert_eq!(
+            outline,
+            [
+                "graphical.target",
+                "  multi-user.target",
+                "    docker",
+                "    nm-wait",
+                "      nm",
+            ]
+        );
+        let lasts: Vec<bool> = rows
+            .iter()
+            .map(|row| *row.is_last_sibling.last().unwrap())
+            .collect();
+        assert_eq!(lasts, [true, true, false, true, true]);
+    }
+
+    #[test]
+    fn with_nothing_running_only_the_root_target_stays_in_view() {
+        let mut state = BootState::new(Phase::Host);
+        state.set_root("demo.target".to_owned());
+        state.track_unit(facts("demo.target", &["idle.service"]), Activity::default());
+        state.track_unit(facts("idle.service", &[]), Activity::default());
+        state.queue_job(1, "demo.target", JobKind::BringsUp, Duration::ZERO);
+        state.queue_job(2, "idle.service", JobKind::BringsUp, Duration::ZERO);
+        let rows = paths_to_running(state.pending_rows());
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].label, "demo.target");
     }
 
     #[test]

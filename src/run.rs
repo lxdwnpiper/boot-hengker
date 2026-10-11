@@ -16,7 +16,8 @@ use bootvine::{
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     DefaultTerminal,
-    backend::{Backend, ClearType},
+    backend::Backend,
+    buffer::{Buffer, CellDiffOption},
 };
 use rustix::system::uname;
 use signal_hook::{consts::SIGTERM, flag};
@@ -89,6 +90,21 @@ fn asks_to_quit(event: &Event) -> bool {
         || (*code == KeyCode::Char('c') && modifiers.contains(KeyModifiers::CONTROL))
 }
 
+fn overwrite_every_cell<B: Backend>(backend: &mut B, frame: &Buffer) -> Result<(), B::Error> {
+    backend.draw(
+        frame
+            .content
+            .iter()
+            .enumerate()
+            .filter(|(_, cell)| cell.diff_option != CellDiffOption::Skip)
+            .map(|(index, cell)| {
+                let (x, y) = frame.pos_of(index);
+                (x, y, cell)
+            }),
+    )?;
+    backend.flush()
+}
+
 fn watch(
     state: &mut BootState,
     feed: &mut Feed,
@@ -103,16 +119,9 @@ fn watch(
     let mut last_full_repaint = Instant::now();
     loop {
         feed.pump(state, FRAME_INTERVAL)?;
-        if feed.session.is_none()
-            || feed.connections != painted_connections
-            || last_full_repaint.elapsed() >= FULL_REPAINT_INTERVAL
-        {
-            terminal.backend_mut().clear_region(ClearType::All)?;
-            terminal.swap_buffers();
-            painted_connections = feed.connections;
-            last_full_repaint = Instant::now();
-        }
-        terminal.draw(|canvas| {
+        let repaint_due = feed.connections != painted_connections
+            || last_full_repaint.elapsed() >= FULL_REPAINT_INTERVAL;
+        let completed = terminal.draw(|canvas| {
             canvas.render_widget(
                 BootView {
                     state,
@@ -124,6 +133,12 @@ fn watch(
                 canvas.area(),
             );
         })?;
+        if repaint_due {
+            let painted = completed.buffer.clone();
+            overwrite_every_cell(terminal.backend_mut(), &painted)?;
+            painted_connections = feed.connections;
+            last_full_repaint = Instant::now();
+        }
         if state.is_complete() {
             eprintln!(
                 "bootvine: {} reached, handing the console over",
