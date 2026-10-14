@@ -13,7 +13,6 @@ use crate::password;
 const GIO_UNIMAP: Opcode = 0x4B66;
 const VT_GETSTATE: Opcode = 0x5603;
 const VT_ACTIVATE: Opcode = 0x5606;
-const VT_WAITACTIVE: Opcode = 0x5607;
 const VIRTUAL_TERMINAL_PREFIX: &str = "/dev/tty";
 const KERNEL_PRINTK: &str = "/proc/sys/kernel/printk";
 const ALERTS_ONLY: &str = "1";
@@ -60,6 +59,9 @@ impl Console {
     pub fn keep_up(&mut self) {
         if let Some(quiet_kernel) = &mut self.quiet_kernel {
             quiet_kernel.keep_quiet();
+        }
+        if let Some(foreground) = &self.foreground {
+            foreground.insist();
         }
         self.glyphs = font_glyphs();
     }
@@ -152,7 +154,14 @@ struct VtState {
 }
 
 struct ForegroundVt {
+    own: u16,
     previous: u16,
+}
+
+fn active_vt() -> Option<u16> {
+    let state: VtState =
+        unsafe { ioctl(stdin(), Getter::<VT_GETSTATE, VtState>::new()) }.ok()?;
+    Some(state.active)
 }
 
 impl ForegroundVt {
@@ -165,14 +174,17 @@ impl ForegroundVt {
             .parse()
             .ok()
             .filter(|number| *number > 0)?;
-        let state: VtState =
-            unsafe { ioctl(stdin(), Getter::<VT_GETSTATE, VtState>::new()) }.ok()?;
-        if state.active != own {
+        let previous = active_vt()?;
+        if previous != own {
             activate(own).ok()?;
         }
-        Some(Self {
-            previous: state.active,
-        })
+        Some(Self { own, previous })
+    }
+
+    fn insist(&self) {
+        if active_vt().is_some_and(|active| active != self.own) {
+            let _ = activate(self.own);
+        }
     }
 }
 
@@ -188,7 +200,5 @@ impl Drop for ForegroundVt {
 
 fn activate(number: u16) -> Result<(), Errno> {
     let number = usize::from(number);
-    unsafe { ioctl(stdin(), IntegerSetter::<VT_ACTIVATE>::new_usize(number)) }?;
-    unsafe { ioctl(stdin(), IntegerSetter::<VT_WAITACTIVE>::new_usize(number)) }?;
-    Ok(())
+    unsafe { ioctl(stdin(), IntegerSetter::<VT_ACTIVATE>::new_usize(number)) }
 }
