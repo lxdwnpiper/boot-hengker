@@ -8,6 +8,8 @@ use rustix::{
     termios::ttyname,
 };
 
+use crate::password;
+
 const GIO_UNIMAP: Opcode = 0x4B66;
 const VT_GETSTATE: Opcode = 0x5603;
 const VT_ACTIVATE: Opcode = 0x5606;
@@ -15,56 +17,44 @@ const VT_WAITACTIVE: Opcode = 0x5607;
 const VIRTUAL_TERMINAL_PREFIX: &str = "/dev/tty";
 const KERNEL_PRINTK: &str = "/proc/sys/kernel/printk";
 const ALERTS_ONLY: &str = "1";
-const PASSWORD_REQUESTS: &str = "/run/systemd/ask-password";
-const PASSWORD_REQUEST_PREFIX: &str = "ask.";
-
 pub struct Console {
     quiet_kernel: Option<QuietKernelConsole>,
     foreground: Option<ForegroundVt>,
-    yields_to_password_prompts: bool,
+    for_system: bool,
     pub glyphs: Glyphs,
 }
 
 impl Console {
     pub fn take(for_system: bool) -> Self {
-        let prompt_showing = for_system && password_requested();
+        let prompt_elsewhere = for_system && password::requested();
+        if prompt_elsewhere {
+            eprintln!("bootvine: a password prompt is already showing, staying behind it");
+        }
         Self {
             quiet_kernel: for_system.then(QuietKernelConsole::take).flatten(),
-            foreground: if prompt_showing {
+            foreground: if prompt_elsewhere {
                 None
             } else {
                 ForegroundVt::take()
             },
-            yields_to_password_prompts: for_system,
+            for_system,
             glyphs: font_glyphs(),
         }
     }
 
-    pub fn make_way_for_password_prompts(&mut self) {
-        if !self.yields_to_password_prompts {
-            return;
-        }
-        if password_requested() {
-            self.step_aside();
-        } else {
-            self.come_forward();
-        }
+    pub fn answers_password_prompts(&self) -> bool {
+        self.for_system && self.foreground.is_some()
     }
 
-    fn step_aside(&mut self) {
-        if self.foreground.take().is_some() {
-            eprintln!("bootvine: stepping aside for a password prompt");
-        }
-    }
-
-    fn come_forward(&mut self) {
-        if self.foreground.is_some() {
-            return;
+    pub fn come_forward_once_prompts_are_gone(&mut self) -> bool {
+        if !self.for_system || self.foreground.is_some() || password::requested() {
+            return false;
         }
         self.foreground = ForegroundVt::take();
         if self.foreground.is_some() {
             eprintln!("bootvine: password prompt answered, taking the console back");
         }
+        self.foreground.is_some()
     }
 
     pub fn keep_up(&mut self) {
@@ -99,17 +89,6 @@ impl QuietKernelConsole {
             self.previous_level = level;
         }
     }
-}
-
-fn password_requested() -> bool {
-    fs::read_dir(PASSWORD_REQUESTS).is_ok_and(|entries| {
-        entries.flatten().any(|entry| {
-            entry
-                .file_name()
-                .to_string_lossy()
-                .starts_with(PASSWORD_REQUEST_PREFIX)
-        })
-    })
 }
 
 fn font_glyphs() -> Glyphs {
@@ -199,6 +178,10 @@ impl ForegroundVt {
 
 impl Drop for ForegroundVt {
     fn drop(&mut self) {
+        if password::requested() {
+            eprintln!("bootvine: leaving a password prompt to the console agent on this terminal");
+            return;
+        }
         let _ = activate(self.previous);
     }
 }

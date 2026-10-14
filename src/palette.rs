@@ -26,9 +26,3 @@ impl Default for Palette {
         }
     }
 }
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
-#[serde(default, deny_unknown_fields)]
-pub struct Config {
-    pub palette: Palette,
-}

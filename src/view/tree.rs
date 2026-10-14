@@ -9,10 +9,7 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
-use super::{
-    BRANCH, DURATION_WIDTH, ELAPSED, ENDED_TRUNK, LAST_BRANCH, NOTEWORTHY_DURATION, PASSING_TRUNK,
-    fit_width,
-};
+use super::{BRANCH, DURATION_WIDTH, ELAPSED, ENDED_TRUNK, LAST_BRANCH, PASSING_TRUNK, fit_width};
 use crate::{
     glyphs::Glyphs,
     model::{RowStatus, TreeRow, UnitKind},
@@ -29,6 +26,7 @@ pub struct UnitTree<'a> {
     pub rows: &'a [TreeRow],
     pub hidden: usize,
     pub now: Duration,
+    pub hide_runs_shorter_than: Duration,
     pub frame: u64,
     pub palette: &'a Palette,
     pub glyphs: &'a Glyphs,
@@ -105,7 +103,8 @@ impl UnitTree<'_> {
             (_, _, RowStatus::Failed) => Style::from(self.palette.failed).bold(),
             (_, UnitKind::Target, _) => self.palette.target.into(),
             (_, _, RowStatus::Running) => self.palette.text.into(),
-            (_, _, RowStatus::Waiting | RowStatus::Done) => self.palette.waiting.into(),
+            (_, _, RowStatus::Waiting) => self.palette.waiting.into(),
+            (_, _, RowStatus::Done) => self.palette.muted.into(),
         }
     }
 
@@ -203,7 +202,7 @@ impl UnitTree<'_> {
         let timer = row
             .running_since
             .map(|since| self.now.saturating_sub(since))
-            .filter(|running_for| *running_for >= NOTEWORTHY_DURATION)
+            .filter(|running_for| *running_for >= self.hide_runs_shorter_than)
             .map(|running_for| ELAPSED.unsigned_duration_to_string(&running_for))
             .unwrap_or_default();
         let style = self.label_style(row, stage);

@@ -1,5 +1,6 @@
 mod footer;
 mod header;
+mod prompt;
 mod stages;
 mod timeline;
 mod tree;
@@ -16,8 +17,13 @@ use ratatui::{
 use unicode_truncate::UnicodeTruncateStr;
 use unicode_width::UnicodeWidthStr;
 
-use self::{footer::Footer, header::Header, stages::Stages, timeline::Timeline, tree::UnitTree};
+pub use self::prompt::PasswordPrompt;
+use self::{
+    footer::Footer, header::Header, prompt::PasswordBar, stages::Stages, timeline::Timeline,
+    tree::UnitTree,
+};
 use crate::{
+    config::Timing,
     glyphs::Glyphs,
     model::{BootState, RowStatus, TreeRow, UnitKind, fit_to_height, fold_chains},
     origin::BootOrigin,
@@ -28,7 +34,6 @@ const DURATION_WIDTH: u16 = 8;
 const MIN_BAR_WIDTH: u16 = 12;
 const MIN_HEIGHT_FOR_TIMELINE: u16 = 12;
 const MIN_TIMELINE_HEIGHT: u16 = timeline::CHROME_HEIGHT + 4;
-const NOTEWORTHY_DURATION: Duration = Duration::from_secs(1);
 const HEADER_HEIGHT: u16 = 1;
 const BRANCH: &str = "├─ ";
 const LAST_BRANCH: &str = "└─ ";
@@ -44,10 +49,12 @@ const ELAPSED: SpanPrinter = SpanPrinter::new()
 pub struct BootView<'a> {
     pub state: &'a BootState,
     pub palette: &'a Palette,
+    pub timing: &'a Timing,
     pub glyphs: &'a Glyphs,
     pub now: Duration,
     pub origin: &'a BootOrigin,
     pub frame: u64,
+    pub password_prompt: Option<PasswordPrompt<'a>>,
 }
 
 impl BootView<'_> {
@@ -76,7 +83,10 @@ impl BootView<'_> {
                 .state
                 .finished_runs
                 .iter()
-                .filter(|run| run.finished_at.saturating_sub(run.started_at) >= NOTEWORTHY_DURATION)
+                .filter(|run| {
+                    run.finished_at.saturating_sub(run.started_at)
+                        >= self.timing.hide_runs_shorter_than
+                })
                 .collect(),
             running,
             palette: self.palette,
@@ -87,7 +97,9 @@ impl BootView<'_> {
 
 impl Widget for BootView<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let all_rows = self.state.tree_rows();
+        let all_rows = self
+            .state
+            .tree_rows(self.now.saturating_sub(self.timing.keep_finished_units_for));
         let pending_count = all_rows.len();
         let pruned_rows = fold_chains(fit_to_height(all_rows.clone(), 0));
         let header = Header {
@@ -107,6 +119,7 @@ impl Widget for BootView<'_> {
             rows: &pruned_rows,
             hidden: pending_count - shown_units(&pruned_rows),
             now: self.now,
+            hide_runs_shorter_than: self.timing.hide_runs_shorter_than,
             frame: self.frame,
             palette: self.palette,
             glyphs: self.glyphs,
@@ -164,7 +177,15 @@ impl Widget for BootView<'_> {
         if heights.timeline > 0 {
             timeline.render(timeline_area, buf);
         }
-        footer.render(footer_area, buf);
+        match &self.password_prompt {
+            Some(asking) => PasswordBar {
+                asking,
+                palette: self.palette,
+                glyphs: self.glyphs,
+            }
+            .render(footer_area, buf),
+            None => footer.render(footer_area, buf),
+        }
     }
 }
 
@@ -237,6 +258,7 @@ mod tests {
                     BootView {
                         state,
                         palette: &Palette::default(),
+                        timing: &Timing::default(),
                         glyphs: &Glyphs::default(),
                         now,
                         origin: &BootOrigin {
@@ -246,6 +268,7 @@ mod tests {
                             kernel: "Linux 7.2.9".to_owned(),
                         },
                         frame: 1,
+                        password_prompt: None,
                     },
                     frame.area(),
                 );
@@ -386,7 +409,7 @@ mod tests {
         state.finish_job(3, JobResult::Failed, 1000 * MS);
         state.finish_job(4, JobResult::Done, 1000 * MS);
         state.finish_job(2, JobResult::Done, 1500 * MS);
-        let lines = render(&state, 3000 * MS, 110, 24);
+        let lines = render(&state, 5000 * MS, 110, 24);
         let screen = lines.join("\n");
         assert!(lines[2].starts_with("   ├─ √ basic.target"), "{screen}");
         assert!(lines[3].starts_with("   │  └─ [×] flaky"), "{screen}");
@@ -396,6 +419,44 @@ mod tests {
         );
         assert!(lines[5].starts_with("      └─ [ ] web"), "{screen}");
         assert!(!screen.contains("quick"), "{screen}");
+    }
+
+    #[test]
+    fn finished_units_linger_in_place_before_leaving() {
+        let mut state = BootState::new(Phase::Host);
+        state.set_root("multi-user.target".to_owned());
+        [
+            facts("multi-user.target", &["early.service", "late.service"]),
+            facts("early.service", &[]),
+            facts("late.service", &[]),
+        ]
+        .into_iter()
+        .zip(1..)
+        .for_each(|(unit, id)| {
+            let name = unit.name.clone();
+            let activity = if name.ends_with(".service") {
+                running_since(Duration::ZERO)
+            } else {
+                Activity::default()
+            };
+            state.track_unit(unit, activity);
+            state.queue_job(id, &name, JobKind::BringsUp, Duration::ZERO);
+        });
+        state.finish_job(2, JobResult::Done, 3000 * MS);
+        let lingering = render(&state, 4000 * MS, 110, 24);
+        let screen = lingering.join("\n");
+        assert!(lingering[3].starts_with("      ├─ [√] early"), "{screen}");
+        assert!(lingering[4].starts_with("      └─ [/] late"), "{screen}");
+        let gone = render(&state, 5500 * MS, 110, 24);
+        let tree: Vec<&String> = gone
+            .iter()
+            .take_while(|line| !line.contains(" timeline "))
+            .collect();
+        assert!(
+            tree.iter().all(|line| !line.contains("early")),
+            "{}",
+            gone.join("\n")
+        );
     }
 
     #[test]

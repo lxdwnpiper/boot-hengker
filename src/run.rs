@@ -9,6 +9,7 @@ use std::{
 };
 
 use bootvine::{
+    config::Timing,
     model::{BootState, Phase},
     origin::BootOrigin,
     palette::Palette,
@@ -27,6 +28,7 @@ use crate::{
     console::Console,
     error::Error,
     feed::Feed,
+    password::PasswordEntry,
     sysroot::INITRD_RELEASE,
     systemd::{Scope, Session},
 };
@@ -38,7 +40,7 @@ pub struct Options {
     pub scope: Scope,
     pub shutdown: bool,
     pub target: Option<String>,
-    pub hold: Duration,
+    pub timing: Timing,
     pub palette: Palette,
 }
 
@@ -71,7 +73,7 @@ pub fn run(options: &Options) -> Result<(), Error> {
         &terminate,
         &options.palette,
         &mut console,
-        options.hold,
+        &options.timing,
     );
     ratatui::restore();
     watched
@@ -110,20 +112,28 @@ fn watch(
     terminate: &AtomicBool,
     palette: &Palette,
     console: &mut Console,
-    hold: Duration,
+    timing: &Timing,
 ) -> Result<(), Error> {
     let mut origin = BootOrigin::read();
     let mut origin_phase = state.phase;
     let mut frame: u64 = 0;
     let mut painted_connections = feed.connections;
     let mut last_full_repaint = Instant::now();
+    let mut password_entry: Option<PasswordEntry> = None;
     loop {
         feed.pump(state, FRAME_INTERVAL)?;
         if state.phase != origin_phase {
             origin = BootOrigin::read();
             origin_phase = state.phase;
         }
-        console.make_way_for_password_prompts();
+        if console.come_forward_once_prompts_are_gone() {
+            terminal.clear()?;
+        }
+        password_entry = if console.answers_password_prompts() {
+            PasswordEntry::follow(password_entry.take())
+        } else {
+            None
+        };
         let repaint_due = feed.connections != painted_connections
             || last_full_repaint.elapsed() >= FULL_REPAINT_INTERVAL;
         if repaint_due {
@@ -134,10 +144,12 @@ fn watch(
                 BootView {
                     state,
                     palette,
+                    timing,
                     glyphs: &console.glyphs,
                     now: monotonic_now(),
                     origin: &origin,
                     frame,
+                    password_prompt: password_entry.as_ref().map(PasswordEntry::prompt),
                 },
                 canvas.area(),
             );
@@ -153,14 +165,23 @@ fn watch(
                 "bootvine: {} reached, handing the console over",
                 state.root.as_deref().unwrap_or("boot")
             );
-            sleep(hold);
+            sleep(timing.keep_final_frame_for);
             return Ok(());
         }
         if terminate.load(Ordering::Relaxed) {
             return Ok(());
         }
-        if event::poll(Duration::ZERO)? && asks_to_quit(&event::read()?) {
-            return Ok(());
+        while event::poll(Duration::ZERO)? {
+            let event = event::read()?;
+            match &mut password_entry {
+                Some(entry) => {
+                    if let Err(error) = entry.type_key(&event) {
+                        eprintln!("bootvine: cannot answer the password prompt: {error}");
+                    }
+                }
+                None if asks_to_quit(&event) => return Ok(()),
+                None => {}
+            }
         }
         frame += 1;
     }

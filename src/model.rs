@@ -588,12 +588,17 @@ impl BootState {
     }
 
     #[must_use]
-    pub fn tree_rows(&self) -> Vec<TreeRow> {
+    pub fn tree_rows(&self, finished_since: Duration) -> Vec<TreeRow> {
         let pending: HashSet<&str> = self
             .units
             .iter()
             .filter(|(name, record)| {
+                let finished_recently = matches!(
+                    record.outcome,
+                    Some(Outcome::Succeeded { at }) if at >= finished_since
+                );
                 record.job.is_some()
+                    || finished_recently
                     || record.outcome == Some(Outcome::Failed)
                     || (self.is_milestone(name) && record.outcome.is_some())
             })
@@ -752,6 +757,9 @@ impl BootState {
             let record = &self.units[name];
             match (record.running_since(), record.outcome) {
                 (Some(since), _) => SiblingRank::RunningSince(since),
+                (None, Some(Outcome::Succeeded { at })) => {
+                    SiblingRank::RunningSince(record.inactive_exit.unwrap_or(at))
+                }
                 (None, Some(Outcome::Failed)) => SiblingRank::Failed,
                 (None, _) => SiblingRank::Waiting,
             }
@@ -1035,7 +1043,7 @@ mod tests {
     #[test]
     fn pending_units_nest_under_what_waits_on_them() {
         let outline: Vec<String> = sample()
-            .tree_rows()
+            .tree_rows(Duration::MAX)
             .into_iter()
             .map(|row| format!("{}{}", "  ".repeat(row.depth), row.label))
             .collect();
@@ -1055,7 +1063,7 @@ mod tests {
 
     #[test]
     fn only_chains_leading_to_running_units_stay_in_view() {
-        let rows = fit_to_height(sample().tree_rows(), 0);
+        let rows = fit_to_height(sample().tree_rows(Duration::MAX), 0);
         let outline: Vec<String> = rows
             .iter()
             .map(|row| format!("{}{}", "  ".repeat(row.depth), row.label))
@@ -1091,7 +1099,7 @@ mod tests {
             "b.service",
         );
         let outline = |budget| -> Vec<String> {
-            fit_to_height(state.tree_rows(), budget)
+            fit_to_height(state.tree_rows(Duration::MAX), budget)
                 .into_iter()
                 .map(|row| format!("{}{}", "  ".repeat(row.depth), row.label))
                 .collect()
@@ -1124,7 +1132,7 @@ mod tests {
             state.queue_job(id, &name, JobKind::BringsUp, Duration::ZERO);
         });
         let outline: Vec<String> = state
-            .tree_rows()
+            .tree_rows(Duration::MAX)
             .into_iter()
             .map(|row| format!("{}{}", "  ".repeat(row.depth), row.label))
             .collect();
@@ -1181,7 +1189,7 @@ mod tests {
     }
 
     fn folded_outline(state: &BootState) -> Vec<String> {
-        fold_chains(fit_to_height(state.tree_rows(), 0))
+        fold_chains(fit_to_height(state.tree_rows(Duration::MAX), 0))
             .into_iter()
             .map(|row| {
                 let chain = once(row.label.as_str())
@@ -1237,7 +1245,7 @@ mod tests {
             folded_outline(&state),
             ["root.target", "  a", "    b", "      d"]
         );
-        let rows = fold_chains(fit_to_height(both.tree_rows(), 0));
+        let rows = fold_chains(fit_to_height(both.tree_rows(Duration::MAX), 0));
         let lasts: Vec<bool> = rows
             .iter()
             .map(|row| *row.is_last_sibling.last().unwrap())
@@ -1253,7 +1261,7 @@ mod tests {
         state.track_unit(facts("idle.service", &[]), Activity::default());
         state.queue_job(1, "demo.target", JobKind::BringsUp, Duration::ZERO);
         state.queue_job(2, "idle.service", JobKind::BringsUp, Duration::ZERO);
-        let rows = fit_to_height(state.tree_rows(), 0);
+        let rows = fit_to_height(state.tree_rows(Duration::MAX), 0);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].label, "demo.target");
     }
@@ -1272,7 +1280,7 @@ mod tests {
                 active_exit: None,
             },
         );
-        let rows = state.tree_rows();
+        let rows = state.tree_rows(Duration::MAX);
         assert!(
             rows.iter()
                 .all(|row| row.label != "containerd" && row.label != "basic.target")
@@ -1338,7 +1346,7 @@ mod tests {
         );
         assert_eq!(state.milestones()[0].reached_at, Some(2000 * MS));
         assert_eq!(state.tally().done, 2);
-        assert!(state.tree_rows().is_empty());
+        assert!(state.tree_rows(Duration::MAX).is_empty());
     }
 
     #[test]
@@ -1354,7 +1362,10 @@ mod tests {
             Activity::default(),
         );
         state.queue_job(1, "dev-nvme1n1.device", JobKind::BringsUp, Duration::ZERO);
-        assert_eq!(state.tree_rows()[0].label, "Lexar SSD NM790 2TB");
+        assert_eq!(
+            state.tree_rows(Duration::MAX)[0].label,
+            "Lexar SSD NM790 2TB"
+        );
     }
 
     #[test]
@@ -1378,7 +1389,7 @@ mod tests {
             state.queue_job(id, &name, JobKind::BringsUp, Duration::ZERO);
         });
         let outline: Vec<String> = state
-            .tree_rows()
+            .tree_rows(Duration::MAX)
             .into_iter()
             .map(|row| format!("{}{}", "  ".repeat(row.depth), row.label))
             .collect();
@@ -1394,7 +1405,7 @@ mod tests {
 
     fn outline(state: &BootState) -> Vec<String> {
         state
-            .tree_rows()
+            .tree_rows(Duration::MAX)
             .into_iter()
             .map(|row| format!("{}{}", "  ".repeat(row.depth), row.label))
             .collect()
@@ -1478,7 +1489,10 @@ mod tests {
                 ..Activity::default()
             },
         );
-        assert_eq!(state.tree_rows()[0].running_since, Some(1200 * MS));
+        assert_eq!(
+            state.tree_rows(Duration::MAX)[0].running_since,
+            Some(1200 * MS)
+        );
         state.finish_job(1, JobResult::Done, 1700 * MS);
         assert_eq!(
             state.finished_runs,
@@ -1517,6 +1531,6 @@ mod tests {
         state.track_unit(facts("b.service", &["a.service"]), Activity::default());
         state.queue_job(1, "a.service", JobKind::BringsUp, Duration::ZERO);
         state.queue_job(2, "b.service", JobKind::BringsUp, Duration::ZERO);
-        assert_eq!(state.tree_rows().len(), 2);
+        assert_eq!(state.tree_rows(Duration::MAX).len(), 2);
     }
 }

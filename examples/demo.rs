@@ -5,6 +5,7 @@ use std::{
 };
 
 use bootvine::{
+    config::Timing,
     glyphs::Glyphs,
     model::{ActiveState, Activity, BootState, JobKind, JobResult, Phase, UnitFacts},
     origin::BootOrigin,
@@ -362,10 +363,12 @@ fn play(terminal: &mut DefaultTerminal) -> io::Result<()> {
                 BootView {
                     state: &state,
                     palette: &Palette::default(),
+                    timing: &Timing::default(),
                     glyphs: &Glyphs::default(),
                     now: now(),
                     origin: &origin,
                     frame,
+                    password_prompt: None,
                 },
                 canvas.area(),
             );

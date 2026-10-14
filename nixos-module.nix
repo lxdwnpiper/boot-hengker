@@ -7,8 +7,23 @@
 }:
 let
   cfg = config.services.bootvine;
-  chosenColors = lib.filterAttrs (_: color: color != null) cfg.palette;
-  configFile = (pkgs.formats.toml { }).generate "bootvine.toml" { palette = chosenColors; };
+  chosen = lib.filterAttrs (_: value: value != null);
+  settings = lib.filterAttrs (_: table: table != { }) {
+    palette = chosen cfg.palette;
+    timing = chosen cfg.timing;
+  };
+  configFile = (pkgs.formats.toml { }).generate "bootvine.toml" settings;
+  durationOption =
+    purpose: default:
+    lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "500ms";
+      description = ''
+        ${purpose}; unset keeps `${default}`. A duration such as `2s`,
+        `500ms` or `1m 30s`.
+      '';
+    };
   colorOption =
     role: default:
     lib.mkOption {
@@ -48,12 +63,18 @@ in
       failed = colorOption "failed units" "light-red";
       target = colorOption "targets in the tree" "cyan";
     };
+
+    timing = {
+      keep_finished_units_for = durationOption "How long a finished unit stays in the tree, faded, before it leaves" "2s";
+      hide_runs_shorter_than = durationOption "Runs shorter than this get no timer in the tree and no bar on the timeline" "1s";
+      keep_final_frame_for = durationOption "How long the last frame stays on screen before the console is handed back" "1s";
+    };
   };
 
   config = lib.mkIf cfg.enable {
     environment = {
       systemPackages = [ cfg.package ];
-      etc."bootvine.toml" = lib.mkIf (chosenColors != { }) { source = configFile; };
+      etc."bootvine.toml" = lib.mkIf (settings != { }) { source = configFile; };
     };
 
     systemd = {
@@ -66,7 +87,7 @@ in
       packages = [ cfg.package ];
       storePaths = [ (lib.getExe cfg.package) ];
       services.bootvine.wantedBy = [ "sysinit.target" ];
-      contents."/etc/bootvine.toml" = lib.mkIf (chosenColors != { }) { source = configFile; };
+      contents."/etc/bootvine.toml" = lib.mkIf (settings != { }) { source = configFile; };
     };
   };
 }

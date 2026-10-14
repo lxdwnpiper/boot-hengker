@@ -43,8 +43,9 @@ initrd, add `bootvine` to `add_dracutmodules` (dracut) or `sd-bootvine` after
 
 ## Configure
 
-`/etc/bootvine.toml`, or `services.bootvine.palette` on NixOS. Every key is
-optional; these are the defaults:
+`/etc/bootvine.toml`, or `services.bootvine.palette` and
+`services.bootvine.timing` on NixOS. Every key is optional; these are the
+defaults:
 
 ```toml
 [palette]
@@ -55,9 +56,20 @@ running = "yellow"
 done = "green"
 failed = "light-red"
 target = "cyan"
+
+[timing]
+keep_finished_units_for = "2s"
+hide_runs_shorter_than = "1s"
+keep_final_frame_for = "1s"
 ```
 
-Values are the 16 console colour names. To change how those look, set the
-console palette: `console.colors` on NixOS, or the `vt.default_red`, `_grn` and
-`_blu` kernel parameters elsewhere. The initrd hooks copy the file into the
-initramfs, so rebuild it after editing.
+Palette values are the 16 console colour names. To change how those look, set
+the console palette: `console.colors` on NixOS, or the `vt.default_red`, `_grn`
+and `_blu` kernel parameters elsewhere.
+
+`keep_finished_units_for` is how long a finished unit stays in the tree, faded,
+before it leaves. Runs shorter than `hide_runs_shorter_than` get no timer and no
+timeline bar. `keep_final_frame_for` is how long the last frame stays before the
+console is handed back; `--hold` overrides it.
+
+The initrd hooks copy the file into the initramfs, so rebuild it after editing.

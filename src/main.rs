@@ -2,15 +2,16 @@ mod clock;
 mod console;
 mod error;
 mod feed;
+mod password;
 mod run;
 mod sysroot;
 mod systemd;
 
 use std::{fs, io::ErrorKind, path::PathBuf, process::ExitCode, time::Duration};
 
-use bootvine::palette::Config;
+use bootvine::config::{Config, Timing};
 use clap::Parser;
-use jiff::SignedDuration;
+use jiff::fmt::friendly::SpanParser;
 
 use crate::{
     run::{Options, run},
@@ -34,22 +35,17 @@ struct Cli {
     target: Option<String>,
     #[arg(
         long,
-        default_value = "1s",
-        value_parser = parse_duration,
-        help = "How long the final frame stays on screen, e.g. 1s or 500ms"
+        value_parser = |raw: &str| SpanParser::new().parse_unsigned_duration(raw),
+        help = "How long the final frame stays on screen, e.g. 1s or 500ms; overrides \
+                timing.keep_final_frame_for"
     )]
-    hold: Duration,
+    hold: Option<Duration>,
     #[arg(
         long,
         default_value = "/etc/bootvine.toml",
-        help = "TOML file with a [palette] table"
+        help = "TOML file with [palette] and [timing] tables"
     )]
     config: PathBuf,
-}
-
-fn parse_duration(raw: &str) -> Result<Duration, String> {
-    let signed: SignedDuration = raw.parse().map_err(|error| format!("{error}"))?;
-    Duration::try_from(signed).map_err(|error| format!("{error}"))
 }
 
 fn main() -> ExitCode {
@@ -69,7 +65,10 @@ fn main() -> ExitCode {
         scope: if cli.user { Scope::User } else { Scope::System },
         shutdown: cli.shutdown,
         target: cli.target,
-        hold: cli.hold,
+        timing: Timing {
+            keep_final_frame_for: cli.hold.unwrap_or(config.timing.keep_final_frame_for),
+            ..config.timing
+        },
         palette: config.palette,
     };
     match run(&options) {

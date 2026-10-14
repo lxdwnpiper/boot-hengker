@@ -1,3 +1,4 @@
+pub mod config;
 pub mod glyphs;
 pub mod model;
 pub mod origin;

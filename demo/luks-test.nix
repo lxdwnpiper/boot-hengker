@@ -29,6 +29,8 @@
     };
 
   testScript = ''
+    import time
+
     passphrase = "quietly unlocked"
 
     machine.wait_for_unit("multi-user.target")
@@ -39,6 +41,9 @@
 
     machine.start()
     machine.wait_for_text("passphrase")
+    machine.send_chars("not the passphrase\n")
+    time.sleep(5)
+    machine.wait_for_text("passphrase")
     machine.screenshot("passphrase")
     machine.send_chars(f"{passphrase}\n")
     machine.wait_for_unit("multi-user.target")
@@ -47,6 +52,6 @@
     journal = machine.succeed("journalctl -b -u bootvine -o cat")
     print(journal)
     assert "in initrd" in journal, "never ran in the initrd"
-    assert "taking the console back" in journal, "never took the console back after the prompt"
+    assert journal.count("answered a password prompt") == 2, "did not answer both attempts itself"
   '';
 }
