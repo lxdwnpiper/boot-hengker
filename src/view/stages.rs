@@ -35,13 +35,13 @@ impl Stages<'_> {
     fn conclusion(&self) -> Option<Conclusion<'_>> {
         if let Some(exited_at) = self.state.manager_exited_at {
             return Some(Conclusion {
-                finished: "shutdown",
+                finished: "Shutdown",
                 took: exited_at.saturating_sub(self.state.origin),
                 handed_to: SHUTDOWN_SUCCESSOR,
             });
         }
         self.state.is_complete().then(|| Conclusion {
-            finished: "boot",
+            finished: "Boot",
             took: self.now.saturating_sub(self.state.origin),
             handed_to: self
                 .state

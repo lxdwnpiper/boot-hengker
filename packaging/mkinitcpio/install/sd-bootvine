@@ -2,7 +2,8 @@
 
 build() {
     add_binary bootvine
-    add_systemd_unit bootvine.service    if [[ -f /etc/bootvine.toml ]]; then
+    add_systemd_unit bootvine.service
+    if [[ -f /etc/bootvine.toml ]]; then
         add_file /etc/bootvine.toml
     fi
     add_symlink /usr/lib/systemd/system/sysinit.target.wants/bootvine.service \

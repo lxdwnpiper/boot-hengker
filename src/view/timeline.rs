@@ -24,7 +24,7 @@ pub const LABEL_WIDTH: u16 = 28;
 pub const CHROME_HEIGHT: u16 = 2;
 const MARK_WIDTH: u16 = 2;
 const SLOWEST_RUNS_SHOWN: usize = 5;
-const KERNEL_ORIGIN_LABEL: &str = "kernel";
+const KERNEL_ORIGIN_LABEL: &str = "Kernel";
 const AXIS_LABEL_SPACING: u16 = 8;
 const AXIS_STEPS: [Duration; 12] = [
     Duration::from_secs(1),
@@ -164,7 +164,7 @@ impl Widget for Timeline<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let block = rule(
             self.palette,
-            Line::from(" timeline ".fg(self.palette.waiting)),
+            Line::from(" Timeline ".fg(self.palette.waiting)),
         );
         let inner = block.inner(area);
         block.render(area, buf);

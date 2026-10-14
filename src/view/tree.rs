@@ -17,8 +17,9 @@ use crate::{
 };
 
 const SPINNER: [char; 4] = ['|', '/', '-', '\\'];
-const DESCRIPTION_GAP: u16 = 1;
 const MIN_DESCRIPTION_WIDTH: u16 = 12;
+const MIN_TAG_WIDTH: u16 = 6;
+const MIN_LABEL_WIDTH: u16 = 24;
 const HEADER_ROWS: u16 = 1;
 
 pub struct UnitTree<'a> {
@@ -72,9 +73,9 @@ impl UnitTree<'_> {
         let name = |text: &'static str| Line::from(text).fg(self.palette.muted);
         Row::new(columns.shown([
             self.phase.clone(),
-            name("kind"),
-            name("description"),
-            name("running").right_aligned(),
+            name("Kind"),
+            name("Description"),
+            name("Running").right_aligned(),
         ]))
     }
 
@@ -162,19 +163,12 @@ impl UnitTree<'_> {
         let tag = annotated
             .iter()
             .map(|(row, _)| width_of(row.kind.tag()))
-            .max()
-            .unwrap_or_default();
-        let content = unannotated.saturating_sub(1 + u16::from(tag > 0));
-        let label = annotated
-            .iter()
-            .map(|(row, stage)| {
-                width_of(&row.label)
-                    .saturating_add(u16::try_from(self.lead_width(row, *stage)).unwrap_or(u16::MAX))
-            })
-            .max()
-            .map(|widest| widest.saturating_add(DESCRIPTION_GAP))
-            .filter(|widest| widest.saturating_add(tag + MIN_DESCRIPTION_WIDTH) <= content);
-        label.map_or(
+            .fold(MIN_TAG_WIDTH, u16::max);
+        let content = unannotated.saturating_sub(2);
+        let label = (content * 3 / 5).max(MIN_LABEL_WIDTH);
+        let fits_annotations =
+            !annotated.is_empty() && label + tag + MIN_DESCRIPTION_WIDTH <= content;
+        fits_annotations.then_some(label).map_or(
             Columns {
                 label: unannotated,
                 tag: 0,

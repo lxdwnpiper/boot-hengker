@@ -101,7 +101,7 @@ pub struct PasswordBar<'a> {
 impl Widget for PasswordBar<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let status = if self.asking.sent {
-            format!(" checking{}", self.glyphs.ellipsis).fg(self.palette.waiting)
+            format!(" Checking{}", self.glyphs.ellipsis).fg(self.palette.waiting)
         } else {
             format!(" {}_", self.asking.input).fg(self.palette.text)
         };
@@ -111,7 +111,7 @@ impl Widget for PasswordBar<'_> {
         ]))
         .block(rule(
             self.palette,
-            Line::from(" password ".fg(self.palette.running)),
+            Line::from(" Password ".fg(self.palette.running)),
         ))
         .render(area, buf);
     }

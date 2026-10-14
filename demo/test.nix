@@ -24,10 +24,10 @@
   testScript = ''
     machine.start()
 
-    machine.wait_for_text("initrd")
+    machine.wait_for_text("Initrd")
     machine.screenshot("initrd")
 
-    machine.wait_for_text("stage 2")
+    machine.wait_for_text("Stage 2")
     machine.screenshot("stage-2")
     quieted = machine.succeed("cut -f1 /proc/sys/kernel/printk").strip()
     assert quieted == "1", f"stage 2 sysctl reopened the kernel console: {quieted}"

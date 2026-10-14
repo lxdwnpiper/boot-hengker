@@ -17,10 +17,10 @@ impl Phase {
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {
-            Self::Initrd => "initrd",
-            Self::Host => "stage 2",
-            Self::User => "user",
-            Self::Shutdown => "shutdown",
+            Self::Initrd => "Initrd",
+            Self::Host => "Stage 2",
+            Self::User => "User",
+            Self::Shutdown => "Shutdown",
         }
     }
 }
@@ -197,15 +197,15 @@ impl UnitKind {
     pub fn tag(self) -> &'static str {
         match self {
             Self::Service | Self::Target | Self::Other => "",
-            Self::Socket => "socket",
-            Self::Mount => "mount",
-            Self::Automount => "automount",
-            Self::Device => "device",
-            Self::Swap => "swap",
-            Self::Path => "path",
-            Self::Timer => "timer",
-            Self::Slice => "slice",
-            Self::Scope => "scope",
+            Self::Socket => "Socket",
+            Self::Mount => "Mount",
+            Self::Automount => "Automount",
+            Self::Device => "Device",
+            Self::Swap => "Swap",
+            Self::Path => "Path",
+            Self::Timer => "Timer",
+            Self::Slice => "Slice",
+            Self::Scope => "Scope",
         }
     }
 
@@ -578,7 +578,7 @@ impl BootState {
         let remaining = succeeded.len() - walk.consumed + self.finished_before_reconnect;
         if remaining > 0 {
             walk.rows.push(MilestoneRow {
-                label: "finished".to_owned(),
+                label: "Finished".to_owned(),
                 finished_units: remaining,
                 started_at: walk.previous,
                 reached_at: None,
@@ -1146,7 +1146,7 @@ mod tests {
     fn kinds_with_a_tag_drop_their_suffix() {
         let socket = facts("docker.socket", &[]);
         assert_eq!(UnitKind::of(&socket.name), UnitKind::Socket);
-        assert_eq!(UnitKind::Socket.tag(), "socket");
+        assert_eq!(UnitKind::Socket.tag(), "Socket");
         assert_eq!(display_label(&socket), "docker");
         assert_eq!(display_label(&facts("sshd.service", &[])), "sshd");
         assert_eq!(display_label(&facts("basic.target", &[])), "basic.target");
@@ -1337,7 +1337,7 @@ mod tests {
         assert_eq!(
             state.finished_stages,
             [FinishedStage {
-                label: "initrd",
+                label: "Initrd",
                 finished_units: 2,
                 failed_units: 0,
                 started_at: Duration::ZERO,

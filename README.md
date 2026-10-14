@@ -5,7 +5,7 @@ nix-output-monitor. It replaces the scrolling kernel and systemd lines with the
 units still pending and, in the room the tree leaves, a timeline of the slowest
 ones that ran.
 
-![A boot through the initrd into stage 2, with one failed unit](docs/boot.gif)
+<img src="docs/boot.gif" width="691" alt="A boot through the initrd into stage 2, with one failed unit">
 
 It needs systemd ≥ 246 as PID 1, libdbus and a virtual terminal (it draws on
 tty12). With a systemd initrd it starts about a second after the kernel and
@@ -19,7 +19,7 @@ It also follows shutdowns and reboots: the units being stopped, nested under
 the units that have to stop first, until systemd hands over to
 `systemd-shutdown`.
 
-![A poweroff: units stopping under the targets waiting on them](docs/shutdown.gif)
+<img src="docs/shutdown.gif" width="691" alt="A poweroff: units stopping under the targets waiting on them">
 
 ## Try
 
@@ -33,15 +33,102 @@ VM in a window.
 
 ## Install
 
-On NixOS, import `nixosModules.default` from the flake and set
-`services.bootvine.enable = true`. With `boot.initrd.systemd.enable` the unit
-goes into the initrd as well.
+### NixOS
 
-Elsewhere, install the binary to `/usr/bin` and the package's `lib/` under
-`/usr/lib`, then `systemctl enable bootvine.service bootvine-shutdown.service`.
-To start it in the
-initrd, add `bootvine` to `add_dracutmodules` (dracut) or `sd-bootvine` after
-`systemd` in `HOOKS` (mkinitcpio), and rebuild the initramfs.
+1. Add the flake to your system flake's inputs and pass its module in:
+
+   ```nix
+   {
+     inputs.bootvine = {
+       url = "git+https://codeberg.org/wvhulle/bootvine";
+       inputs.nixpkgs.follows = "nixpkgs";
+     };
+
+     outputs = { nixpkgs, bootvine, ... }: {
+       nixosConfigurations.my-host = nixpkgs.lib.nixosSystem {
+         modules = [
+           bootvine.nixosModules.default
+           ./configuration.nix
+         ];
+       };
+     };
+   }
+   ```
+
+2. Enable it in `configuration.nix`:
+
+   ```nix
+   {
+     services.bootvine.enable = true;
+   }
+   ```
+
+3. Optionally, follow the boot from the initrd and keep early kernel messages
+   to errors:
+
+   ```nix
+   {
+     boot.initrd.systemd.enable = true;
+     boot.consoleLogLevel = 3;
+   }
+   ```
+
+4. Rebuild and reboot:
+
+   ```sh
+   sudo nixos-rebuild switch --flake .#my-host
+   ```
+
+### Ubuntu
+
+1. Install the build dependencies and Rust. The repository pins a nightly
+   toolchain in `rust-toolchain.toml`, which rustup fetches on the first
+   build:
+
+   ```sh
+   sudo apt install build-essential pkg-config libdbus-1-dev git curl
+   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+   ```
+
+2. Build:
+
+   ```sh
+   git clone https://codeberg.org/wvhulle/bootvine.git
+   cd bootvine
+   cargo build --release
+   ```
+
+3. Install the binary and the systemd units, and enable them:
+
+   ```sh
+   sudo install -Dm755 target/release/bootvine /usr/bin/bootvine
+   sudo install -Dm644 -t /usr/lib/systemd/system \
+     packaging/systemd/bootvine.service packaging/systemd/bootvine-shutdown.service
+   sudo systemctl enable bootvine.service bootvine-shutdown.service
+   ```
+
+   This is enough for bootvine to show stage 2 and shutdown.
+
+4. Optionally, follow the boot from the initrd. This needs a dracut initramfs
+   with systemd in it; initramfs-tools has no systemd, so on releases that use
+   it bootvine starts in stage 2 only.
+
+   ```sh
+   sudo install -Dm755 packaging/dracut/90bootvine/module-setup.sh \
+     /usr/lib/dracut/modules.d/90bootvine/module-setup.sh
+   echo 'add_dracutmodules+=" bootvine "' | sudo tee /etc/dracut.conf.d/bootvine.conf
+   sudo dracut --force
+   ```
+
+5. Reboot.
+
+### Other distributions
+
+Install the binary and units as in the Ubuntu steps. For the initrd, use the
+dracut module as above, or on mkinitcpio install
+`packaging/mkinitcpio/install/sd-bootvine` to `/usr/lib/initcpio/install/`, add
+`sd-bootvine` after `systemd` in `HOOKS` in `/etc/mkinitcpio.conf`, and run
+`sudo mkinitcpio -P`.
 
 ## Configure
 

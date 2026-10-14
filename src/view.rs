@@ -349,8 +349,8 @@ mod tests {
             lines[0], "ryzen · NixOS 26.11 · generation 2771 · Linux 7.2.9",
             "{screen}"
         );
-        assert!(lines[1].starts_with("└─ stage 2  12.4s"), "{screen}");
-        assert!(lines[1].ends_with("running"), "{screen}");
+        assert!(lines[1].starts_with("└─ Stage 2  12.4s"), "{screen}");
+        assert!(lines[1].ends_with("Running"), "{screen}");
         assert!(
             lines[2].starts_with("   ├─ ◆ multi-user.target"),
             "{screen}"
@@ -365,10 +365,10 @@ mod tests {
         assert!(lines[7].starts_with("   └─ [×] nvidia-powerd"), "{screen}");
         let timeline = lines
             .iter()
-            .position(|line| line.contains(" timeline "))
+            .position(|line| line.contains(" Timeline "))
             .expect("timeline panel");
         assert!(
-            lines[timeline + 1].starts_with(&format!("{:29}kernel", "")),
+            lines[timeline + 1].starts_with(&format!("{:29}Kernel", "")),
             "{screen}"
         );
         assert!(
@@ -459,7 +459,7 @@ mod tests {
         let gone = render(&state, 5500 * MS, 110, 24);
         let tree: Vec<&String> = gone
             .iter()
-            .take_while(|line| !line.contains(" timeline "))
+            .take_while(|line| !line.contains(" Timeline "))
             .collect();
         assert!(
             tree.iter().all(|line| !line.contains("early")),
@@ -598,7 +598,7 @@ mod tests {
                 .find_map(|line| line.find(text).map(|at| line[..at].width()))
                 .unwrap_or_else(|| panic!("{text} missing\n{screen}"))
         };
-        assert_eq!(column_of("Multi-User System"), column_of("description"));
+        assert_eq!(column_of("Multi-User System"), column_of("Description"));
         assert_eq!(
             column_of("Multi-User System"),
             column_of("Docker Application")
@@ -628,11 +628,11 @@ mod tests {
             .find(|line| line.contains("Docker Socket"))
             .unwrap_or_else(|| panic!("{screen}"));
         assert!(socket_row.contains("[/] docker "), "{screen}");
-        assert!(socket_row.contains(" socket "), "{screen}");
+        assert!(socket_row.contains(" Socket "), "{screen}");
         assert!(
             render(&described_boot(), 3000 * MS, 110, 24)
                 .iter()
-                .all(|line| !line.contains(" socket ")),
+                .all(|line| !line.contains(" Socket ")),
             "{screen}"
         );
     }
@@ -693,17 +693,17 @@ mod tests {
         let screen = lines.join("\n");
         assert!(lines[0].ends_with("17.3s"), "{screen}");
         assert!(
-            lines[1].starts_with("├─ initrd   ■ done in 7.2s · 1 unit"),
+            lines[1].starts_with("├─ Initrd   ■ done in 7.2s · 1 unit"),
             "{screen}"
         );
-        assert!(lines[2].starts_with("└─ stage 2  10.1s"), "{screen}");
+        assert!(lines[2].starts_with("└─ Stage 2  10.1s"), "{screen}");
         assert!(lines[3].starts_with("   └─ ◆ graphical.target"), "{screen}");
         let timeline = lines
             .iter()
-            .position(|line| line.contains(" timeline "))
+            .position(|line| line.contains(" Timeline "))
             .expect("timeline panel");
         let initrd_bar = &lines[timeline + 2];
-        assert!(initrd_bar.starts_with("√ initrd (1 unit)"), "{screen}");
+        assert!(initrd_bar.starts_with("√ Initrd (1 unit)"), "{screen}");
         assert!(initrd_bar.ends_with("■│"), "{screen}");
     }
 
@@ -717,7 +717,7 @@ mod tests {
         let lines = render(&state, 9500 * MS, 110, 24);
         assert!(
             lines[1].starts_with(
-                "└─ ■ boot finished in 9.5s · handing over to display-manager.service"
+                "└─ ■ Boot finished in 9.5s · handing over to display-manager.service"
             ),
             "{}",
             lines.join("\n")
@@ -733,7 +733,7 @@ mod tests {
         state.queue_job(1, "poweroff.target", JobKind::BringsUp, 20_000 * MS);
         let lines = render(&state, 21_500 * MS, 110, 24);
         assert!(
-            lines[1].starts_with("└─ shutdown 1.5s") && lines[1].ends_with("running"),
+            lines[1].starts_with("└─ Shutdown 1.5s") && lines[1].ends_with("Running"),
             "{}",
             lines.join("\n")
         );
@@ -747,7 +747,7 @@ mod tests {
         let lines = render(&state, 30_000 * MS, 110, 24);
         assert!(
             lines[1]
-                .starts_with("└─ ■ shutdown finished in 4.2s · handing over to systemd-shutdown"),
+                .starts_with("└─ ■ Shutdown finished in 4.2s · handing over to systemd-shutdown"),
             "{}",
             lines.join("\n")
         );
@@ -788,7 +788,7 @@ mod tests {
         let screen = lines.join("\n");
         let timeline = lines
             .iter()
-            .position(|line| line.contains(" timeline "))
+            .position(|line| line.contains(" Timeline "))
             .expect("timeline panel");
         let (tree, panel) = lines.split_at(timeline);
         assert!(tree.iter().all(|line| !line.contains('…')), "{screen}");
