@@ -159,17 +159,79 @@ impl UnitRecord {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UnitKind {
+    Service,
+    Target,
+    Socket,
+    Mount,
+    Automount,
+    Device,
+    Swap,
+    Path,
+    Timer,
+    Slice,
+    Scope,
+    Other,
+}
+
+impl UnitKind {
+    #[must_use]
+    pub fn of(name: &str) -> Self {
+        match name.rsplit_once('.').map(|(_, suffix)| suffix) {
+            Some("service") => Self::Service,
+            Some("target") => Self::Target,
+            Some("socket") => Self::Socket,
+            Some("mount") => Self::Mount,
+            Some("automount") => Self::Automount,
+            Some("device") => Self::Device,
+            Some("swap") => Self::Swap,
+            Some("path") => Self::Path,
+            Some("timer") => Self::Timer,
+            Some("slice") => Self::Slice,
+            Some("scope") => Self::Scope,
+            _ => Self::Other,
+        }
+    }
+
+    #[must_use]
+    pub fn tag(self) -> &'static str {
+        match self {
+            Self::Service | Self::Target | Self::Other => "",
+            Self::Socket => "socket",
+            Self::Mount => "mount",
+            Self::Automount => "automount",
+            Self::Device => "device",
+            Self::Swap => "swap",
+            Self::Path => "path",
+            Self::Timer => "timer",
+            Self::Slice => "slice",
+            Self::Scope => "scope",
+        }
+    }
+
+    fn labelled_by_description(self) -> bool {
+        matches!(
+            self,
+            Self::Device | Self::Mount | Self::Swap | Self::Automount
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RowStatus {
     Waiting,
     Running,
+    Failed,
+    Done,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PendingRow {
+pub struct TreeRow {
     pub depth: usize,
     pub is_last_sibling: Vec<bool>,
     pub label: String,
-    pub is_target: bool,
+    pub description: String,
+    pub kind: UnitKind,
     pub status: RowStatus,
     pub queued_at: Duration,
     pub running_since: Option<Duration>,
@@ -204,6 +266,7 @@ pub struct FinishedRun {
 pub struct FinishedStage {
     pub label: &'static str,
     pub finished_units: usize,
+    pub failed_units: usize,
     pub started_at: Duration,
     pub reached_at: Duration,
 }
@@ -351,7 +414,7 @@ impl BootState {
             record.job = None;
         }
         if let Some(started_at) = started_at
-            && !record.facts.name.ends_with(".target")
+            && UnitKind::of(&record.facts.name) != UnitKind::Target
         {
             self.finished_runs.push(FinishedRun {
                 label: display_label(&record.facts),
@@ -369,8 +432,9 @@ impl BootState {
             JobResult::Failed | JobResult::Timeout | JobResult::Dependency => Outcome::Failed,
         };
         record.outcome = Some(outcome);
-        if outcome == Outcome::Failed && !self.failed.contains(&unit) {
-            self.failed.push(unit);
+        let label = display_label(&record.facts);
+        if outcome == Outcome::Failed && !self.failed.contains(&label) {
+            self.failed.push(label);
         }
     }
 
@@ -383,6 +447,11 @@ impl BootState {
         self.finished_stages.push(FinishedStage {
             label: Phase::Initrd.label(),
             finished_units: finished_here + self.finished_before_reconnect,
+            failed_units: self
+                .units
+                .values()
+                .filter(|record| record.outcome == Some(Outcome::Failed))
+                .count(),
             started_at: self.origin,
             reached_at: at,
         });
@@ -519,14 +588,25 @@ impl BootState {
     }
 
     #[must_use]
-    pub fn pending_rows(&self) -> Vec<PendingRow> {
+    pub fn tree_rows(&self) -> Vec<TreeRow> {
         let pending: HashSet<&str> = self
             .units
             .iter()
-            .filter(|(_, record)| record.job.is_some())
+            .filter(|(name, record)| {
+                record.job.is_some()
+                    || record.outcome == Some(Outcome::Failed)
+                    || (self.is_milestone(name) && record.outcome.is_some())
+            })
             .map(|(name, _)| name.as_str())
             .collect();
         let root = self.root.as_deref().filter(|root| pending.contains(root));
+        let stages: Vec<&str> = self
+            .milestone_targets
+            .iter()
+            .map(String::as_str)
+            .filter(|target| pending.contains(target))
+            .chain(root.filter(|root| !self.is_milestone(root)))
+            .collect();
         let blocked_by_pending: HashSet<&str> = pending
             .iter()
             .flat_map(|name| self.waits_for(name, &pending))
@@ -534,7 +614,7 @@ impl BootState {
         let mut unblocked: Vec<&str> = pending
             .iter()
             .copied()
-            .filter(|name| !blocked_by_pending.contains(name) && Some(*name) != root)
+            .filter(|name| !blocked_by_pending.contains(name) && !stages.contains(name))
             .collect();
         self.sort_siblings(&mut unblocked);
         let mut leftovers: Vec<&str> = pending.iter().copied().collect();
@@ -545,7 +625,9 @@ impl BootState {
         }
         let mut rows = Vec::new();
         let mut visited = HashSet::new();
-        root.into_iter()
+        stages
+            .iter()
+            .copied()
             .chain(unblocked)
             .chain(leftovers)
             .for_each(|top| {
@@ -560,7 +642,12 @@ impl BootState {
                     );
                 }
             });
-        rows
+        let mut kept = Vec::new();
+        grow_forest(&mut rows.into_iter().peekable(), 0)
+            .into_iter()
+            .filter(|stage| stage.row.status != RowStatus::Done || !stage.children.is_empty())
+            .for_each(|stage| stage.flatten_into(0, &mut kept));
+        relink_siblings(kept)
     }
 
     fn emit<'a>(
@@ -570,32 +657,34 @@ impl BootState {
         visited: &mut HashSet<&'a str>,
         ancestry: &mut Vec<bool>,
         is_last: bool,
-        rows: &mut Vec<PendingRow>,
+        rows: &mut Vec<TreeRow>,
     ) {
         visited.insert(unit);
         let record = &self.units[unit];
-        let job = record.job.expect("pending rows only hold units with a job");
         let running_since = record.running_since();
+        let status = match (record.job, running_since, record.outcome) {
+            (Some(_), Some(_), _) => RowStatus::Running,
+            (Some(_), None, _) => RowStatus::Waiting,
+            (None, _, Some(Outcome::Failed)) => RowStatus::Failed,
+            (None, ..) => RowStatus::Done,
+        };
         let mut is_last_sibling = ancestry.clone();
         is_last_sibling.push(is_last);
-        rows.push(PendingRow {
+        rows.push(TreeRow {
             depth: ancestry.len(),
             is_last_sibling,
             label: display_label(&record.facts),
-            is_target: record.facts.name.ends_with(".target"),
-            status: if running_since.is_some() {
-                RowStatus::Running
-            } else {
-                RowStatus::Waiting
-            },
-            queued_at: job.queued_at,
+            description: summary(&record.facts),
+            kind: UnitKind::of(&record.facts.name),
+            status,
+            queued_at: record.job.map(|job| job.queued_at).unwrap_or_default(),
             running_since,
             chain: Vec::new(),
         });
         let candidates: Vec<&str> = self
             .waits_for(unit, pending)
             .into_iter()
-            .filter(|dependency| !visited.contains(dependency))
+            .filter(|dependency| !visited.contains(dependency) && !self.is_milestone(dependency))
             .collect();
         let mut children: Vec<&str> = candidates
             .iter()
@@ -618,6 +707,10 @@ impl BootState {
             self.emit(child, pending, visited, ancestry, index + 1 == count, rows);
         });
         ancestry.pop();
+    }
+
+    fn is_milestone(&self, unit: &str) -> bool {
+        self.milestone_targets.iter().any(|target| target == unit)
     }
 
     fn waits_on(&self, waiter: &str, dependency: &str, pending: &HashSet<&str>) -> bool {
@@ -655,9 +748,13 @@ impl BootState {
     }
 
     fn sort_siblings(&self, names: &mut [&str]) {
-        let rank = |name: &str| match self.units[name].running_since() {
-            Some(since) => SiblingRank::RunningSince(since),
-            None => SiblingRank::Waiting,
+        let rank = |name: &str| {
+            let record = &self.units[name];
+            match (record.running_since(), record.outcome) {
+                (Some(since), _) => SiblingRank::RunningSince(since),
+                (None, Some(Outcome::Failed)) => SiblingRank::Failed,
+                (None, _) => SiblingRank::Waiting,
+            }
         };
         names.sort_by(|left, right| rank(left).cmp(&rank(right)).then_with(|| left.cmp(right)));
     }
@@ -666,6 +763,7 @@ impl BootState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum SiblingRank {
     RunningSince(Duration),
+    Failed,
     Waiting,
 }
 
@@ -695,8 +793,7 @@ impl MilestoneWalk {
     }
 }
 
-#[must_use]
-pub fn paths_to_running(rows: Vec<PendingRow>) -> Vec<PendingRow> {
+fn on_paths_to_running(rows: &[TreeRow]) -> Vec<bool> {
     let mut kept_below: Vec<bool> = Vec::new();
     let mut kept: Vec<bool> = rows
         .iter()
@@ -704,14 +801,40 @@ pub fn paths_to_running(rows: Vec<PendingRow>) -> Vec<PendingRow> {
         .map(|row| {
             let descendant_kept = kept_below.iter().skip(row.depth + 1).any(|kept| *kept);
             kept_below.resize(row.depth + 1, false);
-            let anchors_the_tree = row.depth == 0 && row.is_target;
-            let keep = row.status == RowStatus::Running || descendant_kept || anchors_the_tree;
+            let anchors_the_tree = row.depth == 0 && row.kind == UnitKind::Target;
+            let keep = matches!(row.status, RowStatus::Running | RowStatus::Failed)
+                || descendant_kept
+                || anchors_the_tree;
             kept_below[row.depth] |= keep;
             keep
         })
         .collect();
     kept.reverse();
-    let survivors: Vec<PendingRow> = rows
+    kept
+}
+
+fn with_spare_rows(essential: &[bool], budget: usize) -> Vec<bool> {
+    let essential_count = essential.iter().filter(|keep| **keep).count();
+    let spare = budget.saturating_sub(essential_count + 1);
+    let earliest_optional: HashSet<usize> = essential
+        .iter()
+        .enumerate()
+        .filter(|(_, keep)| !**keep)
+        .map(|(index, _)| index)
+        .take(spare)
+        .collect();
+    (0..essential.len())
+        .map(|index| essential[index] || earliest_optional.contains(&index))
+        .collect()
+}
+
+#[must_use]
+pub fn fit_to_height(rows: Vec<TreeRow>, budget: usize) -> Vec<TreeRow> {
+    if rows.len() <= budget {
+        return relink_siblings(rows);
+    }
+    let kept = with_spare_rows(&on_paths_to_running(&rows), budget);
+    let survivors: Vec<TreeRow> = rows
         .into_iter()
         .zip(kept)
         .filter_map(|(row, keep)| keep.then_some(row))
@@ -722,7 +845,7 @@ pub fn paths_to_running(rows: Vec<PendingRow>) -> Vec<PendingRow> {
 const MIN_FOLDED_LINKS: usize = 2;
 
 struct TreeNode {
-    row: PendingRow,
+    row: TreeRow,
     children: Vec<TreeNode>,
 }
 
@@ -763,15 +886,15 @@ impl TreeNode {
         self
     }
 
-    fn flatten_into(self, depth: usize, rows: &mut Vec<PendingRow>) {
-        rows.push(PendingRow { depth, ..self.row });
+    fn flatten_into(self, depth: usize, rows: &mut Vec<TreeRow>) {
+        rows.push(TreeRow { depth, ..self.row });
         self.children
             .into_iter()
             .for_each(|child| child.flatten_into(depth + 1, rows));
     }
 }
 
-fn grow_forest(rows: &mut Peekable<IntoIter<PendingRow>>, depth: usize) -> Vec<TreeNode> {
+fn grow_forest(rows: &mut Peekable<IntoIter<TreeRow>>, depth: usize) -> Vec<TreeNode> {
     iter::from_fn(|| {
         let row = rows.next_if(|row| row.depth == depth)?;
         Some(TreeNode {
@@ -783,7 +906,7 @@ fn grow_forest(rows: &mut Peekable<IntoIter<PendingRow>>, depth: usize) -> Vec<T
 }
 
 #[must_use]
-pub fn fold_chains(rows: Vec<PendingRow>) -> Vec<PendingRow> {
+pub fn fold_chains(rows: Vec<TreeRow>) -> Vec<TreeRow> {
     let mut flattened = Vec::new();
     grow_forest(&mut rows.into_iter().peekable(), 0)
         .into_iter()
@@ -791,7 +914,7 @@ pub fn fold_chains(rows: Vec<PendingRow>) -> Vec<PendingRow> {
     relink_siblings(flattened)
 }
 
-fn relink_siblings(rows: Vec<PendingRow>) -> Vec<PendingRow> {
+fn relink_siblings(rows: Vec<TreeRow>) -> Vec<TreeRow> {
     let mut later_sibling: Vec<bool> = Vec::new();
     let mut is_last: Vec<bool> = rows
         .iter()
@@ -810,7 +933,7 @@ fn relink_siblings(rows: Vec<PendingRow>) -> Vec<PendingRow> {
         .map(|(row, last)| {
             ancestry.truncate(row.depth);
             ancestry.push(last);
-            PendingRow {
+            TreeRow {
                 is_last_sibling: ancestry.clone(),
                 ..row
             }
@@ -818,17 +941,32 @@ fn relink_siblings(rows: Vec<PendingRow>) -> Vec<PendingRow> {
         .collect()
 }
 
+fn labelled_by_description(facts: &UnitFacts) -> bool {
+    !facts.description.is_empty() && UnitKind::of(&facts.name).labelled_by_description()
+}
+
 fn display_label(facts: &UnitFacts) -> String {
-    if let Some(stem) = facts.name.strip_suffix(".service") {
-        return stem.to_owned();
-    }
-    let described_by_path = [".device", ".mount", ".swap", ".automount"]
-        .iter()
-        .any(|suffix| facts.name.ends_with(suffix));
-    if described_by_path && !facts.description.is_empty() {
+    if labelled_by_description(facts) {
         return facts.description.clone();
     }
-    facts.name.clone()
+    match UnitKind::of(&facts.name) {
+        UnitKind::Target | UnitKind::Other => facts.name.clone(),
+        _ => facts
+            .name
+            .rsplit_once('.')
+            .map_or_else(|| facts.name.clone(), |(stem, _)| stem.to_owned()),
+    }
+}
+
+fn summary(facts: &UnitFacts) -> String {
+    let repeats_the_name = facts.description == facts.name
+        || facts
+            .description
+            .eq_ignore_ascii_case(&display_label(facts));
+    if labelled_by_description(facts) || repeats_the_name {
+        return String::new();
+    }
+    facts.description.clone()
 }
 
 #[cfg(test)]
@@ -897,27 +1035,27 @@ mod tests {
     #[test]
     fn pending_units_nest_under_what_waits_on_them() {
         let outline: Vec<String> = sample()
-            .pending_rows()
+            .tree_rows()
             .into_iter()
             .map(|row| format!("{}{}", "  ".repeat(row.depth), row.label))
             .collect();
         assert_eq!(
             outline,
             [
+                "basic.target",
+                "multi-user.target",
+                "  docker",
+                "    containerd",
+                "  nm-wait",
+                "    nm",
                 "graphical.target",
-                "  multi-user.target",
-                "    docker",
-                "      containerd",
-                "    basic.target",
-                "    nm-wait",
-                "      nm",
             ]
         );
     }
 
     #[test]
     fn only_chains_leading_to_running_units_stay_in_view() {
-        let rows = paths_to_running(sample().pending_rows());
+        let rows = fit_to_height(sample().tree_rows(), 0);
         let outline: Vec<String> = rows
             .iter()
             .map(|row| format!("{}{}", "  ".repeat(row.depth), row.label))
@@ -925,18 +1063,106 @@ mod tests {
         assert_eq!(
             outline,
             [
+                "basic.target",
+                "multi-user.target",
+                "  docker",
+                "  nm-wait",
+                "    nm",
                 "graphical.target",
-                "  multi-user.target",
-                "    docker",
-                "    nm-wait",
-                "      nm",
             ]
         );
         let lasts: Vec<bool> = rows
             .iter()
             .map(|row| *row.is_last_sibling.last().unwrap())
             .collect();
-        assert_eq!(lasts, [true, true, false, true, true]);
+        assert_eq!(lasts, [false, false, false, true, true, true]);
+    }
+
+    #[test]
+    fn spare_rows_bring_back_waiting_units_under_kept_parents() {
+        let state = chain_state(
+            &[
+                ("root.target", &["a.service", "b.service"]),
+                ("a.service", &["a1.service"]),
+                ("a1.service", &["a2.service"]),
+                ("a2.service", &[]),
+                ("b.service", &[]),
+            ],
+            "b.service",
+        );
+        let outline = |budget| -> Vec<String> {
+            fit_to_height(state.tree_rows(), budget)
+                .into_iter()
+                .map(|row| format!("{}{}", "  ".repeat(row.depth), row.label))
+                .collect()
+        };
+        assert_eq!(outline(4), ["root.target", "  b", "  a"]);
+        assert_eq!(
+            outline(5),
+            ["root.target", "  b", "  a", "    a1", "      a2"]
+        );
+    }
+
+    #[test]
+    fn a_unit_sits_in_the_earliest_stage_that_waits_on_it() {
+        let mut state = BootState::new(Phase::Host);
+        state.set_root("multi-user.target".to_owned());
+        [
+            facts(
+                "multi-user.target",
+                &["basic.target", "dbus.service", "web.service"],
+            ),
+            facts("basic.target", &["dbus.service"]),
+            facts("dbus.service", &[]),
+            facts("web.service", &[]),
+        ]
+        .into_iter()
+        .zip(1..)
+        .for_each(|(unit, id)| {
+            let name = unit.name.clone();
+            state.track_unit(unit, Activity::default());
+            state.queue_job(id, &name, JobKind::BringsUp, Duration::ZERO);
+        });
+        let outline: Vec<String> = state
+            .tree_rows()
+            .into_iter()
+            .map(|row| format!("{}{}", "  ".repeat(row.depth), row.label))
+            .collect();
+        assert_eq!(
+            outline,
+            ["basic.target", "  dbus", "multi-user.target", "  web"]
+        );
+    }
+
+    #[test]
+    fn kinds_with_a_tag_drop_their_suffix() {
+        let socket = facts("docker.socket", &[]);
+        assert_eq!(UnitKind::of(&socket.name), UnitKind::Socket);
+        assert_eq!(UnitKind::Socket.tag(), "socket");
+        assert_eq!(display_label(&socket), "docker");
+        assert_eq!(display_label(&facts("sshd.service", &[])), "sshd");
+        assert_eq!(display_label(&facts("basic.target", &[])), "basic.target");
+        assert_eq!(UnitKind::Target.tag(), "");
+    }
+
+    #[test]
+    fn descriptions_that_repeat_the_label_are_dropped() {
+        let described = |name: &str, description: &str| {
+            summary(&UnitFacts {
+                name: name.to_owned(),
+                description: description.to_owned(),
+                after: Vec::new(),
+                before: Vec::new(),
+            })
+        };
+        assert_eq!(
+            described("multi-user.target", "Multi-User System"),
+            "Multi-User System"
+        );
+        assert_eq!(described("greetd.service", "greetd.service"), "");
+        assert_eq!(described("greetd.service", "Greetd"), "");
+        assert_eq!(described("dev-sda.device", "Samsung SSD"), "");
+        assert_eq!(described("demo.service", ""), "");
     }
 
     fn chain_state(waits: &[(&str, &[&str])], running: &str) -> BootState {
@@ -955,7 +1181,7 @@ mod tests {
     }
 
     fn folded_outline(state: &BootState) -> Vec<String> {
-        fold_chains(paths_to_running(state.pending_rows()))
+        fold_chains(fit_to_height(state.tree_rows(), 0))
             .into_iter()
             .map(|row| {
                 let chain = once(row.label.as_str())
@@ -1011,7 +1237,7 @@ mod tests {
             folded_outline(&state),
             ["root.target", "  a", "    b", "      d"]
         );
-        let rows = fold_chains(paths_to_running(both.pending_rows()));
+        let rows = fold_chains(fit_to_height(both.tree_rows(), 0));
         let lasts: Vec<bool> = rows
             .iter()
             .map(|row| *row.is_last_sibling.last().unwrap())
@@ -1027,7 +1253,7 @@ mod tests {
         state.track_unit(facts("idle.service", &[]), Activity::default());
         state.queue_job(1, "demo.target", JobKind::BringsUp, Duration::ZERO);
         state.queue_job(2, "idle.service", JobKind::BringsUp, Duration::ZERO);
-        let rows = paths_to_running(state.pending_rows());
+        let rows = fit_to_height(state.tree_rows(), 0);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].label, "demo.target");
     }
@@ -1046,7 +1272,7 @@ mod tests {
                 active_exit: None,
             },
         );
-        let rows = state.pending_rows();
+        let rows = state.tree_rows();
         assert!(
             rows.iter()
                 .all(|row| row.label != "containerd" && row.label != "basic.target")
@@ -1061,7 +1287,7 @@ mod tests {
     fn failures_are_listed_and_not_counted_as_done() {
         let mut state = sample();
         state.finish_job(4, JobResult::Failed, 2000 * MS);
-        assert_eq!(state.failed, ["nm.service"]);
+        assert_eq!(state.failed, ["nm"]);
         let tally = state.tally();
         assert_eq!(tally.failed, 1);
         assert_eq!(tally.done, 0);
@@ -1105,13 +1331,14 @@ mod tests {
             [FinishedStage {
                 label: "initrd",
                 finished_units: 2,
+                failed_units: 0,
                 started_at: Duration::ZERO,
                 reached_at: 2000 * MS,
             }]
         );
         assert_eq!(state.milestones()[0].reached_at, Some(2000 * MS));
         assert_eq!(state.tally().done, 2);
-        assert!(state.pending_rows().is_empty());
+        assert!(state.tree_rows().is_empty());
     }
 
     #[test]
@@ -1127,7 +1354,7 @@ mod tests {
             Activity::default(),
         );
         state.queue_job(1, "dev-nvme1n1.device", JobKind::BringsUp, Duration::ZERO);
-        assert_eq!(state.pending_rows()[0].label, "Lexar SSD NM790 2TB");
+        assert_eq!(state.tree_rows()[0].label, "Lexar SSD NM790 2TB");
     }
 
     #[test]
@@ -1151,7 +1378,7 @@ mod tests {
             state.queue_job(id, &name, JobKind::BringsUp, Duration::ZERO);
         });
         let outline: Vec<String> = state
-            .pending_rows()
+            .tree_rows()
             .into_iter()
             .map(|row| format!("{}{}", "  ".repeat(row.depth), row.label))
             .collect();
@@ -1167,7 +1394,7 @@ mod tests {
 
     fn outline(state: &BootState) -> Vec<String> {
         state
-            .pending_rows()
+            .tree_rows()
             .into_iter()
             .map(|row| format!("{}{}", "  ".repeat(row.depth), row.label))
             .collect()
@@ -1205,8 +1432,8 @@ mod tests {
         assert_eq!(
             outline(&state),
             [
+                "shutdown.target",
                 "poweroff.target",
-                "  shutdown.target",
                 "network.target",
                 "  web",
             ]
@@ -1251,7 +1478,7 @@ mod tests {
                 ..Activity::default()
             },
         );
-        assert_eq!(state.pending_rows()[0].running_since, Some(1200 * MS));
+        assert_eq!(state.tree_rows()[0].running_since, Some(1200 * MS));
         state.finish_job(1, JobResult::Done, 1700 * MS);
         assert_eq!(
             state.finished_runs,
@@ -1290,6 +1517,6 @@ mod tests {
         state.track_unit(facts("b.service", &["a.service"]), Activity::default());
         state.queue_job(1, "a.service", JobKind::BringsUp, Duration::ZERO);
         state.queue_job(2, "b.service", JobKind::BringsUp, Duration::ZERO);
-        assert_eq!(state.pending_rows().len(), 2);
+        assert_eq!(state.tree_rows().len(), 2);
     }
 }

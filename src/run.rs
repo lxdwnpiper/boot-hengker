@@ -10,6 +10,7 @@ use std::{
 
 use bootvine::{
     model::{BootState, Phase},
+    origin::BootOrigin,
     palette::Palette,
     view::BootView,
 };
@@ -19,7 +20,6 @@ use ratatui::{
     backend::Backend,
     buffer::{Buffer, CellDiffOption},
 };
-use rustix::system::uname;
 use signal_hook::{consts::SIGTERM, flag};
 
 use crate::{
@@ -112,12 +112,17 @@ fn watch(
     console: &mut Console,
     hold: Duration,
 ) -> Result<(), Error> {
-    let host = uname().nodename().to_string_lossy().into_owned();
+    let mut origin = BootOrigin::read();
+    let mut origin_phase = state.phase;
     let mut frame: u64 = 0;
     let mut painted_connections = feed.connections;
     let mut last_full_repaint = Instant::now();
     loop {
         feed.pump(state, FRAME_INTERVAL)?;
+        if state.phase != origin_phase {
+            origin = BootOrigin::read();
+            origin_phase = state.phase;
+        }
         console.make_way_for_password_prompts();
         let repaint_due = feed.connections != painted_connections
             || last_full_repaint.elapsed() >= FULL_REPAINT_INTERVAL;
@@ -131,7 +136,7 @@ fn watch(
                     palette,
                     glyphs: &console.glyphs,
                     now: monotonic_now(),
-                    host: &host,
+                    origin: &origin,
                     frame,
                 },
                 canvas.area(),

@@ -1,20 +1,40 @@
-use std::time::Duration;
+use std::{iter::once, time::Duration};
 
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Rect},
     style::Stylize,
-    text::Line,
+    text::{Line, Span},
     widgets::{Row, Table, Widget},
 };
 
 use super::{DURATION_WIDTH, ELAPSED};
-use crate::palette::Palette;
+use crate::{origin::BootOrigin, palette::Palette};
+
+const SEPARATOR: &str = " · ";
 
 pub struct Header<'a> {
-    pub host: &'a str,
+    pub origin: &'a BootOrigin,
     pub total: Option<Duration>,
     pub palette: &'a Palette,
+}
+
+impl Header<'_> {
+    fn origin(&self) -> Line<'static> {
+        Line::from(
+            self.origin
+                .parts()
+                .into_iter()
+                .enumerate()
+                .flat_map(|(index, part)| {
+                    let separator = (index > 0).then(|| SEPARATOR.fg(self.palette.muted));
+                    let part = Span::from(part).fg(self.palette.text);
+                    let part = if index == 0 { part.bold() } else { part };
+                    separator.into_iter().chain(once(part))
+                })
+                .collect::<Vec<_>>(),
+        )
+    }
 }
 
 impl Widget for Header<'_> {
@@ -25,13 +45,14 @@ impl Widget for Header<'_> {
             .unwrap_or_default();
         Table::new(
             [Row::new([
-                Line::from(format!("bootvine  {}", self.host)),
-                Line::from(total).right_aligned(),
+                self.origin(),
+                Line::from(total)
+                    .fg(self.palette.text)
+                    .bold()
+                    .right_aligned(),
             ])],
             [Constraint::Fill(1), Constraint::Length(DURATION_WIDTH)],
         )
-        .fg(self.palette.text)
-        .bold()
         .render(area, buf);
     }
 }

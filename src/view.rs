@@ -1,4 +1,3 @@
-mod failures;
 mod footer;
 mod header;
 mod stages;
@@ -14,24 +13,27 @@ use ratatui::{
     text::Line,
     widgets::{Block, Borders, Widget},
 };
+use unicode_truncate::UnicodeTruncateStr;
+use unicode_width::UnicodeWidthStr;
 
-use self::{
-    failures::Failures, footer::Footer, header::Header, stages::Stages, timeline::Timeline,
-    tree::PendingTree,
-};
+use self::{footer::Footer, header::Header, stages::Stages, timeline::Timeline, tree::UnitTree};
 use crate::{
     glyphs::Glyphs,
-    model::{BootState, PendingRow, RowStatus, fold_chains, paths_to_running},
+    model::{BootState, RowStatus, TreeRow, UnitKind, fit_to_height, fold_chains},
+    origin::BootOrigin,
     palette::Palette,
 };
 
-const RULE_STUB: &str = "──";
 const DURATION_WIDTH: u16 = 8;
 const MIN_BAR_WIDTH: u16 = 12;
 const MIN_HEIGHT_FOR_TIMELINE: u16 = 12;
 const MIN_TIMELINE_HEIGHT: u16 = timeline::CHROME_HEIGHT + 4;
 const NOTEWORTHY_DURATION: Duration = Duration::from_secs(1);
-const HEADER_HEIGHT: u16 = 2;
+const HEADER_HEIGHT: u16 = 1;
+const BRANCH: &str = "├─ ";
+const LAST_BRANCH: &str = "└─ ";
+const PASSING_TRUNK: &str = "│  ";
+const ENDED_TRUNK: &str = "   ";
 
 const ELAPSED: SpanPrinter = SpanPrinter::new()
     .designator(Designator::Compact)
@@ -44,15 +46,15 @@ pub struct BootView<'a> {
     pub palette: &'a Palette,
     pub glyphs: &'a Glyphs,
     pub now: Duration,
-    pub host: &'a str,
+    pub origin: &'a BootOrigin,
     pub frame: u64,
 }
 
 impl BootView<'_> {
-    fn timeline<'a>(&'a self, rows: &'a [PendingRow]) -> Timeline<'a> {
-        let mut running: Vec<&PendingRow> = rows
+    fn timeline<'a>(&'a self, rows: &'a [TreeRow]) -> Timeline<'a> {
+        let mut running: Vec<&TreeRow> = rows
             .iter()
-            .filter(|row| !row.is_target && row.status == RowStatus::Running)
+            .filter(|row| row.kind != UnitKind::Target && row.status == RowStatus::Running)
             .collect();
         running.sort_by_key(|row| row.running_since);
         Timeline {
@@ -85,12 +87,11 @@ impl BootView<'_> {
 
 impl Widget for BootView<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let all_rows = self.state.pending_rows();
+        let all_rows = self.state.tree_rows();
         let pending_count = all_rows.len();
-        let rows = fold_chains(paths_to_running(all_rows));
-        let shown_units: usize = rows.iter().map(|row| 1 + row.chain.len()).sum();
+        let pruned_rows = fold_chains(fit_to_height(all_rows.clone(), 0));
         let header = Header {
-            host: self.host,
+            origin: self.origin,
             total: (!self.state.finished_stages.is_empty())
                 .then(|| self.now.saturating_sub(self.state.origin)),
             palette: self.palette,
@@ -101,20 +102,16 @@ impl Widget for BootView<'_> {
             palette: self.palette,
             glyphs: self.glyphs,
         };
-        let tree = PendingTree {
-            rows: &rows,
-            folded: pending_count - shown_units,
+        let pruned = UnitTree {
+            phase: stages.current_phase(),
+            rows: &pruned_rows,
+            hidden: pending_count - shown_units(&pruned_rows),
             now: self.now,
             frame: self.frame,
             palette: self.palette,
             glyphs: self.glyphs,
         };
-        let failures = Failures {
-            units: &self.state.failed,
-            palette: self.palette,
-            glyphs: self.glyphs,
-        };
-        let timeline = self.timeline(&rows);
+        let timeline = self.timeline(&pruned_rows);
         let footer = Footer {
             tally: self.state.tally(),
             shows_root_switch: !self.state.finished_stages.is_empty(),
@@ -123,29 +120,38 @@ impl Widget for BootView<'_> {
         };
         let fits_timeline = area.width >= timeline::LABEL_WIDTH + 1 + MIN_BAR_WIDTH
             && area.height >= MIN_HEIGHT_FOR_TIMELINE;
+        let free = area
+            .height
+            .saturating_sub(HEADER_HEIGHT + stages.height() + footer::HEIGHT);
         let heights = Heights::share(
-            area.height.saturating_sub(
-                HEADER_HEIGHT + stages.height() + failures.height() + footer::HEIGHT,
-            ),
-            tree.height(),
+            free,
+            pruned.height(),
             if fits_timeline { timeline.height() } else { 0 },
         );
+        let budget = usize::from(heights.tree.saturating_sub(1));
+        let whole_tree = fit_to_height(all_rows.clone(), usize::MAX);
+        let rows = [whole_tree.clone(), fold_chains(whole_tree)]
+            .into_iter()
+            .find(|rows| rows.len() <= budget)
+            .unwrap_or_else(|| fold_chains(fit_to_height(all_rows, budget)));
+        let tree = UnitTree {
+            rows: &rows,
+            hidden: pending_count - shown_units(&rows),
+            ..pruned
+        };
+        let tree_height = tree.height().min(heights.tree);
 
         let [
             header_area,
-            _,
             stage_area,
             tree_area,
-            failed_area,
             _,
             timeline_area,
             footer_area,
         ] = Layout::vertical([
-            Constraint::Length(1),
-            Constraint::Length(HEADER_HEIGHT - 1),
+            Constraint::Length(HEADER_HEIGHT),
             Constraint::Length(stages.height()),
-            Constraint::Length(heights.tree),
-            Constraint::Length(failures.height()),
+            Constraint::Length(tree_height),
             Constraint::Fill(1),
             Constraint::Length(heights.timeline),
             Constraint::Length(footer::HEIGHT),
@@ -155,7 +161,6 @@ impl Widget for BootView<'_> {
         header.render(header_area, buf);
         stages.render(stage_area, buf);
         tree.render(tree_area, buf);
-        failures.render(failed_area, buf);
         if heights.timeline > 0 {
             timeline.render(timeline_area, buf);
         }
@@ -170,12 +175,6 @@ struct Heights {
 
 impl Heights {
     fn share(free: u16, tree_need: u16, timeline_need: u16) -> Self {
-        if tree_need.saturating_add(timeline_need) <= free {
-            return Self {
-                tree: tree_need,
-                timeline: timeline_need,
-            };
-        }
         let timeline = timeline_need
             .min(free.saturating_sub(tree_need).max(MIN_TIMELINE_HEIGHT))
             .min(free);
@@ -191,6 +190,18 @@ fn rule(palette: &Palette, left: Line<'static>) -> Block<'static> {
         .borders(Borders::TOP)
         .border_style(palette.muted)
         .title(left)
+}
+
+fn shown_units(rows: &[TreeRow]) -> usize {
+    rows.iter().map(|row| 1 + row.chain.len()).sum()
+}
+
+fn fit_width(text: &str, room: usize, ellipsis: &str) -> String {
+    if text.width() <= room {
+        return text.to_owned();
+    }
+    let (kept, _) = text.unicode_truncate(room.saturating_sub(ellipsis.width()));
+    format!("{kept}{ellipsis}")
 }
 
 fn unit_count(count: usize) -> String {
@@ -228,7 +239,12 @@ mod tests {
                         palette: &Palette::default(),
                         glyphs: &Glyphs::default(),
                         now,
-                        host: "ryzen",
+                        origin: &BootOrigin {
+                            host: "ryzen".to_owned(),
+                            system: "NixOS 26.11".to_owned(),
+                            generation: "2771".to_owned(),
+                            kernel: "Linux 7.2.9".to_owned(),
+                        },
                         frame: 1,
                     },
                     frame.area(),
@@ -297,18 +313,24 @@ mod tests {
     fn tree_on_top_timeline_below() {
         let lines = render(&boot_in_progress(), 12_400 * MS, 110, 24);
         let screen = lines.join("\n");
-        assert_eq!(lines[0], "bootvine  ryzen", "{screen}");
-        assert!(lines[2].starts_with("── stage 2 ──"), "{screen}");
-        assert!(lines[2].ends_with("12.4s ──"), "{screen}");
-        assert!(lines[3].starts_with("graphical.target"), "{screen}");
-        assert!(lines[4].starts_with("└─ multi-user.target"), "{screen}");
-        assert!(lines[5].starts_with("   ├─ [/] systemd-rfkill"), "{screen}");
-        assert!(lines[6].starts_with("   └─ [/] docker"), "{screen}");
-        assert!(lines[7].starts_with("… 1 more"), "{screen}");
-        assert!(
-            lines[8].starts_with("× nvidia-powerd.service failed"),
+        assert_eq!(
+            lines[0], "ryzen · NixOS 26.11 · generation 2771 · Linux 7.2.9",
             "{screen}"
         );
+        assert!(lines[1].starts_with("└─ stage 2  12.4s"), "{screen}");
+        assert!(lines[1].ends_with("running"), "{screen}");
+        assert!(
+            lines[2].starts_with("   ├─ ◆ multi-user.target"),
+            "{screen}"
+        );
+        assert!(
+            lines[3].starts_with("   │  ├─ [/] systemd-rfkill"),
+            "{screen}"
+        );
+        assert!(lines[4].starts_with("   │  ├─ [/] docker"), "{screen}");
+        assert!(lines[5].starts_with("   │  └─ [ ] web"), "{screen}");
+        assert!(lines[6].starts_with("   ├─ ◇ graphical.target"), "{screen}");
+        assert!(lines[7].starts_with("   └─ [×] nvidia-powerd"), "{screen}");
         let timeline = lines
             .iter()
             .position(|line| line.contains(" timeline "))
@@ -344,14 +366,45 @@ mod tests {
     }
 
     #[test]
+    fn failures_stay_in_the_stage_that_wanted_them() {
+        let mut state = BootState::new(Phase::Host);
+        state.set_root("multi-user.target".to_owned());
+        [
+            facts("multi-user.target", &["basic.target", "web.service"]),
+            facts("basic.target", &["flaky.service", "quick.service"]),
+            facts("flaky.service", &[]),
+            facts("quick.service", &[]),
+            facts("web.service", &[]),
+        ]
+        .into_iter()
+        .zip(1..)
+        .for_each(|(unit, id)| {
+            let name = unit.name.clone();
+            state.track_unit(unit, Activity::default());
+            state.queue_job(id, &name, JobKind::BringsUp, Duration::ZERO);
+        });
+        state.finish_job(3, JobResult::Failed, 1000 * MS);
+        state.finish_job(4, JobResult::Done, 1000 * MS);
+        state.finish_job(2, JobResult::Done, 1500 * MS);
+        let lines = render(&state, 3000 * MS, 110, 24);
+        let screen = lines.join("\n");
+        assert!(lines[2].starts_with("   ├─ √ basic.target"), "{screen}");
+        assert!(lines[3].starts_with("   │  └─ [×] flaky"), "{screen}");
+        assert!(
+            lines[4].starts_with("   └─ ◆ multi-user.target"),
+            "{screen}"
+        );
+        assert!(lines[5].starts_with("      └─ [ ] web"), "{screen}");
+        assert!(!screen.contains("quick"), "{screen}");
+    }
+
+    #[test]
     fn only_running_units_carry_a_timer() {
         let lines = render(&boot_in_progress(), 12_400 * MS, 110, 24);
         let screen = lines.join("\n");
-        assert!(
-            lines[3].trim_end().ends_with("graphical.target"),
-            "{screen}"
-        );
-        assert!(lines[5].ends_with("6.4s"), "{screen}");
+        assert!(lines[2].ends_with("multi-user.target"), "{screen}");
+        assert!(lines[3].ends_with("6.4s"), "{screen}");
+        assert!(lines[5].ends_with("web"), "{screen}");
     }
 
     #[test]
@@ -368,24 +421,22 @@ mod tests {
         );
     }
 
-    #[test]
-    fn folded_chains_shorten_to_their_ends_when_narrow() {
-        let mut state = BootState::new(Phase::Shutdown);
-        state.set_root("poweroff.target".to_owned());
+    fn chain_boot() -> BootState {
+        let mut state = BootState::new(Phase::Host);
+        state.set_root("graphical.target".to_owned());
         [
-            ("poweroff.target", "systemd-poweroff.service"),
-            ("systemd-poweroff.service", "final.target"),
-            ("final.target", "shutdown.target"),
-            ("shutdown.target", "local-fs.target"),
-            ("local-fs.target", "demo-disk.service"),
-            ("demo-disk.service", "demo-db.service"),
-            ("demo-db.service", ""),
+            ("graphical.target", "network-wait.service"),
+            ("network-wait.service", "network.target"),
+            ("network.target", "network-manager.service"),
+            ("network-manager.service", "dbus.service"),
+            ("dbus.service", "udev-settle.service"),
+            ("udev-settle.service", ""),
         ]
         .into_iter()
         .zip(1..)
         .for_each(|((name, waits_on), id)| {
             let after: Vec<&str> = [waits_on].into_iter().filter(|w| !w.is_empty()).collect();
-            let activity = if name == "demo-db.service" {
+            let activity = if name == "udev-settle.service" {
                 running_since(1000 * MS)
             } else {
                 Activity::default()
@@ -393,37 +444,168 @@ mod tests {
             state.track_unit(facts(name, &after), activity);
             state.queue_job(id, name, JobKind::BringsUp, Duration::ZERO);
         });
-        let wide = render(&state, 5000 * MS, 110, 24);
+        state
+    }
+
+    #[test]
+    fn chains_stay_unfolded_while_they_fit() {
+        let lines = render(&chain_boot(), 5000 * MS, 110, 24);
+        let screen = lines.join("\n");
         assert!(
-            wide[4].starts_with(
-                "└─ [ ] systemd-poweroff ─ final.target ─ shutdown.target ─ local-fs.target ─ \
-                 demo-disk"
-            ),
-            "{}",
-            wide.join("\n")
+            lines[3].starts_with("      └─ [ ] network-wait"),
+            "{screen}"
         );
         assert!(
-            wide[5].starts_with("   └─ [/] demo-db"),
-            "{}",
-            wide.join("\n")
+            lines[4].starts_with("         └─ network.target"),
+            "{screen}"
         );
-        let narrow = render(&state, 5000 * MS, 60, 24);
         assert!(
-            narrow[4].starts_with("└─ [ ] systemd-poweroff ─ … ─ demo-disk"),
+            lines[7].starts_with("                  └─ [/] udev-settle"),
+            "{screen}"
+        );
+    }
+
+    #[test]
+    fn chains_fold_when_short_and_shorten_to_their_ends_when_narrow() {
+        let short = render(&chain_boot(), 5000 * MS, 110, 13);
+        assert!(
+            short[3]
+                .starts_with("      └─ [ ] network-wait ─ network.target ─ network-manager ─ dbus"),
+            "{}",
+            short.join("\n")
+        );
+        assert!(
+            short[4].starts_with("         └─ [/] udev-settle"),
+            "{}",
+            short.join("\n")
+        );
+        let narrow = render(&chain_boot(), 5000 * MS, 45, 8);
+        assert!(
+            narrow[3].starts_with("      └─ [ ] network-wait ─ … ─ dbus"),
             "{}",
             narrow.join("\n")
         );
     }
 
+    fn described_boot() -> BootState {
+        let mut state = BootState::new(Phase::Host);
+        state.set_root("multi-user.target".to_owned());
+        [
+            (
+                "multi-user.target",
+                "Multi-User System",
+                &["docker.service", "systemd-rfkill.service"][..],
+            ),
+            ("docker.service", "Docker Application Container Engine", &[]),
+            (
+                "systemd-rfkill.service",
+                "Load/Save RF Kill Switch Status",
+                &[],
+            ),
+        ]
+        .into_iter()
+        .zip(1..)
+        .for_each(|((name, description, after), id)| {
+            state.track_unit(
+                UnitFacts {
+                    description: description.to_owned(),
+                    ..facts(name, after)
+                },
+                running_since(1000 * MS),
+            );
+            state.queue_job(id, name, JobKind::BringsUp, Duration::ZERO);
+        });
+        state
+    }
+
+    #[test]
+    fn descriptions_line_up_in_a_column() {
+        let lines = render(&described_boot(), 3000 * MS, 110, 24);
+        let screen = lines.join("\n");
+        let column_of = |text: &str| {
+            lines
+                .iter()
+                .find_map(|line| line.find(text).map(|at| line[..at].width()))
+                .unwrap_or_else(|| panic!("{text} missing\n{screen}"))
+        };
+        assert_eq!(column_of("Multi-User System"), column_of("description"));
+        assert_eq!(
+            column_of("Multi-User System"),
+            column_of("Docker Application")
+        );
+        assert_eq!(
+            column_of("Multi-User System"),
+            column_of("Load/Save RF Kill")
+        );
+        assert!(column_of("Multi-User System") > column_of("systemd-rfkill"));
+    }
+
+    #[test]
+    fn non_service_units_carry_their_kind() {
+        let mut state = described_boot();
+        state.track_unit(
+            UnitFacts {
+                description: "Docker Socket for the API".to_owned(),
+                ..facts("docker.socket", &[])
+            },
+            running_since(1000 * MS),
+        );
+        state.queue_job(9, "docker.socket", JobKind::BringsUp, Duration::ZERO);
+        let lines = render(&state, 3000 * MS, 110, 24);
+        let screen = lines.join("\n");
+        let socket_row = lines
+            .iter()
+            .find(|line| line.contains("Docker Socket"))
+            .unwrap_or_else(|| panic!("{screen}"));
+        assert!(socket_row.contains("[/] docker "), "{screen}");
+        assert!(socket_row.contains(" socket "), "{screen}");
+        assert!(
+            render(&described_boot(), 3000 * MS, 110, 24)
+                .iter()
+                .all(|line| !line.contains(" socket ")),
+            "{screen}"
+        );
+    }
+
+    #[test]
+    fn narrow_screens_keep_names_and_drop_descriptions() {
+        let lines = render(&described_boot(), 3000 * MS, 40, 24);
+        let screen = lines.join("\n");
+        assert!(screen.contains("systemd-rfkill"), "{screen}");
+        assert!(!screen.contains("Docker"), "{screen}");
+    }
+
+    #[test]
+    fn long_timeline_labels_end_in_an_ellipsis() {
+        let mut state = boot_in_progress();
+        state.track_unit(
+            UnitFacts {
+                description: "Kernel Configuration File System".to_owned(),
+                ..facts("sys-kernel-config.mount", &[])
+            },
+            running_since(2000 * MS),
+        );
+        state.queue_job(30, "sys-kernel-config.mount", JobKind::BringsUp, 2000 * MS);
+        state.finish_job(30, JobResult::Done, 4000 * MS);
+        let lines = render(&state, 12_400 * MS, 110, 24);
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.starts_with("√ Kernel Configuration File…")),
+            "{}",
+            lines.join("\n")
+        );
+    }
+
     #[test]
     fn narrow_screens_drop_the_timeline() {
-        let lines = render(&boot_in_progress(), 12_400 * MS, 36, 24);
+        let lines = render(&boot_in_progress(), 12_400 * MS, 40, 24);
         assert!(
             lines.iter().all(|line| !line.contains('■')),
             "{}",
             lines.join("\n")
         );
-        assert!(lines[5].contains("systemd-rfkill"));
+        assert!(lines[3].contains("systemd-rfkill"), "{}", lines.join("\n"));
     }
 
     #[test]
@@ -441,12 +623,11 @@ mod tests {
         let screen = lines.join("\n");
         assert!(lines[0].ends_with("17.3s"), "{screen}");
         assert!(
-            lines[2].starts_with("── initrd ── ■ done in 7.2s · 1 unit ──"),
+            lines[1].starts_with("├─ initrd   ■ done in 7.2s · 1 unit"),
             "{screen}"
         );
-        assert!(lines[3].starts_with("── stage 2 ──"), "{screen}");
-        assert!(lines[3].ends_with("10.1s ──"), "{screen}");
-        assert!(lines[4].starts_with("graphical.target"), "{screen}");
+        assert!(lines[2].starts_with("└─ stage 2  10.1s"), "{screen}");
+        assert!(lines[3].starts_with("   └─ ◆ graphical.target"), "{screen}");
         let timeline = lines
             .iter()
             .position(|line| line.contains(" timeline "))
@@ -474,8 +655,8 @@ mod tests {
         state.finish_job(1, JobResult::Done, 9000 * MS);
         let lines = render(&state, 9500 * MS, 110, 24);
         assert!(
-            lines[2].starts_with(
-                "── ■ boot finished in 9.5s · handing over to display-manager.service ──"
+            lines[1].starts_with(
+                "└─ ■ boot finished in 9.5s · handing over to display-manager.service"
             ),
             "{}",
             lines.join("\n")
@@ -491,7 +672,7 @@ mod tests {
         state.queue_job(1, "poweroff.target", JobKind::BringsUp, 20_000 * MS);
         let lines = render(&state, 21_500 * MS, 110, 24);
         assert!(
-            lines[2].starts_with("── shutdown ─") && lines[2].ends_with(" 1.5s ──"),
+            lines[1].starts_with("└─ shutdown 1.5s") && lines[1].ends_with("running"),
             "{}",
             lines.join("\n")
         );
@@ -504,9 +685,8 @@ mod tests {
         state.manager_exited_at = Some(24_200 * MS);
         let lines = render(&state, 30_000 * MS, 110, 24);
         assert!(
-            lines[2].starts_with(
-                "── ■ shutdown finished in 4.2s · handing over to systemd-shutdown ──"
-            ),
+            lines[1]
+                .starts_with("└─ ■ shutdown finished in 4.2s · handing over to systemd-shutdown"),
             "{}",
             lines.join("\n")
         );
@@ -531,7 +711,7 @@ mod tests {
         });
         let lines = render(&state, 1000 * MS, 110, 20);
         assert!(
-            lines.iter().any(|line| line.starts_with("… ")),
+            lines.iter().any(|line| line.starts_with("   … ")),
             "{}",
             lines.join("\n")
         );

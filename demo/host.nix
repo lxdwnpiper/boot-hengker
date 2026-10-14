@@ -6,6 +6,7 @@
 }:
 let
   demoService = spec: {
+    inherit (spec) description;
     after = map (dependency: "${dependency}.service") (spec.after or [ ]);
     wantedBy = [ "multi-user.target" ];
     serviceConfig = {
@@ -30,7 +31,7 @@ in
   boot.initrd.systemd = {
     enable = true;
     services.demo-initrd-probe = {
-      description = "bootvine demo: slow initrd step";
+      description = "Slow hardware probe";
       wantedBy = [ "initrd.target" ];
       before = [ "initrd.target" ];
       unitConfig.DefaultDependencies = false;

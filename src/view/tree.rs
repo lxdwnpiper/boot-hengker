@@ -3,129 +3,289 @@ use std::{iter::once, time::Duration};
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Rect},
-    style::{Color, Stylize},
+    style::{Style, Stylize},
     text::{Line, Span},
     widgets::{Row, Table, Widget},
 };
+use unicode_width::UnicodeWidthStr;
 
-use super::{DURATION_WIDTH, ELAPSED, NOTEWORTHY_DURATION};
+use super::{
+    BRANCH, DURATION_WIDTH, ELAPSED, ENDED_TRUNK, LAST_BRANCH, NOTEWORTHY_DURATION, PASSING_TRUNK,
+    fit_width,
+};
 use crate::{
     glyphs::Glyphs,
-    model::{PendingRow, RowStatus},
+    model::{RowStatus, TreeRow, UnitKind},
     palette::Palette,
 };
 
 const SPINNER: [char; 4] = ['|', '/', '-', '\\'];
+const DESCRIPTION_GAP: u16 = 1;
+const MIN_DESCRIPTION_WIDTH: u16 = 12;
+const HEADER_ROWS: u16 = 1;
 
-pub struct PendingTree<'a> {
-    pub rows: &'a [PendingRow],
-    pub folded: usize,
+pub struct UnitTree<'a> {
+    pub phase: Line<'static>,
+    pub rows: &'a [TreeRow],
+    pub hidden: usize,
     pub now: Duration,
     pub frame: u64,
     pub palette: &'a Palette,
     pub glyphs: &'a Glyphs,
 }
 
-impl PendingTree<'_> {
+struct Columns {
+    label: u16,
+    tag: u16,
+    description: u16,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Stage {
+    Reached,
+    Current,
+    Upcoming,
+    Inside,
+}
+
+fn opens_a_stage(row: &TreeRow) -> bool {
+    row.depth == 0 && row.kind == UnitKind::Target
+}
+
+fn width_of(text: &str) -> u16 {
+    u16::try_from(text.width()).unwrap_or(u16::MAX)
+}
+
+impl UnitTree<'_> {
     pub fn height(&self) -> u16 {
-        u16::try_from(self.rows.len() + usize::from(self.folded > 0)).unwrap_or(u16::MAX)
+        u16::try_from(self.rows.len() + usize::from(self.hidden > 0))
+            .unwrap_or(u16::MAX)
+            .saturating_add(HEADER_ROWS)
     }
 
-    fn label_color(&self, row: &PendingRow) -> Color {
-        if row.is_target {
-            return self.palette.target;
+    fn phase_fits_its_column(&self, columns: &Columns) -> bool {
+        self.phase.width() <= usize::from(columns.label)
+    }
+
+    fn header(&self, columns: &Columns) -> Row<'static> {
+        if !self.phase_fits_its_column(columns) {
+            return Row::default().height(HEADER_ROWS);
         }
-        match row.status {
-            RowStatus::Running => self.palette.text,
-            RowStatus::Waiting => self.palette.waiting,
+        let name = |text: &'static str| Line::from(text).fg(self.palette.muted);
+        Row::new(columns.shown([
+            self.phase.clone(),
+            name("kind"),
+            name("description"),
+            name("running").right_aligned(),
+        ]))
+    }
+
+    fn stages(&self) -> impl Iterator<Item = Stage> + '_ {
+        let current = self
+            .rows
+            .iter()
+            .position(|row| opens_a_stage(row) && row.status != RowStatus::Done);
+        self.rows.iter().enumerate().map(move |(index, row)| {
+            if Some(index) == current {
+                Stage::Current
+            } else if opens_a_stage(row) && row.status == RowStatus::Done {
+                Stage::Reached
+            } else if opens_a_stage(row) {
+                Stage::Upcoming
+            } else {
+                Stage::Inside
+            }
+        })
+    }
+
+    fn label_style(&self, row: &TreeRow, stage: Stage) -> Style {
+        match (stage, row.kind, row.status) {
+            (Stage::Current, ..) => Style::from(self.palette.running).bold(),
+            (Stage::Reached, ..) => self.palette.done.into(),
+            (_, _, RowStatus::Failed) => Style::from(self.palette.failed).bold(),
+            (_, UnitKind::Target, _) => self.palette.target.into(),
+            (_, _, RowStatus::Running) => self.palette.text.into(),
+            (_, _, RowStatus::Waiting | RowStatus::Done) => self.palette.waiting.into(),
         }
     }
 
-    fn status_marker(&self, row: &PendingRow) -> Span<'static> {
-        if row.is_target {
-            return Span::default();
-        }
-        match row.status {
-            RowStatus::Running => {
+    fn status_marker(&self, row: &TreeRow, stage: Stage) -> Span<'static> {
+        match (stage, row.kind, row.status) {
+            (Stage::Current, ..) => {
+                format!("{} ", self.glyphs.stage_current).fg(self.palette.running)
+            }
+            (Stage::Upcoming, ..) => {
+                format!("{} ", self.glyphs.stage_upcoming).fg(self.palette.target)
+            }
+            (Stage::Reached, ..) => format!("{} ", self.glyphs.done).fg(self.palette.done),
+            (_, _, RowStatus::Failed) => {
+                format!("[{}] ", self.glyphs.failed).fg(self.palette.failed)
+            }
+            (_, UnitKind::Target, _) => Span::default(),
+            (_, _, RowStatus::Running) => {
                 let spinner = SPINNER[usize::try_from(self.frame % 4).unwrap_or_default()];
                 format!("[{spinner}] ").fg(self.palette.running)
             }
-            RowStatus::Waiting => "[ ] ".fg(self.palette.waiting),
+            (_, _, RowStatus::Waiting) => "[ ] ".fg(self.palette.waiting),
+            (_, _, RowStatus::Done) => format!("[{}] ", self.glyphs.done).fg(self.palette.done),
         }
     }
 
-    fn chained_label(&self, row: &PendingRow, room: usize) -> String {
+    fn lead_width(&self, row: &TreeRow, stage: Stage) -> usize {
+        tree_prefix(row).width() + self.status_marker(row, stage).width()
+    }
+
+    fn chained_label(&self, row: &TreeRow, room: usize) -> String {
         let link = format!(" {} ", self.glyphs.chain_link);
-        let Some(last) = row.chain.last() else {
-            return row.label.clone();
-        };
         let full: String = once(row.label.as_str())
             .chain(row.chain.iter().map(String::as_str))
             .collect::<Vec<_>>()
             .join(&link);
-        if full.chars().count() <= room || row.chain.len() == 1 {
-            return full;
-        }
-        format!("{}{link}{}{link}{last}", row.label, self.glyphs.ellipsis)
+        let label = match row.chain.as_slice() {
+            [_, .., last] if full.width() > room => {
+                format!("{}{link}{}{link}{last}", row.label, self.glyphs.ellipsis)
+            }
+            _ => full,
+        };
+        fit_width(&label, room, self.glyphs.ellipsis)
     }
 
-    fn row(&self, row: &PendingRow, label_room: usize) -> Row<'static> {
+    fn columns(&self, width: u16) -> Columns {
+        let unannotated = width.saturating_sub(DURATION_WIDTH + 1);
+        let annotated: Vec<(&TreeRow, Stage)> = self
+            .rows
+            .iter()
+            .zip(self.stages())
+            .filter(|(row, _)| {
+                row.chain.is_empty() && !(row.description.is_empty() && row.kind.tag().is_empty())
+            })
+            .collect();
+        let tag = annotated
+            .iter()
+            .map(|(row, _)| width_of(row.kind.tag()))
+            .max()
+            .unwrap_or_default();
+        let content = unannotated.saturating_sub(1 + u16::from(tag > 0));
+        let label = annotated
+            .iter()
+            .map(|(row, stage)| {
+                width_of(&row.label)
+                    .saturating_add(u16::try_from(self.lead_width(row, *stage)).unwrap_or(u16::MAX))
+            })
+            .max()
+            .map(|widest| widest.saturating_add(DESCRIPTION_GAP))
+            .filter(|widest| widest.saturating_add(tag + MIN_DESCRIPTION_WIDTH) <= content);
+        label.map_or(
+            Columns {
+                label: unannotated,
+                tag: 0,
+                description: 0,
+            },
+            |label| Columns {
+                label,
+                tag,
+                description: content - label - tag,
+            },
+        )
+    }
+
+    fn row(&self, row: &TreeRow, stage: Stage, columns: &Columns) -> Row<'static> {
         let prefix = tree_prefix(row);
-        let marker = self.status_marker(row);
-        let room = label_room.saturating_sub(prefix.chars().count() + marker.width());
+        let marker = self.status_marker(row, stage);
+        let room = usize::from(columns.label).saturating_sub(self.lead_width(row, stage));
+        let annotation = |text: &str, width: u16| {
+            if row.chain.is_empty() {
+                fit_width(text, usize::from(width), self.glyphs.ellipsis)
+            } else {
+                String::new()
+            }
+        };
         let timer = row
             .running_since
             .map(|since| self.now.saturating_sub(since))
             .filter(|running_for| *running_for >= NOTEWORTHY_DURATION)
             .map(|running_for| ELAPSED.unsigned_duration_to_string(&running_for))
             .unwrap_or_default();
-        let color = self.label_color(row);
-        Row::new([
+        let style = self.label_style(row, stage);
+        Row::new(columns.shown([
             Line::from(vec![
                 prefix.fg(self.palette.muted),
                 marker,
-                self.chained_label(row, room).fg(color),
+                Span::styled(self.chained_label(row, room), style),
             ]),
-            Line::from(timer).fg(color).right_aligned(),
-        ])
+            Line::from(annotation(row.kind.tag(), columns.tag)).fg(self.palette.muted),
+            Line::from(annotation(&row.description, columns.description)).fg(self.palette.muted),
+            Line::from(timer).style(style).right_aligned(),
+        ]))
     }
 }
 
-impl Widget for PendingTree<'_> {
+impl Columns {
+    fn shown<T>(&self, cells: [T; 4]) -> impl Iterator<Item = T> {
+        let present = [true, self.tag > 0, self.description > 0, true];
+        cells
+            .into_iter()
+            .zip(present)
+            .filter_map(|(cell, present)| present.then_some(cell))
+    }
+
+    fn widths(&self) -> impl Iterator<Item = Constraint> {
+        self.shown([self.label, self.tag, self.description, DURATION_WIDTH])
+            .map(Constraint::Length)
+    }
+}
+
+impl Widget for UnitTree<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let capacity = usize::from(area.height);
-        let label_room = usize::from(area.width.saturating_sub(DURATION_WIDTH + 1));
-        let shown = if usize::from(self.height()) > capacity {
+        let capacity = usize::from(area.height.saturating_sub(HEADER_ROWS));
+        let shown = if usize::from(self.height() - HEADER_ROWS) > capacity {
             capacity.saturating_sub(1).min(self.rows.len())
         } else {
             self.rows.len()
         };
-        let hidden = self.rows.len() - shown + self.folded;
+        let hidden = self.rows.len() - shown + self.hidden;
         let overflow = (hidden > 0).then(|| {
-            Row::new([format!("{} {hidden} more", self.glyphs.ellipsis).fg(self.palette.waiting)])
+            Row::new([
+                format!("{ENDED_TRUNK}{} {hidden} more", self.glyphs.ellipsis)
+                    .fg(self.palette.waiting),
+            ])
         });
+        let columns = self.columns(area.width);
         Table::new(
             self.rows
                 .iter()
+                .zip(self.stages())
                 .take(shown)
-                .map(|row| self.row(row, label_room))
+                .map(|(row, stage)| self.row(row, stage, &columns))
                 .chain(overflow),
-            [Constraint::Fill(1), Constraint::Length(DURATION_WIDTH)],
+            columns.widths(),
         )
+        .header(self.header(&columns))
         .render(area, buf);
+        if !self.phase_fits_its_column(&columns) {
+            self.phase.render(Rect { height: 1, ..area }, buf);
+        }
     }
 }
 
-fn tree_prefix(row: &PendingRow) -> String {
+fn tree_prefix(row: &TreeRow) -> String {
     let ancestors = row
         .is_last_sibling
         .iter()
-        .skip(1)
-        .take(row.depth.saturating_sub(1))
-        .map(|ancestor_is_last| if *ancestor_is_last { "   " } else { "│  " });
-    let connector = (row.depth > 0).then(|| match row.is_last_sibling.last() {
-        Some(false) => "├─ ",
-        _ => "└─ ",
-    });
-    ancestors.chain(connector).chain(once("")).collect()
+        .take(row.depth)
+        .map(|ancestor_is_last| {
+            if *ancestor_is_last {
+                ENDED_TRUNK
+            } else {
+                PASSING_TRUNK
+            }
+        });
+    let connector = match row.is_last_sibling.last() {
+        Some(false) => BRANCH,
+        _ => LAST_BRANCH,
+    };
+    once(ENDED_TRUNK)
+        .chain(ancestors)
+        .chain(once(connector))
+        .collect()
 }

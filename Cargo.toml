@@ -18,6 +18,8 @@ rustix = { version = "1", features = ["fs", "process", "stdio", "system", "termi
 serde = { version = "1.0.229", features = ["derive"] }
 signal-hook = "0.4"
 toml = "1.1.8"
+unicode-truncate = "2.0"
+unicode-width = "0.2"
 
 [profile.release]
 lto = "thin"

@@ -13,15 +13,16 @@ use ratatui::{
     widgets::{Row, Table, Widget},
 };
 
-use super::{rule, unit_count};
+use super::{fit_width, rule, unit_count};
 use crate::{
     glyphs::Glyphs,
-    model::{FinishedRun, MilestoneRow, PendingRow},
+    model::{FinishedRun, MilestoneRow, TreeRow},
     palette::Palette,
 };
 
 pub const LABEL_WIDTH: u16 = 28;
 pub const CHROME_HEIGHT: u16 = 3;
+const MARK_WIDTH: u16 = 2;
 const KERNEL_ORIGIN_LABEL: &str = "kernel";
 const AXIS_LABEL_SPACING: u16 = 8;
 const AXIS_STEPS: [Duration; 12] = [
@@ -48,7 +49,7 @@ pub struct Timeline<'a> {
     pub root_switches: Vec<Duration>,
     pub milestones: Vec<MilestoneRow>,
     pub finished: Vec<&'a FinishedRun>,
-    pub running: Vec<&'a PendingRow>,
+    pub running: Vec<&'a TreeRow>,
     pub palette: &'a Palette,
     pub glyphs: &'a Glyphs,
 }
@@ -112,7 +113,7 @@ impl Timeline<'_> {
         TimelineEntry {
             label: Line::from(vec![
                 Span::styled(format!("{mark} "), outcome),
-                run.label.as_str().fg(self.palette.waiting),
+                self.fitted(&run.label).fg(self.palette.waiting),
             ]),
             segments: vec![Segment {
                 from: run.started_at,
@@ -124,7 +125,15 @@ impl Timeline<'_> {
         }
     }
 
-    fn running_entry<'a>(&self, row: &'a PendingRow) -> TimelineEntry<'a> {
+    fn fitted(&self, label: &str) -> String {
+        fit_width(
+            label,
+            usize::from(LABEL_WIDTH - MARK_WIDTH),
+            self.glyphs.ellipsis,
+        )
+    }
+
+    fn running_entry<'a>(&self, row: &'a TreeRow) -> TimelineEntry<'a> {
         let since = row.running_since.unwrap_or(row.queued_at);
         let waited = (since > row.queued_at).then(|| Segment {
             from: row.queued_at,
@@ -141,7 +150,7 @@ impl Timeline<'_> {
         TimelineEntry {
             label: Line::from(vec![
                 format!("{} ", self.glyphs.running_mark).fg(self.palette.running),
-                row.label.as_str().fg(self.palette.text),
+                self.fitted(&row.label).fg(self.palette.text),
             ]),
             segments: waited.into_iter().chain(once(ran)).collect(),
             still_going_at: Some(self.now),

@@ -1,17 +1,18 @@
-use std::{iter::once, time::Duration};
+use std::time::Duration;
 
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
     style::Stylize,
-    text::Line,
-    widgets::{Block, Widget},
+    text::{Line, Span},
+    widgets::{Paragraph, Widget},
 };
 
-use super::{ELAPSED, RULE_STUB, rule, unit_count};
+use super::{BRANCH, ELAPSED, LAST_BRANCH, unit_count};
 use crate::{glyphs::Glyphs, model::BootState, palette::Palette};
 
 const SHUTDOWN_SUCCESSOR: &str = "systemd-shutdown";
+const PHASE_WIDTH: usize = 9;
 
 pub struct Stages<'a> {
     pub state: &'a BootState,
@@ -28,7 +29,7 @@ struct Conclusion<'a> {
 
 impl Stages<'_> {
     pub fn height(&self) -> u16 {
-        u16::try_from(self.state.finished_stages.len() + 1).unwrap_or(u16::MAX)
+        u16::try_from(self.lines().len()).unwrap_or(u16::MAX)
     }
 
     fn conclusion(&self) -> Option<Conclusion<'_>> {
@@ -51,78 +52,72 @@ impl Stages<'_> {
         })
     }
 
-    fn finished_rules(&self) -> impl Iterator<Item = Block<'static>> + '_ {
+    fn finished_phases(&self) -> impl Iterator<Item = Line<'static>> + '_ {
         self.state.finished_stages.iter().map(|stage| {
-            rule(
-                self.palette,
-                Line::from(vec![
-                    format!("{RULE_STUB} {} {RULE_STUB} ", stage.label).fg(self.palette.muted),
-                    format!(
-                        "{} done in {}",
-                        self.glyphs.bead,
-                        ELAPSED.unsigned_duration_to_string(
-                            &stage.reached_at.saturating_sub(stage.started_at)
-                        )
+            Line::from(vec![
+                BRANCH.fg(self.palette.muted),
+                format!("{:PHASE_WIDTH$}", stage.label).fg(self.palette.waiting),
+                format!(
+                    "{} done in {}",
+                    self.glyphs.bead,
+                    ELAPSED.unsigned_duration_to_string(
+                        &stage.reached_at.saturating_sub(stage.started_at)
                     )
-                    .fg(self.palette.done),
-                    format!(" · {} ", unit_count(stage.finished_units)).fg(self.palette.waiting),
-                ]),
-            )
+                )
+                .fg(self.palette.done),
+                format!(" · {}", unit_count(stage.finished_units)).fg(self.palette.waiting),
+                if stage.failed_units > 0 {
+                    format!(" · {} {} failed", self.glyphs.failed, stage.failed_units)
+                        .fg(self.palette.failed)
+                        .bold()
+                } else {
+                    Span::default()
+                },
+            ])
         })
     }
 
-    fn concluded_rule(&self, conclusion: &Conclusion) -> Block<'static> {
-        rule(
-            self.palette,
-            Line::from(vec![
-                format!("{RULE_STUB} ").fg(self.palette.muted),
-                format!(
-                    "{} {} finished in {}",
-                    self.glyphs.bead,
-                    conclusion.finished,
-                    ELAPSED.unsigned_duration_to_string(&conclusion.took)
-                )
-                .fg(self.palette.done)
-                .bold(),
-                format!(" · handing over to {} ", conclusion.handed_to).fg(self.palette.text),
-            ]),
-        )
+    fn concluded_phase(&self, conclusion: &Conclusion) -> Line<'static> {
+        Line::from(vec![
+            LAST_BRANCH.fg(self.palette.muted),
+            format!(
+                "{} {} finished in {}",
+                self.glyphs.bead,
+                conclusion.finished,
+                ELAPSED.unsigned_duration_to_string(&conclusion.took)
+            )
+            .fg(self.palette.done)
+            .bold(),
+            format!(" · handing over to {}", conclusion.handed_to).fg(self.palette.text),
+        ])
     }
 
-    fn current_rule(&self) -> Block<'static> {
+    pub fn current_phase(&self) -> Line<'static> {
+        if let Some(conclusion) = self.conclusion() {
+            return self.concluded_phase(&conclusion);
+        }
         let started_at = self
             .state
             .finished_stages
             .last()
             .map_or(self.state.origin, |stage| stage.reached_at);
         let elapsed = ELAPSED.unsigned_duration_to_string(&self.now.saturating_sub(started_at));
-        rule(
-            self.palette,
-            Line::from(vec![
-                format!("{RULE_STUB} ").fg(self.palette.muted),
-                self.state.phase.label().fg(self.palette.text).bold(),
-                " ".into(),
-            ]),
-        )
-        .title(
-            Line::from(vec![
-                " ".into(),
-                elapsed.fg(self.palette.text).bold(),
-                format!(" {RULE_STUB}").fg(self.palette.muted),
-            ])
-            .right_aligned(),
-        )
+        Line::from(vec![
+            LAST_BRANCH.fg(self.palette.muted),
+            format!("{:PHASE_WIDTH$}", self.state.phase.label())
+                .fg(self.palette.text)
+                .bold(),
+            elapsed.fg(self.palette.text),
+        ])
+    }
+
+    fn lines(&self) -> Vec<Line<'static>> {
+        self.finished_phases().collect()
     }
 }
 
 impl Widget for Stages<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let last = self.conclusion().map_or_else(
-            || self.current_rule(),
-            |conclusion| self.concluded_rule(&conclusion),
-        );
-        area.rows()
-            .zip(self.finished_rules().chain(once(last)))
-            .for_each(|(row, rule)| rule.render(row, buf));
+        Paragraph::new(self.lines()).render(area, buf);
     }
 }

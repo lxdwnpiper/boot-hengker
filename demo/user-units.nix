@@ -14,7 +14,7 @@ let
     name: spec:
     writeText "${name}.service" (toUnitFile {
       Unit = {
-        Description = "bootvine demo: ${name}";
+        Description = spec.description;
         After = map (dependency: "${dependency}.service") (spec.after or [ ]);
       };
       Service = {
@@ -34,7 +34,7 @@ let
 
   targetFile = writeText "${demoUnits.target}.target" (toUnitFile {
     Unit = {
-      Description = "bootvine demo target";
+      Description = "bootvine demo services";
       Wants = serviceNames;
       After = serviceNames;
     };

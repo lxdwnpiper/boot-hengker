@@ -7,6 +7,7 @@ use std::{
 use bootvine::{
     glyphs::Glyphs,
     model::{ActiveState, Activity, BootState, JobKind, JobResult, Phase, UnitFacts},
+    origin::BootOrigin,
     palette::Palette,
     view::BootView,
 };
@@ -146,8 +147,19 @@ const HOST: &[Step] = &[
         Duration::from_millis(800),
     ),
     step(
+        "docker.socket",
+        &["basic.target"],
+        Duration::from_millis(200),
+    ),
+    step("var-lib-docker.mount", &[], Duration::from_millis(1800)),
+    step(
         "docker.service",
-        &["containerd.service", "network-online.target"],
+        &[
+            "containerd.service",
+            "docker.socket",
+            "var-lib-docker.mount",
+            "network-online.target",
+        ],
         Duration::from_millis(1500),
     ),
     failing(
@@ -167,6 +179,38 @@ const HOST: &[Step] = &[
     ),
 ];
 
+fn description(unit: &str) -> &'static str {
+    match unit {
+        "initrd.target" => "Initrd Default Target",
+        "initrd-fs.target" => "Initrd File Systems",
+        "initrd-root-device.target" => "Initrd Root Device",
+        "sysroot.mount" => "/sysroot",
+        "systemd-fsck-root.service" => "File System Check on Root Device",
+        "dev-disk-by\\x2dlabel-nixos.device" => "/dev/disk/by-label/nixos",
+        "systemd-udevd.service" => "Rule-based Manager for Device Events and Files",
+        "demo-initrd-probe.service" => "Slow hardware probe",
+        "graphical.target" => "Graphical Interface",
+        "display-manager.service" => "Display Manager",
+        "multi-user.target" => "Multi-User System",
+        "basic.target" => "Basic System",
+        "sysinit.target" => "System Initialization",
+        "systemd-tmpfiles-setup.service" => "Create System Files and Directories",
+        "systemd-udev-trigger.service" => "Coldplug All udev Devices",
+        "NetworkManager.service" => "Network Manager",
+        "NetworkManager-wait-online.service" => "Network Manager Wait Online",
+        "network-online.target" => "Network is Online",
+        "tailscaled.service" => "Tailscale node agent",
+        "containerd.service" => "containerd container runtime",
+        "docker.socket" => "Docker Socket for the API",
+        "docker.service" => "Docker Application Container Engine",
+        "var-lib-docker.mount" => "/var/lib/docker",
+        "nvidia-powerd.service" => "NVIDIA Dynamic Boost",
+        "sys-devices-virtual-misc-rfkill.device" => "/sys/devices/virtual/misc/rfkill",
+        "systemd-rfkill.service" => "Load/Save RF Kill Switch Status",
+        _ => "",
+    }
+}
+
 struct ScriptedJob {
     id: u32,
     step: &'static Step,
@@ -176,7 +220,7 @@ impl ScriptedJob {
     fn facts(&self) -> UnitFacts {
         UnitFacts {
             name: self.step.unit.to_owned(),
-            description: self.step.unit.to_owned(),
+            description: description(self.step.unit).to_owned(),
             after: self.step.after.iter().map(ToString::to_string).collect(),
             before: Vec::new(),
         }
@@ -297,6 +341,12 @@ fn wants_to_quit() -> io::Result<bool> {
 fn play(terminal: &mut DefaultTerminal) -> io::Result<()> {
     let clock = Instant::now();
     let now = || clock.elapsed();
+    let origin = BootOrigin {
+        host: "demo".to_owned(),
+        system: "NixOS 26.11.20261007.39ad350".to_owned(),
+        generation: "42".to_owned(),
+        kernel: "Linux 7.2.9".to_owned(),
+    };
     let mut state = BootState::new(Phase::Initrd);
     let mut script = Script::begin(INITRD, 1, &mut state, now());
     let mut frame = 0;
@@ -314,7 +364,7 @@ fn play(terminal: &mut DefaultTerminal) -> io::Result<()> {
                     palette: &Palette::default(),
                     glyphs: &Glyphs::default(),
                     now: now(),
-                    host: "demo",
+                    origin: &origin,
                     frame,
                 },
                 canvas.area(),

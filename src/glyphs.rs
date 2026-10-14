@@ -7,6 +7,8 @@ pub struct Glyphs {
     pub still_going: char,
     pub running_mark: char,
     pub root_switch_mark: char,
+    pub stage_current: char,
+    pub stage_upcoming: char,
     pub ellipsis: &'static str,
     pub chain_link: &'static str,
 }
@@ -18,6 +20,7 @@ const WAITING_BEAD: [char; 2] = ['·', '.'];
 const STILL_GOING: [char; 2] = ['▶', '>'];
 const RUNNING_MARK: [char; 3] = ['►', '▶', '>'];
 const ROOT_SWITCH_MARK: [char; 2] = ['│', '|'];
+const STAGE_MARKS: [&str; 3] = ["◆◇", "●○", "*o"];
 const ELLIPSIS: [&str; 2] = ["…", "..."];
 const CHAIN_LINK: [&str; 2] = ["─", "-"];
 
@@ -43,6 +46,7 @@ impl Glyphs {
                 .find(|candidate| candidate.chars().all(&covers))
                 .unwrap_or(candidates[candidates.len() - 1])
         };
+        let stage_marks: Vec<char> = text(&STAGE_MARKS).chars().collect();
         Self {
             done: symbol(&DONE),
             failed: symbol(&FAILED),
@@ -51,6 +55,8 @@ impl Glyphs {
             still_going: symbol(&STILL_GOING),
             running_mark: symbol(&RUNNING_MARK),
             root_switch_mark: symbol(&ROOT_SWITCH_MARK),
+            stage_current: stage_marks[0],
+            stage_upcoming: stage_marks[1],
             ellipsis: text(&ELLIPSIS),
             chain_link: text(&CHAIN_LINK),
         }
@@ -75,6 +81,7 @@ mod tests {
         assert_eq!(glyphs.running_mark, '▶');
         assert_eq!(glyphs.failed, '×');
         assert_eq!(glyphs.ellipsis, "…");
+        assert_eq!((glyphs.stage_current, glyphs.stage_upcoming), ('*', 'o'));
     }
 
     #[test]
@@ -84,6 +91,7 @@ mod tests {
         assert_eq!(glyphs.failed, 'x');
         assert_eq!(glyphs.ellipsis, "...");
         assert_eq!(glyphs.chain_link, "─");
+        assert_eq!((glyphs.stage_current, glyphs.stage_upcoming), ('*', 'o'));
     }
 
     #[test]
