@@ -2,11 +2,10 @@
 
 A live tree of systemd jobs on the boot console, in the spirit of
 nix-output-monitor. It replaces the scrolling kernel and systemd lines with the
-units still pending and a timeline of the ones that ran.
+units still pending and, in the room the tree leaves, a timeline of the slowest
+ones that ran.
 
-![The initrd: pending units on top, the timeline below](docs/initrd.png)
-![Stage 2: the initrd collapsed, a failed unit, three still running](docs/stage-2.png)
-![Shutdown: the unit still stopping at the end of the chain waiting on it](docs/shutdown.png)
+![A boot through the initrd into stage 2, with one failed unit](docs/boot.gif)
 
 It needs systemd ≥ 246 as PID 1, libdbus and a virtual terminal (it draws on
 tty12). With a systemd initrd it starts about a second after the kernel and
@@ -20,13 +19,16 @@ It also follows shutdowns and reboots: the units being stopped, nested under
 the units that have to stop first, until systemd hands over to
 `systemd-shutdown`.
 
+![A poweroff: units stopping under the targets waiting on them](docs/shutdown.gif)
+
 ## Try
 
 ```sh
-cargo run --example demo
+cargo run --example boot
+cargo run --example shutdown
 ```
 
-plays a scripted boot without systemd; `q` quits. `nix run .#vm` boots a demo
+play a scripted boot or poweroff without systemd; `q` quits. `nix run .#vm` boots a demo
 VM in a window.
 
 ## Install

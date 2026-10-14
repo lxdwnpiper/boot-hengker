@@ -7,6 +7,7 @@ version = "0.1.0"
 absolute_paths = "warn"
 pedantic = { priority = -1, level = "warn" }
 needless_for_each = "allow"
+missing_errors_doc = "allow"
 
 [dependencies]
 clap = { version = "4.6.7", features = ["derive"] }

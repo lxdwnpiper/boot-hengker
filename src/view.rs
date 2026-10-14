@@ -1,6 +1,4 @@
-mod footer;
-mod header;
-mod prompt;
+mod chrome;
 mod stages;
 mod timeline;
 mod tree;
@@ -17,9 +15,11 @@ use ratatui::{
 use unicode_truncate::UnicodeTruncateStr;
 use unicode_width::UnicodeWidthStr;
 
-pub use self::prompt::PasswordPrompt;
+pub use self::chrome::PasswordPrompt;
 use self::{
-    footer::Footer, header::Header, prompt::PasswordBar, stages::Stages, timeline::Timeline,
+    chrome::{FOOTER_HEIGHT, Footer, Header, PasswordBar},
+    stages::Stages,
+    timeline::Timeline,
     tree::UnitTree,
 };
 use crate::{
@@ -127,7 +127,6 @@ impl Widget for BootView<'_> {
         let timeline = self.timeline(&pruned_rows);
         let footer = Footer {
             tally: self.state.tally(),
-            shows_root_switch: !self.state.finished_stages.is_empty(),
             palette: self.palette,
             glyphs: self.glyphs,
         };
@@ -135,14 +134,21 @@ impl Widget for BootView<'_> {
             && area.height >= MIN_HEIGHT_FOR_TIMELINE;
         let free = area
             .height
-            .saturating_sub(HEADER_HEIGHT + stages.height() + footer::HEIGHT);
+            .saturating_sub(HEADER_HEIGHT + stages.height() + FOOTER_HEIGHT);
+        let whole_tree = fit_to_height(all_rows.clone(), usize::MAX);
+        let whole_tree_height = UnitTree {
+            phase: pruned.phase.clone(),
+            rows: &whole_tree,
+            hidden: 0,
+            ..pruned
+        }
+        .height();
         let heights = Heights::share(
             free,
-            pruned.height(),
+            whole_tree_height,
             if fits_timeline { timeline.height() } else { 0 },
         );
         let budget = usize::from(heights.tree.saturating_sub(1));
-        let whole_tree = fit_to_height(all_rows.clone(), usize::MAX);
         let rows = [whole_tree.clone(), fold_chains(whole_tree)]
             .into_iter()
             .find(|rows| rows.len() <= budget)
@@ -167,7 +173,7 @@ impl Widget for BootView<'_> {
             Constraint::Length(tree_height),
             Constraint::Fill(1),
             Constraint::Length(heights.timeline),
-            Constraint::Length(footer::HEIGHT),
+            Constraint::Length(FOOTER_HEIGHT),
         ])
         .areas(area);
 
@@ -196,9 +202,12 @@ struct Heights {
 
 impl Heights {
     fn share(free: u16, tree_need: u16, timeline_need: u16) -> Self {
-        let timeline = timeline_need
-            .min(free.saturating_sub(tree_need).max(MIN_TIMELINE_HEIGHT))
-            .min(free);
+        let leftover = free.saturating_sub(tree_need);
+        let timeline = if leftover >= MIN_TIMELINE_HEIGHT {
+            timeline_need.min(leftover)
+        } else {
+            0
+        };
         Self {
             tree: free - timeline,
             timeline,
@@ -363,20 +372,20 @@ mod tests {
             "{screen}"
         );
         assert!(
-            lines[timeline + 3].starts_with("√ sysinit.target (2 units)"),
+            lines[timeline + 2].starts_with("√ sysinit.target (2 units)"),
             "{screen}"
         );
-        assert!(lines[timeline + 4].starts_with("√ udev-settle"), "{screen}");
-        assert!(lines[timeline + 4].contains('■'), "{screen}");
+        assert!(lines[timeline + 3].starts_with("√ udev-settle"), "{screen}");
+        assert!(lines[timeline + 3].contains('■'), "{screen}");
         assert!(
-            lines[timeline + 5].starts_with("► systemd-rfkill"),
+            lines[timeline + 4].starts_with("► systemd-rfkill"),
             "{screen}"
         );
         assert!(
-            lines[timeline + 5].contains("·■") && lines[timeline + 5].ends_with('▶'),
+            lines[timeline + 4].contains("·■") && lines[timeline + 4].ends_with('▶'),
             "{screen}"
         );
-        assert!(lines[timeline + 6].starts_with("► docker"), "{screen}");
+        assert!(lines[timeline + 5].starts_with("► docker"), "{screen}");
         assert!(
             lines[timeline..].iter().all(|line| !line.contains(" web")),
             "{screen}"
@@ -528,7 +537,7 @@ mod tests {
 
     #[test]
     fn chains_fold_when_short_and_shorten_to_their_ends_when_narrow() {
-        let short = render(&chain_boot(), 5000 * MS, 110, 13);
+        let short = render(&chain_boot(), 5000 * MS, 110, 9);
         assert!(
             short[3]
                 .starts_with("      └─ [ ] network-wait ─ network.target ─ network-manager ─ dbus"),
@@ -693,18 +702,9 @@ mod tests {
             .iter()
             .position(|line| line.contains(" timeline "))
             .expect("timeline panel");
-        let marker_column = |line: &str| line.chars().position(|symbol| symbol == '│');
-        let switch_column = marker_column(&lines[timeline + 2]).expect("root switch marker");
-        assert!(
-            lines[timeline + 3].starts_with("√ initrd (1 unit)"),
-            "{screen}"
-        );
-        assert_eq!(
-            marker_column(&lines[timeline + 3]),
-            Some(switch_column),
-            "{screen}"
-        );
-        assert!(screen.contains("│ root switch"), "{screen}");
+        let initrd_bar = &lines[timeline + 2];
+        assert!(initrd_bar.starts_with("√ initrd (1 unit)"), "{screen}");
+        assert!(initrd_bar.ends_with("■│"), "{screen}");
     }
 
     #[test]
@@ -754,12 +754,54 @@ mod tests {
     }
 
     #[test]
-    fn a_long_tree_keeps_the_room_and_leaves_the_timeline_a_strip() {
+    fn the_tree_takes_the_room_and_the_timeline_only_what_is_left() {
         let heights = Heights::share(30, 40, 50);
-        assert_eq!(heights.timeline, MIN_TIMELINE_HEIGHT);
-        assert_eq!(heights.tree, 30 - MIN_TIMELINE_HEIGHT);
+        assert_eq!((heights.tree, heights.timeline), (30, 0));
         let heights = Heights::share(30, 12, 50);
         assert_eq!((heights.tree, heights.timeline), (12, 18));
+        let heights = Heights::share(30, 25, 50);
+        assert_eq!((heights.tree, heights.timeline), (30, 0));
+        let heights = Heights::share(30, 12, 8);
+        assert_eq!((heights.tree, heights.timeline), (22, 8));
+    }
+
+    #[test]
+    fn the_timeline_keeps_only_the_slowest_finished_runs() {
+        let mut state = BootState::new(Phase::Host);
+        state.set_root("multi-user.target".to_owned());
+        let quick_units: Vec<String> = (0..10).map(|n| format!("run{n:02}.service")).collect();
+        let after: Vec<&str> = quick_units
+            .iter()
+            .map(String::as_str)
+            .chain(["slow.service"])
+            .collect();
+        state.track_unit(facts("multi-user.target", &after), Activity::default());
+        state.queue_job(100, "multi-user.target", JobKind::BringsUp, Duration::ZERO);
+        state.track_unit(facts("slow.service", &[]), running_since(Duration::ZERO));
+        state.queue_job(101, "slow.service", JobKind::BringsUp, Duration::ZERO);
+        quick_units.iter().zip(0..).for_each(|(name, id)| {
+            state.track_unit(facts(name, &[]), running_since(Duration::ZERO));
+            state.queue_job(id, name, JobKind::BringsUp, Duration::ZERO);
+            state.finish_job(id, JobResult::Done, (1000 + 1000 * id) * MS);
+        });
+        let lines = render(&state, 20_000 * MS, 110, 40);
+        let screen = lines.join("\n");
+        let timeline = lines
+            .iter()
+            .position(|line| line.contains(" timeline "))
+            .expect("timeline panel");
+        let (tree, panel) = lines.split_at(timeline);
+        assert!(tree.iter().all(|line| !line.contains('…')), "{screen}");
+        let shown: Vec<&str> = quick_units
+            .iter()
+            .map(|name| name.trim_end_matches(".service"))
+            .filter(|label| panel.iter().any(|line| line.contains(label)))
+            .collect();
+        assert_eq!(
+            shown,
+            ["run05", "run06", "run07", "run08", "run09"],
+            "{screen}"
+        );
     }
 
     #[test]

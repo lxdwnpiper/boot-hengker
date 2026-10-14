@@ -159,8 +159,7 @@ struct ForegroundVt {
 }
 
 fn active_vt() -> Option<u16> {
-    let state: VtState =
-        unsafe { ioctl(stdin(), Getter::<VT_GETSTATE, VtState>::new()) }.ok()?;
+    let state: VtState = unsafe { ioctl(stdin(), Getter::<VT_GETSTATE, VtState>::new()) }.ok()?;
     Some(state.active)
 }
 
