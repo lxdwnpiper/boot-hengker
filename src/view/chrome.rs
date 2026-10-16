@@ -2,13 +2,13 @@ use std::{iter::once, time::Duration};
 
 use ratatui::{
     buffer::Buffer,
-    layout::Rect,
-    style::Stylize,
+    layout::{Constraint, Rect},
+    style::{Style, Stylize},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Widget},
+    widgets::{Block, Borders, Clear, Padding, Paragraph, Widget, Wrap},
 };
 
-use super::{DURATION_WIDTH, ELAPSED, rule};
+use super::{DURATION_WIDTH, ELAPSED};
 use crate::{glyphs::Glyphs, model::Tally, origin::BootOrigin, palette::Palette};
 
 pub const FOOTER_HEIGHT: u16 = 2;
@@ -92,27 +92,57 @@ pub struct PasswordPrompt<'a> {
     pub sent: bool,
 }
 
-pub struct PasswordBar<'a> {
+pub struct PasswordPopup<'a> {
     pub asking: &'a PasswordPrompt<'a>,
     pub palette: &'a Palette,
     pub glyphs: &'a Glyphs,
 }
 
-impl Widget for PasswordBar<'_> {
-    fn render(self, area: Rect, buf: &mut Buffer) {
-        let status = if self.asking.sent {
-            format!(" Checking{}", self.glyphs.ellipsis).fg(self.palette.waiting)
+impl PasswordPopup<'_> {
+    const MIN_WIDTH: u16 = 40;
+
+    fn input(&self) -> Line<'static> {
+        if self.asking.sent {
+            Line::from(format!("Checking{}", self.glyphs.ellipsis).fg(self.palette.waiting))
         } else {
-            format!(" {}_", self.asking.input).fg(self.palette.text)
-        };
-        Paragraph::new(Line::from(vec![
-            self.asking.message.fg(self.palette.running).bold(),
-            status,
-        ]))
-        .block(rule(
-            self.palette,
-            Line::from(" Password ".fg(self.palette.running)),
-        ))
-        .render(area, buf);
+            Line::from(vec![
+                "> ".fg(self.palette.running),
+                format!("{}_", self.asking.input).fg(self.palette.text),
+            ])
+        }
+    }
+
+    fn paragraph(&self) -> Paragraph<'_> {
+        Paragraph::new(vec![
+            Line::from(self.asking.message.fg(self.palette.text).bold()),
+            Line::default(),
+            self.input(),
+        ])
+        .wrap(Wrap { trim: false })
+        .block(
+            Block::bordered()
+                .border_style(self.palette.running)
+                .padding(Padding::horizontal(2))
+                .title(" Password ".fg(self.palette.running).bold())
+                .title_bottom(
+                    Line::from(" Enter unlock · Ctrl+U clear ".fg(self.palette.muted))
+                        .right_aligned(),
+                ),
+        )
+    }
+}
+
+impl Widget for PasswordPopup<'_> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        buf.set_style(area, Style::new().fg(self.palette.muted));
+        let paragraph = self.paragraph();
+        let width = u16::try_from(paragraph.line_width())
+            .unwrap_or(u16::MAX)
+            .max(Self::MIN_WIDTH)
+            .min(area.width);
+        let height = u16::try_from(paragraph.line_count(width)).unwrap_or(u16::MAX);
+        let popup = area.centered(Constraint::Length(width), Constraint::Length(height));
+        Clear.render(popup, buf);
+        paragraph.render(popup, buf);
     }
 }

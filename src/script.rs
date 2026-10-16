@@ -15,11 +15,14 @@ use crate::{
     model::{ActiveState, Activity, BootState, JobKind, JobResult, Phase, UnitFacts},
     origin::BootOrigin,
     palette::Palette,
-    view::BootView,
+    passphrase,
+    view::{BootView, PasswordPrompt},
 };
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(100);
 const FINAL_FRAME: Duration = Duration::from_secs(3);
+
+pub const DEMO_PASSPHRASE: &str = "demo";
 
 pub struct Step {
     unit: &'static str,
@@ -27,6 +30,7 @@ pub struct Step {
     work: Duration,
     fails: bool,
     stops: bool,
+    asks: Option<&'static str>,
 }
 
 #[must_use]
@@ -37,28 +41,36 @@ pub const fn step(unit: &'static str, after: &'static [&'static str], work: Dura
         work,
         fails: false,
         stops: false,
+        asks: None,
     }
 }
 
 #[must_use]
 pub const fn failing(unit: &'static str, after: &'static [&'static str], work: Duration) -> Step {
     Step {
-        unit,
-        after,
-        work,
         fails: true,
-        stops: false,
+        ..step(unit, after, work)
     }
 }
 
 #[must_use]
 pub const fn stopping(unit: &'static str, after: &'static [&'static str], work: Duration) -> Step {
     Step {
-        unit,
-        after,
-        work,
-        fails: false,
         stops: true,
+        ..step(unit, after, work)
+    }
+}
+
+#[must_use]
+pub const fn unlocking(
+    unit: &'static str,
+    after: &'static [&'static str],
+    message: &'static str,
+    key_derivation: Duration,
+) -> Step {
+    Step {
+        asks: Some(message),
+        ..step(unit, after, key_derivation)
     }
 }
 
@@ -127,10 +139,12 @@ impl ScriptedJob {
     }
 
     fn settled_activity(&self, now: Duration) -> Activity {
-        let state = match (self.step.fails, self.step.stops) {
-            (true, _) => ActiveState::Failed,
-            (false, true) => ActiveState::Inactive,
-            (false, false) => ActiveState::Active,
+        let state = if self.step.fails {
+            ActiveState::Failed
+        } else if self.step.stops {
+            ActiveState::Inactive
+        } else {
+            ActiveState::Active
         };
         Activity {
             state: Some(state),
@@ -144,6 +158,13 @@ struct Script {
     jobs: Vec<ScriptedJob>,
     started: HashMap<&'static str, Duration>,
     finished: HashSet<&'static str>,
+    answer: Option<Answer>,
+}
+
+#[derive(Clone, Copy)]
+struct Answer {
+    checked_at: Duration,
+    unlocks: bool,
 }
 
 impl Script {
@@ -169,7 +190,38 @@ impl Script {
             jobs,
             started: HashMap::new(),
             finished: HashSet::new(),
+            answer: None,
         }
+    }
+
+    fn asking(&self) -> Option<&'static Step> {
+        self.jobs.iter().map(|job| job.step).find(|step| {
+            step.asks.is_some()
+                && self.started.contains_key(step.unit)
+                && !self.finished.contains(step.unit)
+        })
+    }
+
+    fn is_checking(&self, now: Duration) -> bool {
+        self.answer.is_some_and(|answer| now < answer.checked_at)
+    }
+
+    fn prompt(&self, typed: &str, now: Duration) -> Option<PasswordPrompt<'static>> {
+        Some(PasswordPrompt {
+            message: self.asking()?.asks?,
+            input: passphrase::masked(typed),
+            sent: self.is_checking(now),
+        })
+    }
+
+    fn answer(&mut self, submitted: &str, now: Duration) {
+        let Some(step) = self.asking() else {
+            return;
+        };
+        self.answer = Some(Answer {
+            checked_at: now + step.work,
+            unlocks: submitted == DEMO_PASSPHRASE,
+        });
     }
 
     fn is_ready(&self, job: &ScriptedJob) -> bool {
@@ -186,11 +238,17 @@ impl Script {
     }
 
     fn is_due(&self, job: &ScriptedJob, now: Duration) -> bool {
-        !self.finished.contains(job.step.unit)
-            && self
+        let done_at = match job.step.asks {
+            Some(_) => self
+                .answer
+                .filter(|answer| answer.unlocks)
+                .map(|answer| answer.checked_at),
+            None => self
                 .started
                 .get(job.step.unit)
-                .is_some_and(|started| now >= *started + job.step.work)
+                .map(|started| *started + job.step.work),
+        };
+        !self.finished.contains(job.step.unit) && done_at.is_some_and(|done_at| now >= done_at)
     }
 
     fn advance(&mut self, state: &mut BootState, now: Duration) {
@@ -224,12 +282,18 @@ impl Script {
     }
 }
 
-fn wants_to_quit() -> io::Result<bool> {
-    if !event::poll(FRAME_INTERVAL)? {
-        return Ok(false);
+fn next_event() -> io::Result<Option<Event>> {
+    if event::poll(FRAME_INTERVAL)? {
+        event::read().map(Some)
+    } else {
+        Ok(None)
     }
-    Ok(
-        matches!(event::read()?, Event::Key(key) if matches!(key.code, KeyCode::Char('q') | KeyCode::Esc)),
+}
+
+fn quits(event: &Event, typing: bool) -> bool {
+    matches!(
+        event,
+        Event::Key(key) if key.code == KeyCode::Esc || (!typing && key.code == KeyCode::Char('q'))
     )
 }
 
@@ -247,6 +311,7 @@ pub fn play(terminal: &mut DefaultTerminal, scenario: &Scenario) -> io::Result<(
     let mut switched_root = scenario.after_switch_root.is_empty();
     let mut settled_at = None;
     let mut frame = 0;
+    let mut typed = passphrase::empty();
     loop {
         script.advance(&mut state, now());
         if script.is_done() && !switched_root {
@@ -270,7 +335,7 @@ pub fn play(terminal: &mut DefaultTerminal, scenario: &Scenario) -> io::Result<(
                     now: now(),
                     origin: &origin,
                     frame,
-                    password_prompt: None,
+                    password_prompt: script.prompt(&typed, now()),
                 },
                 canvas.area(),
             );
@@ -279,8 +344,17 @@ pub fn play(terminal: &mut DefaultTerminal, scenario: &Scenario) -> io::Result<(
         {
             return Ok(());
         }
-        if wants_to_quit()? {
-            return Ok(());
+        if let Some(event) = next_event()? {
+            let asking = script.asking().is_some();
+            if quits(&event, asking) {
+                return Ok(());
+            }
+            if asking
+                && !script.is_checking(now())
+                && let Some(submitted) = passphrase::type_key(&mut typed, &event)
+            {
+                script.answer(&submitted, now());
+            }
         }
         frame += 1;
     }

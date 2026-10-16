@@ -26,9 +26,12 @@ the units that have to stop first, until systemd hands over to
 ```sh
 cargo run --example boot
 cargo run --example shutdown
+cargo run --example luks
 ```
 
-play a scripted boot or poweroff without systemd; `q` quits. `nix run .#vm` boots a demo
+play a scripted boot, poweroff or boot from an encrypted root without systemd;
+`q` quits. The encrypted root unlocks with the passphrase `demo`; `Esc` quits
+while it asks. `nix run .#vm` boots a demo
 VM in a window.
 
 ## Install

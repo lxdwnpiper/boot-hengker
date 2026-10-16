@@ -17,7 +17,7 @@ use unicode_width::UnicodeWidthStr;
 
 pub use self::chrome::PasswordPrompt;
 use self::{
-    chrome::{FOOTER_HEIGHT, Footer, Header, PasswordBar},
+    chrome::{FOOTER_HEIGHT, Footer, Header, PasswordPopup},
     stages::Stages,
     timeline::Timeline,
     tree::UnitTree,
@@ -183,14 +183,14 @@ impl Widget for BootView<'_> {
         if heights.timeline > 0 {
             timeline.render(timeline_area, buf);
         }
-        match &self.password_prompt {
-            Some(asking) => PasswordBar {
+        footer.render(footer_area, buf);
+        if let Some(asking) = &self.password_prompt {
+            PasswordPopup {
                 asking,
                 palette: self.palette,
                 glyphs: self.glyphs,
             }
-            .render(footer_area, buf),
-            None => footer.render(footer_area, buf),
+            .render(area, buf);
         }
     }
 }
@@ -260,6 +260,16 @@ mod tests {
     }
 
     fn render(state: &BootState, now: Duration, width: u16, height: u16) -> Vec<String> {
+        screen_lines(&render_prompted(state, now, width, height, None))
+    }
+
+    fn render_prompted(
+        state: &BootState,
+        now: Duration,
+        width: u16,
+        height: u16,
+        password_prompt: Option<PasswordPrompt>,
+    ) -> Buffer {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("test backend");
         terminal
             .draw(|frame| {
@@ -277,16 +287,20 @@ mod tests {
                             kernel: "Linux 7.2.9".to_owned(),
                         },
                         frame: 1,
-                        password_prompt: None,
+                        password_prompt,
                     },
                     frame.area(),
                 );
             })
             .expect("draw");
-        let buffer = terminal.backend().buffer().clone();
-        (0..height)
+        terminal.backend().buffer().clone()
+    }
+
+    fn screen_lines(buffer: &Buffer) -> Vec<String> {
+        let area = buffer.area;
+        (0..area.height)
             .map(|y| {
-                let line: String = (0..width)
+                let line: String = (0..area.width)
                     .map(|x| buffer[(x, y)].symbol().to_owned())
                     .collect();
                 line.trim_end().to_owned()
@@ -475,6 +489,89 @@ mod tests {
         assert!(lines[2].ends_with("multi-user.target"), "{screen}");
         assert!(lines[3].ends_with("6.4s"), "{screen}");
         assert!(lines[5].ends_with("web"), "{screen}");
+    }
+
+    const CRYPTSETUP_MESSAGE: &str =
+        "Please enter passphrase for disk Samsung SSD 980 PRO 1TB (cryptroot):";
+
+    #[test]
+    fn password_prompt_floats_over_a_dimmed_view() {
+        let buffer = render_prompted(
+            &boot_in_progress(),
+            12_400 * MS,
+            110,
+            24,
+            Some(PasswordPrompt {
+                message: CRYPTSETUP_MESSAGE,
+                input: "***".to_owned(),
+                sent: false,
+            }),
+        );
+        let lines = screen_lines(&buffer);
+        let screen = lines.join("\n");
+        let title_row = lines
+            .iter()
+            .position(|line| line.contains("┌ Password "))
+            .unwrap_or_else(|| panic!("{screen}"));
+        assert!(lines[title_row].starts_with(' '), "{screen}");
+        assert!(
+            lines[title_row + 1].contains(&format!("│  {CRYPTSETUP_MESSAGE}")),
+            "{screen}"
+        );
+        assert!(lines[title_row + 3].contains("│  > ***_"), "{screen}");
+        assert!(lines[title_row + 4].contains("Enter unlock"), "{screen}");
+        assert!(
+            lines[23].starts_with("√ 2 done   2 running   3 waiting   × 1 failed"),
+            "{screen}"
+        );
+        assert_eq!(buffer[(0, 0)].fg, Palette::default().muted, "{screen}");
+        let corner = buffer
+            .content
+            .iter()
+            .find(|cell| cell.symbol() == "┌")
+            .unwrap_or_else(|| panic!("{screen}"));
+        assert_eq!(corner.fg, Palette::default().running, "{screen}");
+    }
+
+    #[test]
+    fn answered_password_prompt_shows_it_is_checking() {
+        let lines = screen_lines(&render_prompted(
+            &boot_in_progress(),
+            12_400 * MS,
+            110,
+            24,
+            Some(PasswordPrompt {
+                message: CRYPTSETUP_MESSAGE,
+                input: String::new(),
+                sent: true,
+            }),
+        ));
+        assert!(
+            lines.iter().any(|line| line.contains("│  Checking…")),
+            "{}",
+            lines.join("\n")
+        );
+    }
+
+    #[test]
+    fn long_password_messages_wrap_inside_narrow_screens() {
+        let lines = screen_lines(&render_prompted(
+            &boot_in_progress(),
+            12_400 * MS,
+            50,
+            24,
+            Some(PasswordPrompt {
+                message: CRYPTSETUP_MESSAGE,
+                input: String::new(),
+                sent: false,
+            }),
+        ));
+        let screen = lines.join("\n");
+        assert!(
+            lines.iter().any(|line| line.contains("(cryptroot):")),
+            "{screen}"
+        );
+        assert!(lines.iter().any(|line| line.contains("> _")), "{screen}");
     }
 
     #[test]

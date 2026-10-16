@@ -5,8 +5,8 @@ use std::{
     time::Duration,
 };
 
-use bootvine::view::PasswordPrompt;
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use bootvine::{passphrase, view::PasswordPrompt};
+use crossterm::event::Event;
 use rustix::process::{Pid, test_kill_process};
 use zeroize::Zeroizing;
 
@@ -15,7 +15,6 @@ use crate::clock::monotonic_now;
 const REQUESTS: &str = "/run/systemd/ask-password";
 const REQUEST_PREFIX: &str = "ask.";
 const ASK_SECTION: &str = "[Ask]";
-const ROOM_FOR_TYPING: usize = 512;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct PasswordRequest {
@@ -137,16 +136,18 @@ impl PasswordEntry {
         );
         Some(Self {
             request,
-            typed: Zeroizing::new(String::with_capacity(ROOM_FOR_TYPING)),
+            typed: passphrase::empty(),
             sent: false,
         })
     }
 
     pub fn prompt(&self) -> PasswordPrompt<'_> {
-        let input = match (self.sent, self.request.echo, self.request.silent) {
-            (true, _, _) | (false, _, true) => String::new(),
-            (false, true, false) => self.typed.as_str().to_owned(),
-            (false, false, false) => "*".repeat(self.typed.chars().count()),
+        let input = if self.request.silent {
+            String::new()
+        } else if self.request.echo {
+            self.typed.to_string()
+        } else {
+            passphrase::masked(&self.typed)
         };
         PasswordPrompt {
             message: &self.request.message,
@@ -156,43 +157,23 @@ impl PasswordEntry {
     }
 
     pub fn type_key(&mut self, event: &Event) -> io::Result<()> {
-        let Event::Key(KeyEvent {
-            code,
-            modifiers,
-            kind: KeyEventKind::Press,
-            ..
-        }) = event
-        else {
-            return Ok(());
-        };
         if self.sent {
             return Ok(());
         }
-        match code {
-            KeyCode::Enter => {
-                self.request.answer(&self.typed)?;
-                self.sent = true;
-                self.typed.clear();
-                eprintln!("bootvine: answered a password prompt");
-            }
-            KeyCode::Backspace => {
-                self.typed.pop();
-            }
-            KeyCode::Char('u') if modifiers.contains(KeyModifiers::CONTROL) => self.typed.clear(),
-            KeyCode::Char(_) if modifiers.contains(KeyModifiers::CONTROL) => {}
-            KeyCode::Char(character)
-                if self.typed.len() + character.len_utf8() <= ROOM_FOR_TYPING =>
-            {
-                self.typed.push(*character);
-            }
-            _ => {}
-        }
+        let Some(submitted) = passphrase::type_key(&mut self.typed, event) else {
+            return Ok(());
+        };
+        self.request.answer(&submitted)?;
+        self.sent = true;
+        eprintln!("bootvine: answered a password prompt");
         Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use crossterm::event::{KeyCode, KeyEvent};
+
     use super::*;
 
     const CRYPTSETUP_ASK: &str = concat!(
@@ -236,7 +217,7 @@ mod tests {
     fn hides_what_is_typed() {
         let mut entry = PasswordEntry {
             request: PasswordRequest::parse(Path::new("ask.x"), CRYPTSETUP_ASK).expect("parsed"),
-            typed: Zeroizing::new(String::new()),
+            typed: passphrase::empty(),
             sent: false,
         };
         "secret".chars().for_each(|character| {
