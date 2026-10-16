@@ -144,11 +144,10 @@ fn watch(
     let mut frame: u64 = 0;
     let mut painted_connections = feed.connections;
     let mut last_full_repaint = Instant::now();
-    let mut next_frame = Instant::now() + FRAME_INTERVAL;
+    let mut next_frame = Instant::now();
     let requests = RequestWatch::open();
     let mut password_entry: Option<PasswordEntry> = None;
     loop {
-        feed.pump(state)?;
         if state.phase != origin_phase {
             origin = BootOrigin::read();
             origin_phase = state.phase;
@@ -225,5 +224,6 @@ fn watch(
                 None => {}
             }
         }
+        feed.pump(state)?;
     }
 }

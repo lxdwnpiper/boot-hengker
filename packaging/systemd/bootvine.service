@@ -2,7 +2,6 @@
 Description=Live dependency tree of boot jobs
 DefaultDependencies=no
 IgnoreOnIsolate=yes
-After=systemd-vconsole-setup.service
 Before=display-manager.service shutdown.target
 Conflicts=shutdown.target
 
