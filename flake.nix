@@ -64,8 +64,8 @@
     {
       packages = forEachSystem (
         { pkgs, craneLib, ... }:
-        {
-          default = craneLib.buildPackage {
+        let
+          commonArgs = {
             inherit (buildInputsFor pkgs) nativeBuildInputs buildInputs;
             src = lib.fileset.toSource {
               root = ./.;
@@ -75,20 +75,40 @@
               ];
             };
             strictDeps = true;
-            postInstall = ''
-              for unit in bootvine.service bootvine-shutdown.service; do
-                install -Dm644 packaging/systemd/$unit $out/lib/systemd/system/$unit
-                substituteInPlace $out/lib/systemd/system/$unit \
-                  --replace-fail /usr/bin/bootvine $out/bin/bootvine
-              done
-              install -Dm755 packaging/dracut/90bootvine/module-setup.sh \
-                $out/lib/dracut/modules.d/90bootvine/module-setup.sh
-              install -Dm644 packaging/mkinitcpio/install/sd-bootvine \
-                $out/lib/initcpio/install/sd-bootvine
-            '';
-            meta.mainProgram = "bootvine";
-            meta.platforms = lib.platforms.linux;
           };
+        in
+        {
+          examples = craneLib.buildPackage (
+            commonArgs
+            // {
+              pname = "bootvine-examples";
+              cargoExtraArgs = "--examples";
+              doCheck = false;
+              installPhaseCommand = ''
+                for example in boot shutdown; do
+                  install -Dm755 target/release/examples/$example $out/bin/bootvine-$example-example
+                done
+              '';
+            }
+          );
+          default = craneLib.buildPackage (
+            commonArgs
+            // {
+              postInstall = ''
+                for unit in bootvine.service bootvine-shutdown.service; do
+                  install -Dm644 packaging/systemd/$unit $out/lib/systemd/system/$unit
+                  substituteInPlace $out/lib/systemd/system/$unit \
+                    --replace-fail /usr/bin/bootvine $out/bin/bootvine
+                done
+                install -Dm755 packaging/dracut/90bootvine/module-setup.sh \
+                  $out/lib/dracut/modules.d/90bootvine/module-setup.sh
+                install -Dm644 packaging/mkinitcpio/install/sd-bootvine \
+                  $out/lib/initcpio/install/sd-bootvine
+              '';
+              meta.mainProgram = "bootvine";
+              meta.platforms = lib.platforms.linux;
+            }
+          );
           demo-units = pkgs.callPackage ./demo/user-units.nix { inherit demoUnits; };
         }
       );
@@ -98,7 +118,7 @@
       nixosConfigurations.demo = demoSystem "x86_64-linux";
 
       apps = forEachSystem (
-        { system, ... }:
+        { pkgs, system, ... }:
         {
           vm = {
             type = "app";
@@ -108,6 +128,27 @@
             type = "app";
             program = lib.getExe self.packages.${system}.demo-units;
           };
+          docs = {
+            type = "app";
+            program = lib.getExe (
+              pkgs.writeShellApplication {
+                name = "bootvine-docs";
+                runtimeInputs = [
+                  pkgs.vhs
+                  self.packages.${system}.examples
+                ];
+                text = ''
+                  if [ ! -d docs ]; then
+                    echo "no docs directory here; run from the repository root" >&2
+                    exit 1
+                  fi
+                  vhs ${./docs/boot.tape}
+                  vhs ${./docs/shutdown.tape}
+                  install -m644 -t docs ${self.checks.${system}.luks}/passphrase.png
+                '';
+              }
+            );
+          };
         }
       );
 
@@ -115,9 +156,9 @@
         { pkgs, system, ... }:
         {
           package = self.packages.${system}.default;
-          boot = pkgs.testers.runNixOSTest (import ./demo/test.nix { inherit demoHost; });
+          boot = pkgs.testers.runNixOSTest (import ./tests/boot.nix { inherit demoHost; });
           luks = pkgs.testers.runNixOSTest (
-            import ./demo/luks-test.nix { bootvineModule = self.nixosModules.default; }
+            import ./tests/luks.nix { bootvineModule = self.nixosModules.default; }
           );
         }
       );

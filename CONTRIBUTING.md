@@ -13,10 +13,16 @@ Work inside the dev shell (`direnv allow` once). Run `cargo clippy
 - `nix run .#demo-units -- start`, then
   `cargo run -- --user --target bootvine-demo.target --hold 3s`: live against
   your user manager.
-- `nix build .#checks.x86_64-linux.boot`: boots a VM and reads the screen with
-  OCR; screenshots land in `result/`. Run it by hand with
-  `nix run .#checks.x86_64-linux.boot.driverInteractive`, then `test_script()`.
-  The images in `docs/` are copies of these screenshots.
+- `nix build .#checks.x86_64-linux.<name>`: each `tests/<name>.nix` boots a VM
+  and runs `tests/console.py` followed by `tests/<name>.py`. `boot` follows
+  the initrd, stage 2 and a poweroff; `luks` answers a passphrase prompt in
+  the initrd. They read tty12 as text from `/dev/vcsu12`, hold the boot with
+  the initrd backdoor and gate files under `/run` instead of sleeping. Run one
+  by hand with `nix run .#checks.x86_64-linux.boot.driverInteractive`, then
+  `test_script()`.
+- `nix run .#docs`, from the repository root: renders `docs/boot.tape` and
+  `docs/shutdown.tape` with VHS against the scripted examples into the README
+  GIFs, and copies the passphrase screenshot from the `luks` check.
 
 Prefix the VM commands with `env -u LD_LIBRARY_PATH` when the shell exports
 libraries that clash with QEMU's.

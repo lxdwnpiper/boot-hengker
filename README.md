@@ -21,6 +21,11 @@ the units that have to stop first, until systemd hands over to
 
 <img src="docs/shutdown.gif" width="691" alt="A poweroff: units stopping under the targets waiting on them">
 
+Passphrase prompts, such as a LUKS unlock in the initrd, are answered in place
+over the tree.
+
+<img src="docs/passphrase.png" width="640" alt="A LUKS passphrase prompt floating over the initrd tree">
+
 ## Try
 
 ```sh

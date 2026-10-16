@@ -21,6 +21,7 @@ pub struct Console {
     foreground: Option<ForegroundVt>,
     for_system: bool,
     pub glyphs: Glyphs,
+    pub bold_is_brightness: bool,
 }
 
 impl Console {
@@ -38,6 +39,7 @@ impl Console {
             },
             for_system,
             glyphs: font_glyphs(),
+            bold_is_brightness: own_vt().is_some(),
         }
     }
 
@@ -163,16 +165,19 @@ fn active_vt() -> Option<u16> {
     Some(state.active)
 }
 
+fn own_vt() -> Option<u16> {
+    let name = ttyname(stdin(), Vec::new()).ok()?;
+    name.to_str()
+        .ok()?
+        .strip_prefix(VIRTUAL_TERMINAL_PREFIX)?
+        .parse()
+        .ok()
+        .filter(|number| *number > 0)
+}
+
 impl ForegroundVt {
     fn take() -> Option<Self> {
-        let name = ttyname(stdin(), Vec::new()).ok()?;
-        let own: u16 = name
-            .to_str()
-            .ok()?
-            .strip_prefix(VIRTUAL_TERMINAL_PREFIX)?
-            .parse()
-            .ok()
-            .filter(|number| *number > 0)?;
+        let own = own_vt()?;
         let previous = active_vt()?;
         if previous != own {
             activate(own).ok()?;

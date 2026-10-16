@@ -22,6 +22,7 @@ use ratatui::{
     DefaultTerminal,
     backend::Backend,
     buffer::{Buffer, CellDiffOption},
+    style::Modifier,
 };
 use rustix::{
     event::{PollFd, PollFlags, poll},
@@ -130,6 +131,13 @@ fn overwrite_every_cell<B: Backend>(backend: &mut B, frame: &Buffer) -> Result<(
     backend.flush()
 }
 
+fn drop_bold(frame: &mut Buffer) {
+    frame
+        .content
+        .iter_mut()
+        .for_each(|cell| cell.modifier.remove(Modifier::BOLD));
+}
+
 fn watch(
     state: &mut BootState,
     feed: &mut Feed,
@@ -180,6 +188,9 @@ fn watch(
                 },
                 canvas.area(),
             );
+            if console.bold_is_brightness {
+                drop_bold(canvas.buffer_mut());
+            }
         })?;
         if repaint_due {
             let painted = completed.buffer.clone();
