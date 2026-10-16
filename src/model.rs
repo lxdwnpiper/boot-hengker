@@ -481,12 +481,11 @@ impl BootState {
         if matches!(self.phase, Phase::Initrd | Phase::Shutdown) {
             return false;
         }
-        if let Some(handoff) = self
+        if self
             .handoff_unit
             .as_deref()
             .and_then(|unit| self.units.get(unit))
-            && handoff.job.is_some()
-            && handoff.state != ActiveState::Inactive
+            .is_some_and(|handoff| handoff.state != ActiveState::Inactive)
         {
             return true;
         }
@@ -1318,6 +1317,25 @@ mod tests {
         state.queue_job(20, HANDOFF_UNIT, JobKind::BringsUp, 500 * MS);
         assert!(!state.is_complete());
         state.update_activity(HANDOFF_UNIT, activating(6000 * MS));
+        assert!(state.is_complete());
+    }
+
+    #[test]
+    fn display_manager_started_in_one_step_hands_the_console_over() {
+        let mut state = sample();
+        state.track_unit(facts(HANDOFF_UNIT, &[]), Activity::default());
+        state.queue_job(20, HANDOFF_UNIT, JobKind::BringsUp, 500 * MS);
+        state.finish_job(20, JobResult::Done, 6000 * MS);
+        assert!(!state.is_complete());
+        state.update_activity(
+            HANDOFF_UNIT,
+            Activity {
+                state: Some(ActiveState::Active),
+                inactive_exit: Some(6000 * MS),
+                active_enter: Some(6000 * MS),
+                active_exit: None,
+            },
+        );
         assert!(state.is_complete());
     }
 
