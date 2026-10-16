@@ -16,7 +16,7 @@ use ratatui::{
 use super::{fit_width, rule, unit_count};
 use crate::{
     glyphs::Glyphs,
-    model::{FinishedRun, MilestoneRow, TreeRow},
+    model::{FinishedRun, MilestoneRow},
     palette::Palette,
 };
 
@@ -50,9 +50,15 @@ pub struct Timeline<'a> {
     pub root_switches: Vec<Duration>,
     pub milestones: Vec<MilestoneRow>,
     pub finished: Vec<&'a FinishedRun>,
-    pub running: Vec<&'a TreeRow>,
+    pub running: Vec<RunningRun<'a>>,
     pub palette: &'a Palette,
     pub glyphs: &'a Glyphs,
+}
+
+pub struct RunningRun<'a> {
+    pub label: &'a str,
+    pub queued_at: Duration,
+    pub since: Duration,
 }
 
 impl Timeline<'_> {
@@ -87,17 +93,13 @@ impl Timeline<'_> {
                 ),
                 self.palette.done,
             ),
-            segments: row
-                .reached_at
-                .map(|reached_at| Segment {
-                    from: row.started_at,
-                    to: reached_at,
-                    symbol: self.glyphs.bead,
-                    color: self.palette.done,
-                })
-                .into_iter()
-                .collect(),
-            still_going_at: None,
+            segments: vec![Segment {
+                from: row.started_at,
+                to: row.reached_at,
+                symbol: self.glyphs.bead,
+                color: self.palette.done,
+            }],
+            still_going: false,
         }
     }
 
@@ -123,7 +125,7 @@ impl Timeline<'_> {
                 symbol: self.glyphs.bead,
                 color: outcome,
             }],
-            still_going_at: None,
+            still_going: false,
         }
     }
 
@@ -135,16 +137,15 @@ impl Timeline<'_> {
         )
     }
 
-    fn running_entry<'a>(&self, row: &'a TreeRow) -> TimelineEntry<'a> {
-        let since = row.running_since.unwrap_or(row.queued_at);
-        let waited = (since > row.queued_at).then_some(Segment {
-            from: row.queued_at,
-            to: since,
+    fn running_entry(&self, run: &RunningRun) -> TimelineEntry<'static> {
+        let waited = (run.since > run.queued_at).then_some(Segment {
+            from: run.queued_at,
+            to: run.since,
             symbol: self.glyphs.waiting_bead,
             color: self.palette.waiting,
         });
         let ran = Segment {
-            from: since,
+            from: run.since,
             to: self.now,
             symbol: self.glyphs.bead,
             color: self.palette.running,
@@ -152,10 +153,10 @@ impl Timeline<'_> {
         TimelineEntry {
             label: Line::from(vec![
                 format!("{} ", self.glyphs.running_mark).fg(self.palette.running),
-                self.fitted(&row.label).fg(self.palette.text),
+                self.fitted(run.label).fg(self.palette.text),
             ]),
             segments: waited.into_iter().chain(once(ran)).collect(),
-            still_going_at: Some(self.now),
+            still_going: true,
         }
     }
 }
@@ -208,9 +209,9 @@ impl Widget for Timeline<'_> {
                             segment.color,
                         ));
                     });
-                    if let Some(now) = entry.still_going_at {
+                    if entry.still_going {
                         ctx.marker(Marker::Custom(self.glyphs.still_going));
-                        ctx.draw(&Points::new(&[(now.as_secs_f64(), y)], muted));
+                        ctx.draw(&Points::new(&[(self.now.as_secs_f64(), y)], muted));
                     }
                 });
                 ctx.marker(Marker::Custom(self.glyphs.root_switch_mark));
@@ -233,7 +234,7 @@ impl Widget for Timeline<'_> {
 struct TimelineEntry<'a> {
     label: Line<'a>,
     segments: Vec<Segment>,
-    still_going_at: Option<Duration>,
+    still_going: bool,
 }
 
 struct Segment {

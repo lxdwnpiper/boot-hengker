@@ -19,7 +19,7 @@ pub use self::chrome::PasswordPrompt;
 use self::{
     chrome::{FOOTER_HEIGHT, Footer, Header, PasswordPopup},
     stages::Stages,
-    timeline::Timeline,
+    timeline::{RunningRun, Timeline},
     tree::UnitTree,
 };
 use crate::{
@@ -59,11 +59,19 @@ pub struct BootView<'a> {
 
 impl BootView<'_> {
     fn timeline<'a>(&'a self, rows: &'a [TreeRow]) -> Timeline<'a> {
-        let mut running: Vec<&TreeRow> = rows
+        let mut running: Vec<RunningRun> = rows
             .iter()
-            .filter(|row| row.kind != UnitKind::Target && row.status == RowStatus::Running)
+            .filter(|row| row.kind != UnitKind::Target)
+            .filter_map(|row| match row.status {
+                RowStatus::Running { queued_at, since } => Some(RunningRun {
+                    label: &row.label,
+                    queued_at,
+                    since,
+                }),
+                _ => None,
+            })
             .collect();
-        running.sort_by_key(|row| row.running_since);
+        running.sort_by_key(|run| run.since);
         Timeline {
             origin: self.state.origin,
             now: self.now,
@@ -73,12 +81,7 @@ impl BootView<'_> {
                 .iter()
                 .map(|stage| stage.reached_at)
                 .collect(),
-            milestones: self
-                .state
-                .milestones()
-                .into_iter()
-                .filter(|row| row.reached_at.is_some())
-                .collect(),
+            milestones: self.state.milestones(),
             finished: self
                 .state
                 .finished_runs
@@ -101,7 +104,6 @@ impl Widget for BootView<'_> {
             .state
             .tree_rows(self.now.saturating_sub(self.timing.keep_finished_units_for));
         let pending_count = all_rows.len();
-        let pruned_rows = fold_chains(fit_to_height(all_rows.clone(), 0));
         let header = Header {
             origin: self.origin,
             total: (!self.state.finished_stages.is_empty())
@@ -114,17 +116,7 @@ impl Widget for BootView<'_> {
             palette: self.palette,
             glyphs: self.glyphs,
         };
-        let pruned = UnitTree {
-            phase: stages.current_phase(),
-            rows: &pruned_rows,
-            hidden: pending_count - shown_units(&pruned_rows),
-            now: self.now,
-            hide_runs_shorter_than: self.timing.hide_runs_shorter_than,
-            frame: self.frame,
-            palette: self.palette,
-            glyphs: self.glyphs,
-        };
-        let timeline = self.timeline(&pruned_rows);
+        let timeline = self.timeline(&all_rows);
         let footer = Footer {
             tally: self.state.tally(),
             palette: self.palette,
@@ -135,28 +127,25 @@ impl Widget for BootView<'_> {
         let free = area
             .height
             .saturating_sub(HEADER_HEIGHT + stages.height() + FOOTER_HEIGHT);
-        let whole_tree = fit_to_height(all_rows.clone(), usize::MAX);
-        let whole_tree_height = UnitTree {
-            phase: pruned.phase.clone(),
-            rows: &whole_tree,
-            hidden: 0,
-            ..pruned
-        }
-        .height();
         let heights = Heights::share(
             free,
-            whole_tree_height,
+            UnitTree::height_of(pending_count, 0),
             if fits_timeline { timeline.height() } else { 0 },
         );
         let budget = usize::from(heights.tree.saturating_sub(1));
-        let rows = [whole_tree.clone(), fold_chains(whole_tree)]
+        let rows = [all_rows.clone(), fold_chains(all_rows.clone())]
             .into_iter()
             .find(|rows| rows.len() <= budget)
-            .unwrap_or_else(|| fold_chains(fit_to_height(all_rows, budget)));
+            .unwrap_or_else(|| fold_chains(fit_to_height(all_rows.clone(), budget)));
         let tree = UnitTree {
+            phase: stages.current_phase(),
             rows: &rows,
             hidden: pending_count - shown_units(&rows),
-            ..pruned
+            now: self.now,
+            hide_runs_shorter_than: self.timing.hide_runs_shorter_than,
+            frame: self.frame,
+            palette: self.palette,
+            glyphs: self.glyphs,
         };
         let tree_height = tree.height().min(heights.tree);
 

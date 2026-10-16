@@ -36,7 +36,7 @@ use crate::{
     clock::monotonic_now,
     console::Console,
     error::Error,
-    feed::Feed,
+    feed::{Feed, RootRequest},
     password::{PasswordEntry, RequestWatch},
     sysroot::INITRD_RELEASE,
     systemd::{Scope, Session},
@@ -45,19 +45,19 @@ use crate::{
 const FRAME_INTERVAL: Duration = Duration::from_millis(100);
 const FULL_REPAINT_INTERVAL: Duration = Duration::from_secs(1);
 
-pub struct Options {
+pub struct Settings {
     pub scope: Scope,
     pub shutdown: bool,
-    pub target: Option<String>,
+    pub target: RootRequest,
     pub timing: Timing,
     pub palette: Palette,
 }
 
-pub fn run(options: &Options) -> Result<(), Error> {
+pub fn run(settings: &Settings) -> Result<(), Error> {
     let terminate = Arc::new(AtomicBool::new(false));
     flag::register(SIGTERM, Arc::clone(&terminate))?;
-    if options.scope == Scope::System
-        && !options.shutdown
+    if settings.scope == Scope::System
+        && !settings.shutdown
         && Session::open(Scope::System)
             .and_then(|session| session.boot_in_progress())
             .is_ok_and(|booting| !booting)
@@ -65,24 +65,23 @@ pub fn run(options: &Options) -> Result<(), Error> {
         eprintln!("bootvine: boot already finished, leaving the console alone");
         return Ok(());
     }
-    let phase = match options.scope {
-        _ if options.shutdown => Phase::Shutdown,
+    let phase = match settings.scope {
+        _ if settings.shutdown => Phase::Shutdown,
         Scope::User => Phase::User,
         Scope::System if Path::new(INITRD_RELEASE).exists() => Phase::Initrd,
         Scope::System => Phase::Host,
     };
     let mut state = BootState::new(phase);
-    let mut feed = Feed::new(options.scope, options.target.clone());
-    let mut console = Console::take(options.scope == Scope::System);
+    let mut feed = Feed::new(settings.scope, settings.target.clone());
+    let mut console = Console::take(settings.scope == Scope::System);
     let mut terminal = ratatui::try_init()?;
     let watched = watch(
         &mut state,
         &mut feed,
         &mut terminal,
         &terminate,
-        &options.palette,
+        settings,
         &mut console,
-        &options.timing,
     );
     ratatui::restore();
     watched
@@ -143,9 +142,8 @@ fn watch(
     feed: &mut Feed,
     terminal: &mut DefaultTerminal,
     terminate: &AtomicBool,
-    palette: &Palette,
+    settings: &Settings,
     console: &mut Console,
-    timing: &Timing,
 ) -> Result<(), Error> {
     let mut origin = BootOrigin::read();
     let mut origin_phase = state.phase;
@@ -178,8 +176,8 @@ fn watch(
             canvas.render_widget(
                 BootView {
                     state,
-                    palette,
-                    timing,
+                    palette: &settings.palette,
+                    timing: &settings.timing,
                     glyphs: &console.glyphs,
                     now: monotonic_now(),
                     origin: &origin,
@@ -201,9 +199,9 @@ fn watch(
         if state.is_complete() {
             eprintln!(
                 "bootvine: {} reached, handing the console over",
-                state.root.as_deref().unwrap_or("boot")
+                state.root.unit().unwrap_or("boot")
             );
-            sleep(timing.keep_final_frame_for);
+            sleep(settings.timing.keep_final_frame_for);
             return Ok(());
         }
         if terminate.load(Ordering::Relaxed) {
@@ -212,7 +210,7 @@ fn watch(
         sleep_until_readable(
             [
                 Some(stdin()),
-                feed.session.as_ref().map(AsFd::as_fd),
+                feed.session_fd(),
                 requests.as_ref().map(AsFd::as_fd),
             ]
             .into_iter()

@@ -23,7 +23,7 @@ impl Sysroot {
         Ok(Self { directory })
     }
 
-    pub fn enter(self) -> Result<(), Errno> {
+    pub fn enter(&self) -> Result<(), Errno> {
         fchdir(&self.directory)?;
         chroot(".")?;
         chdir("/")

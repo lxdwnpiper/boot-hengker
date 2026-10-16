@@ -110,6 +110,13 @@ enum Outcome {
     Abandoned,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Progress {
+    Untouched,
+    Pending(PendingJob),
+    Finished(Outcome),
+}
+
 #[derive(Clone, Debug)]
 struct UnitRecord {
     facts: UnitFacts,
@@ -117,8 +124,7 @@ struct UnitRecord {
     inactive_exit: Option<Duration>,
     active_enter: Option<Duration>,
     active_exit: Option<Duration>,
-    job: Option<PendingJob>,
-    outcome: Option<Outcome>,
+    progress: Progress,
 }
 
 impl UnitRecord {
@@ -145,7 +151,9 @@ impl UnitRecord {
     }
 
     fn running_since(&self) -> Option<Duration> {
-        let job = self.job?;
+        let Progress::Pending(job) = self.progress else {
+            return None;
+        };
         let transitioning = matches!(
             self.state,
             ActiveState::Activating | ActiveState::Deactivating | ActiveState::Reloading
@@ -153,8 +161,36 @@ impl UnitRecord {
         transitioning.then(|| self.transition_started(job.kind).unwrap_or(job.queued_at))
     }
 
+    fn row_status(&self) -> RowStatus {
+        match self.progress {
+            Progress::Pending(job) => {
+                self.running_since()
+                    .map_or(RowStatus::Waiting, |since| RowStatus::Running {
+                        queued_at: job.queued_at,
+                        since,
+                    })
+            }
+            Progress::Finished(Outcome::Failed) => RowStatus::Failed,
+            Progress::Finished(_) | Progress::Untouched => RowStatus::Done,
+        }
+    }
+
+    fn is_pending(&self) -> bool {
+        matches!(self.progress, Progress::Pending(_))
+    }
+
+    fn is_finished(&self) -> bool {
+        matches!(self.progress, Progress::Finished(_))
+    }
+
     fn takes_down(&self) -> bool {
-        self.job.is_some_and(|job| job.kind == JobKind::TakesDown)
+        matches!(
+            self.progress,
+            Progress::Pending(PendingJob {
+                kind: JobKind::TakesDown,
+                ..
+            })
+        )
     }
 }
 
@@ -220,7 +256,10 @@ impl UnitKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RowStatus {
     Waiting,
-    Running,
+    Running {
+        queued_at: Duration,
+        since: Duration,
+    },
     Failed,
     Done,
 }
@@ -228,13 +267,10 @@ pub enum RowStatus {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TreeRow {
     pub depth: usize,
-    pub is_last_sibling: Vec<bool>,
     pub label: String,
     pub description: String,
     pub kind: UnitKind,
     pub status: RowStatus,
-    pub queued_at: Duration,
-    pub running_since: Option<Duration>,
     pub chain: Vec<String>,
 }
 
@@ -243,7 +279,7 @@ pub struct MilestoneRow {
     pub label: String,
     pub finished_units: usize,
     pub started_at: Duration,
-    pub reached_at: Option<Duration>,
+    pub reached_at: Duration,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -271,17 +307,33 @@ pub struct FinishedStage {
     pub reached_at: Duration,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Root {
+    Unresolved,
+    Awaiting(String),
+    Queued(String),
+}
+
+impl Root {
+    #[must_use]
+    pub fn unit(&self) -> Option<&str> {
+        match self {
+            Self::Unresolved => None,
+            Self::Awaiting(unit) | Self::Queued(unit) => Some(unit),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct BootState {
     pub phase: Phase,
     pub origin: Duration,
-    pub root: Option<String>,
+    pub root: Root,
     pub failed: Vec<String>,
     pub finished_stages: Vec<FinishedStage>,
     pub finished_runs: Vec<FinishedRun>,
     pub handoff_unit: Option<String>,
     pub manager_exited_at: Option<Duration>,
-    root_job_seen: bool,
     milestone_targets: Vec<String>,
     finished_before_reconnect: usize,
     units: HashMap<String, UnitRecord>,
@@ -319,11 +371,10 @@ impl BootState {
         Self {
             phase,
             origin: Duration::ZERO,
-            root: None,
+            root: Root::Unresolved,
             failed: Vec::new(),
             finished_stages: Vec::new(),
             finished_runs: Vec::new(),
-            root_job_seen: false,
             handoff_unit,
             manager_exited_at: None,
             milestone_targets,
@@ -334,13 +385,12 @@ impl BootState {
     }
 
     pub fn set_root(&mut self, root: String) {
-        if self.root.as_ref() != Some(&root) {
-            self.root_job_seen = false;
-        }
         if self.phase == Phase::User && !self.milestone_targets.contains(&root) {
             self.milestone_targets.push(root.clone());
         }
-        self.root = Some(root);
+        if self.root.unit() != Some(&root) {
+            self.root = Root::Awaiting(root);
+        }
     }
 
     pub fn set_handoff(&mut self, unit: String) {
@@ -359,8 +409,7 @@ impl BootState {
                 inactive_exit: None,
                 active_enter: None,
                 active_exit: None,
-                job: None,
-                outcome: None,
+                progress: Progress::Untouched,
             });
         record.facts = facts;
         record.apply(activity);
@@ -376,9 +425,9 @@ impl BootState {
         self.enqueue(id, unit, kind, at);
         if kind == JobKind::BringsUp
             && self.jobs.get(&id).is_some_and(|tracked| tracked == unit)
-            && self.root.as_deref() == Some(unit)
+            && self.root == Root::Awaiting(unit.to_owned())
         {
-            self.root_job_seen = true;
+            self.root = Root::Queued(unit.to_owned());
         }
     }
 
@@ -389,12 +438,11 @@ impl BootState {
         let Some(record) = self.units.get_mut(unit) else {
             return;
         };
-        record.job = Some(PendingJob {
+        record.progress = Progress::Pending(PendingJob {
             id,
             queued_at: at,
             kind,
         });
-        record.outcome = None;
         self.jobs.insert(id, unit.to_owned());
     }
 
@@ -405,36 +453,31 @@ impl BootState {
         let Some(record) = self.units.get_mut(&unit) else {
             return;
         };
-        let started_at = record
-            .job
-            .filter(|job| job.id == id && job.kind != JobKind::Unknown)
-            .and_then(|job| record.transition_started(job.kind))
-            .filter(|started| *started >= self.origin && *started <= at);
-        if record.job.is_some_and(|job| job.id == id) {
-            record.job = None;
-        }
-        if let Some(started_at) = started_at
-            && UnitKind::of(&record.facts.name) != UnitKind::Target
-        {
-            self.finished_runs.push(FinishedRun {
-                label: display_label(&record.facts),
-                started_at,
-                finished_at: at,
-                failed: matches!(
-                    result,
-                    JobResult::Failed | JobResult::Timeout | JobResult::Dependency
-                ),
-            });
-        }
         let outcome = match result {
             JobResult::Done => Outcome::Succeeded { at },
             JobResult::Skipped | JobResult::Canceled => Outcome::Abandoned,
             JobResult::Failed | JobResult::Timeout | JobResult::Dependency => Outcome::Failed,
         };
-        record.outcome = Some(outcome);
         let label = display_label(&record.facts);
         if outcome == Outcome::Failed && !self.failed.contains(&label) {
-            self.failed.push(label);
+            self.failed.push(label.clone());
+        }
+        let job = match record.progress {
+            Progress::Pending(job) if job.id == id => job,
+            _ => return,
+        };
+        record.progress = Progress::Finished(outcome);
+        if let Some(started_at) = record
+            .transition_started(job.kind)
+            .filter(|started| job.kind != JobKind::Unknown && (self.origin..=at).contains(started))
+            && UnitKind::of(&record.facts.name) != UnitKind::Target
+        {
+            self.finished_runs.push(FinishedRun {
+                label,
+                started_at,
+                finished_at: at,
+                failed: outcome == Outcome::Failed,
+            });
         }
     }
 
@@ -442,7 +485,7 @@ impl BootState {
         let finished_here = self
             .units
             .values()
-            .filter(|record| record.outcome.is_some())
+            .filter(|record| record.is_finished())
             .count();
         self.finished_stages.push(FinishedStage {
             label: Phase::Initrd.label(),
@@ -450,14 +493,13 @@ impl BootState {
             failed_units: self
                 .units
                 .values()
-                .filter(|record| record.outcome == Some(Outcome::Failed))
+                .filter(|record| record.progress == Progress::Finished(Outcome::Failed))
                 .count(),
             started_at: self.origin,
             reached_at: at,
         });
         self.phase = Phase::Host;
-        self.root = None;
-        self.root_job_seen = false;
+        self.root = Root::Unresolved;
         self.finished_before_reconnect = 0;
         self.units.clear();
         self.jobs.clear();
@@ -467,13 +509,12 @@ impl BootState {
         self.finished_before_reconnect += self
             .units
             .values()
-            .filter(|record| record.outcome.is_some())
+            .filter(|record| record.is_finished())
             .count();
         self.jobs.clear();
-        self.units.values_mut().for_each(|record| {
-            record.job = None;
-            record.outcome = None;
-        });
+        self.units
+            .values_mut()
+            .for_each(|record| record.progress = Progress::Untouched);
     }
 
     #[must_use]
@@ -489,10 +530,10 @@ impl BootState {
         {
             return true;
         }
-        let Some(root) = self.root.as_deref().and_then(|root| self.units.get(root)) else {
+        let Root::Queued(root) = &self.root else {
             return false;
         };
-        self.root_job_seen && root.job.is_none()
+        self.units.get(root).is_some_and(|root| !root.is_pending())
     }
 
     #[must_use]
@@ -508,17 +549,13 @@ impl BootState {
             ..Tally::default()
         };
         self.units.values().fold(carried, |mut tally, record| {
-            if record.job.is_some() {
-                if record.running_since().is_some() {
-                    tally.running += 1;
-                } else {
-                    tally.waiting += 1;
+            match record.progress {
+                Progress::Pending(_) if record.running_since().is_some() => tally.running += 1,
+                Progress::Pending(_) => tally.waiting += 1,
+                Progress::Finished(Outcome::Succeeded { .. } | Outcome::Abandoned) => {
+                    tally.done += 1;
                 }
-            } else if matches!(
-                record.outcome,
-                Some(Outcome::Succeeded { .. } | Outcome::Abandoned)
-            ) {
-                tally.done += 1;
+                Progress::Finished(Outcome::Failed) | Progress::Untouched => {}
             }
             tally
         })
@@ -526,15 +563,12 @@ impl BootState {
 
     fn milestone_reached_at(&self, target: &str) -> Option<Duration> {
         let record = self.units.get(target)?;
-        if record.job.is_some() {
-            return None;
-        }
-        match record.outcome {
-            Some(Outcome::Succeeded { at }) => Some(at),
-            Some(_) => None,
-            None => record
+        match record.progress {
+            Progress::Finished(Outcome::Succeeded { at }) => Some(at),
+            Progress::Untouched => record
                 .active_enter
                 .filter(|entered| record.state == ActiveState::Active && *entered >= self.origin),
+            Progress::Pending(_) | Progress::Finished(Outcome::Failed | Outcome::Abandoned) => None,
         }
     }
 
@@ -543,8 +577,8 @@ impl BootState {
         let mut succeeded: Vec<Duration> = self
             .units
             .values()
-            .filter_map(|record| match record.outcome {
-                Some(Outcome::Succeeded { at }) => Some(at),
+            .filter_map(|record| match record.progress {
+                Progress::Finished(Outcome::Succeeded { at }) => Some(at),
                 _ => None,
             })
             .collect();
@@ -557,7 +591,7 @@ impl BootState {
                     label: stage.label.to_owned(),
                     finished_units: stage.finished_units,
                     started_at: stage.started_at,
-                    reached_at: Some(stage.reached_at),
+                    reached_at: stage.reached_at,
                 })
                 .collect(),
             previous: self
@@ -566,24 +600,14 @@ impl BootState {
                 .map_or(self.origin, |stage| stage.reached_at),
             consumed: 0,
         };
-        let mut walk = self
-            .milestone_targets
+        self.milestone_targets
             .iter()
             .filter_map(|target| {
                 self.milestone_reached_at(target)
                     .map(|reached_at| ReachedMilestone { target, reached_at })
             })
-            .fold(start, |walk, reached| walk.advance(&reached, &succeeded));
-        let remaining = succeeded.len() - walk.consumed + self.finished_before_reconnect;
-        if remaining > 0 {
-            walk.rows.push(MilestoneRow {
-                label: "Finished".to_owned(),
-                finished_units: remaining,
-                started_at: walk.previous,
-                reached_at: None,
-            });
-        }
-        walk.rows
+            .fold(start, |walk, reached| walk.advance(&reached, &succeeded))
+            .rows
     }
 
     #[must_use]
@@ -591,19 +615,17 @@ impl BootState {
         let pending: HashSet<&str> = self
             .units
             .iter()
-            .filter(|(name, record)| {
-                let finished_recently = matches!(
-                    record.outcome,
-                    Some(Outcome::Succeeded { at }) if at >= finished_since
-                );
-                record.job.is_some()
-                    || finished_recently
-                    || record.outcome == Some(Outcome::Failed)
-                    || (self.is_milestone(name) && record.outcome.is_some())
+            .filter(|(name, record)| match record.progress {
+                Progress::Pending(_) | Progress::Finished(Outcome::Failed) => true,
+                Progress::Finished(Outcome::Succeeded { at }) => {
+                    at >= finished_since || self.is_milestone(name)
+                }
+                Progress::Finished(Outcome::Abandoned) => self.is_milestone(name),
+                Progress::Untouched => false,
             })
             .map(|(name, _)| name.as_str())
             .collect();
-        let root = self.root.as_deref().filter(|root| pending.contains(root));
+        let root = self.root.unit().filter(|root| pending.contains(root));
         let stages: Vec<&str> = self
             .milestone_targets
             .iter()
@@ -627,64 +649,41 @@ impl BootState {
             unblocked.clear();
             leftovers.clear();
         }
-        let mut rows = Vec::new();
         let mut visited = HashSet::new();
+        let mut rows = Vec::new();
         stages
             .iter()
             .copied()
             .chain(unblocked)
             .chain(leftovers)
             .for_each(|top| {
-                if !visited.contains(top) {
-                    self.emit(
-                        top,
-                        &pending,
-                        &mut visited,
-                        &mut Vec::new(),
-                        true,
-                        &mut rows,
-                    );
+                if visited.contains(top) {
+                    return;
+                }
+                let stage = self.grow(top, &pending, &mut visited);
+                if stage.row.status != RowStatus::Done || !stage.children.is_empty() {
+                    stage.flatten_into(0, &mut rows);
                 }
             });
-        let mut kept = Vec::new();
-        grow_forest(&mut rows.into_iter().peekable(), 0)
-            .into_iter()
-            .filter(|stage| stage.row.status != RowStatus::Done || !stage.children.is_empty())
-            .for_each(|stage| stage.flatten_into(0, &mut kept));
-        relink_siblings(kept)
+        rows
     }
 
-    fn emit<'a>(
+    fn grow<'a>(
         &'a self,
         unit: &'a str,
         pending: &HashSet<&'a str>,
         visited: &mut HashSet<&'a str>,
-        ancestry: &mut Vec<bool>,
-        is_last: bool,
-        rows: &mut Vec<TreeRow>,
-    ) {
+    ) -> TreeNode {
         visited.insert(unit);
         let record = &self.units[unit];
-        let running_since = record.running_since();
-        let status = match (record.job, running_since, record.outcome) {
-            (Some(_), Some(_), _) => RowStatus::Running,
-            (Some(_), None, _) => RowStatus::Waiting,
-            (None, _, Some(Outcome::Failed)) => RowStatus::Failed,
-            (None, ..) => RowStatus::Done,
-        };
-        let mut is_last_sibling = ancestry.clone();
-        is_last_sibling.push(is_last);
-        rows.push(TreeRow {
-            depth: ancestry.len(),
-            is_last_sibling,
+        let row = TreeRow {
+            depth: 0,
             label: display_label(&record.facts),
             description: summary(&record.facts),
             kind: UnitKind::of(&record.facts.name),
-            status,
-            queued_at: record.job.map(|job| job.queued_at).unwrap_or_default(),
-            running_since,
+            status: record.row_status(),
             chain: Vec::new(),
-        });
+        };
         let candidates: Vec<&str> = self
             .waits_for(unit, pending)
             .into_iter()
@@ -704,13 +703,16 @@ impl BootState {
         self.sort_siblings(&mut children);
         children.dedup();
         visited.extend(children.iter().copied());
-        ancestry.push(is_last);
-        let count = children.len();
-        children.into_iter().enumerate().for_each(|(index, child)| {
-            visited.remove(child);
-            self.emit(child, pending, visited, ancestry, index + 1 == count, rows);
-        });
-        ancestry.pop();
+        TreeNode {
+            row,
+            children: children
+                .into_iter()
+                .map(|child| {
+                    visited.remove(child);
+                    self.grow(child, pending, visited)
+                })
+                .collect(),
+        }
     }
 
     fn is_milestone(&self, unit: &str) -> bool {
@@ -754,13 +756,17 @@ impl BootState {
     fn sort_siblings(&self, names: &mut [&str]) {
         let rank = |name: &str| {
             let record = &self.units[name];
-            match (record.running_since(), record.outcome) {
-                (Some(since), _) => SiblingRank::RunningSince(since),
-                (None, Some(Outcome::Succeeded { at })) => {
+            match record.progress {
+                Progress::Pending(_) => record
+                    .running_since()
+                    .map_or(SiblingRank::Waiting, SiblingRank::RunningSince),
+                Progress::Finished(Outcome::Succeeded { at }) => {
                     SiblingRank::RunningSince(record.inactive_exit.unwrap_or(at))
                 }
-                (None, Some(Outcome::Failed)) => SiblingRank::Failed,
-                (None, _) => SiblingRank::Waiting,
+                Progress::Finished(Outcome::Failed) => SiblingRank::Failed,
+                Progress::Finished(Outcome::Abandoned) | Progress::Untouched => {
+                    SiblingRank::Waiting
+                }
             }
         };
         names.sort_by(|left, right| rank(left).cmp(&rank(right)).then_with(|| left.cmp(right)));
@@ -792,7 +798,7 @@ impl MilestoneWalk {
             label: reached.target.to_owned(),
             finished_units: upto.saturating_sub(self.consumed),
             started_at: self.previous.min(reached.reached_at),
-            reached_at: Some(reached.reached_at),
+            reached_at: reached.reached_at,
         });
         self.consumed = self.consumed.max(upto);
         self.previous = reached.reached_at;
@@ -809,7 +815,7 @@ fn on_paths_to_running(rows: &[TreeRow]) -> Vec<bool> {
             let descendant_kept = kept_below.iter().skip(row.depth + 1).any(|kept| *kept);
             kept_below.resize(row.depth + 1, false);
             let anchors_the_tree = row.depth == 0 && row.kind == UnitKind::Target;
-            let keep = matches!(row.status, RowStatus::Running | RowStatus::Failed)
+            let keep = matches!(row.status, RowStatus::Running { .. } | RowStatus::Failed)
                 || descendant_kept
                 || anchors_the_tree;
             kept_below[row.depth] |= keep;
@@ -838,15 +844,13 @@ fn with_spare_rows(essential: &[bool], budget: usize) -> Vec<bool> {
 #[must_use]
 pub fn fit_to_height(rows: Vec<TreeRow>, budget: usize) -> Vec<TreeRow> {
     if rows.len() <= budget {
-        return relink_siblings(rows);
+        return rows;
     }
     let kept = with_spare_rows(&on_paths_to_running(&rows), budget);
-    let survivors: Vec<TreeRow> = rows
-        .into_iter()
+    rows.into_iter()
         .zip(kept)
         .filter_map(|(row, keep)| keep.then_some(row))
-        .collect();
-    relink_siblings(survivors)
+        .collect()
 }
 
 const MIN_FOLDED_LINKS: usize = 2;
@@ -918,34 +922,7 @@ pub fn fold_chains(rows: Vec<TreeRow>) -> Vec<TreeRow> {
     grow_forest(&mut rows.into_iter().peekable(), 0)
         .into_iter()
         .for_each(|root| root.fold(false).flatten_into(0, &mut flattened));
-    relink_siblings(flattened)
-}
-
-fn relink_siblings(rows: Vec<TreeRow>) -> Vec<TreeRow> {
-    let mut later_sibling: Vec<bool> = Vec::new();
-    let mut is_last: Vec<bool> = rows
-        .iter()
-        .rev()
-        .map(|row| {
-            let last = !later_sibling.get(row.depth).copied().unwrap_or(false);
-            later_sibling.resize(row.depth + 1, false);
-            later_sibling[row.depth] = true;
-            last
-        })
-        .collect();
-    is_last.reverse();
-    let mut ancestry: Vec<bool> = Vec::new();
-    rows.into_iter()
-        .zip(is_last)
-        .map(|(row, last)| {
-            ancestry.truncate(row.depth);
-            ancestry.push(last);
-            TreeRow {
-                is_last_sibling: ancestry.clone(),
-                ..row
-            }
-        })
-        .collect()
+    flattened
 }
 
 fn labelled_by_description(facts: &UnitFacts) -> bool {
@@ -1078,11 +1055,6 @@ mod tests {
                 "graphical.target",
             ]
         );
-        let lasts: Vec<bool> = rows
-            .iter()
-            .map(|row| *row.is_last_sibling.last().unwrap())
-            .collect();
-        assert_eq!(lasts, [false, false, false, true, true, true]);
     }
 
     #[test]
@@ -1244,12 +1216,10 @@ mod tests {
             folded_outline(&state),
             ["root.target", "  a", "    b", "      d"]
         );
-        let rows = fold_chains(fit_to_height(both.tree_rows(Duration::MAX), 0));
-        let lasts: Vec<bool> = rows
-            .iter()
-            .map(|row| *row.is_last_sibling.last().unwrap())
-            .collect();
-        assert_eq!(lasts, [true, true, false, true]);
+        assert_eq!(
+            folded_outline(&both),
+            ["root.target", "  a", "    b", "    c"]
+        );
     }
 
     #[test]
@@ -1362,7 +1332,7 @@ mod tests {
                 reached_at: 2000 * MS,
             }]
         );
-        assert_eq!(state.milestones()[0].reached_at, Some(2000 * MS));
+        assert_eq!(state.milestones()[0].reached_at, 2000 * MS);
         assert_eq!(state.tally().done, 2);
         assert!(state.tree_rows(Duration::MAX).is_empty());
     }
@@ -1508,8 +1478,11 @@ mod tests {
             },
         );
         assert_eq!(
-            state.tree_rows(Duration::MAX)[0].running_since,
-            Some(1200 * MS)
+            state.tree_rows(Duration::MAX)[0].status,
+            RowStatus::Running {
+                queued_at: 1000 * MS,
+                since: 1200 * MS
+            }
         );
         state.finish_job(1, JobResult::Done, 1700 * MS);
         assert_eq!(

@@ -29,7 +29,7 @@ struct Conclusion<'a> {
 
 impl Stages<'_> {
     pub fn height(&self) -> u16 {
-        u16::try_from(self.lines().len()).unwrap_or(u16::MAX)
+        u16::try_from(self.state.finished_stages.len()).unwrap_or(u16::MAX)
     }
 
     fn conclusion(&self) -> Option<Conclusion<'_>> {
@@ -47,7 +47,7 @@ impl Stages<'_> {
                 .state
                 .handoff_unit
                 .as_deref()
-                .or(self.state.root.as_deref())
+                .or(self.state.root.unit())
                 .unwrap_or("the console"),
         })
     }
@@ -110,14 +110,10 @@ impl Stages<'_> {
             elapsed.fg(self.palette.text),
         ])
     }
-
-    fn lines(&self) -> Vec<Line<'static>> {
-        self.finished_phases().collect()
-    }
 }
 
 impl Widget for Stages<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        Paragraph::new(self.lines()).render(area, buf);
+        Paragraph::new(self.finished_phases().collect::<Vec<_>>()).render(area, buf);
     }
 }

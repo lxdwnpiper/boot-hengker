@@ -1,5 +1,7 @@
 use std::{
     collections::HashMap,
+    mem,
+    os::fd::{AsFd, BorrowedFd},
     path::Path as FilePath,
     process,
     time::{Duration, Instant},
@@ -30,30 +32,62 @@ const SHUTDOWN_FALLBACK_ROOT: &str = "shutdown.target";
 const SILENT_STATUS: &str = "no";
 const CONFIGURED_STATUS: &str = "";
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RootRequest {
+    Named(String),
+    ManagerDefault,
+}
+
+enum Link {
+    Connected(Session),
+    Connecting { deadline: Instant },
+}
+
+impl Link {
+    fn connecting() -> Self {
+        Self::Connecting {
+            deadline: Instant::now() + RECONNECT_PATIENCE,
+        }
+    }
+}
+
+enum RootFs {
+    Initrd,
+    SwitchingTo(Sysroot),
+    Host,
+}
+
 pub struct Feed {
     pub connections: u32,
     scope: Scope,
-    target: Option<String>,
-    pub session: Option<Session>,
+    target: RootRequest,
+    link: Link,
     unit_paths: HashMap<Path<'static>, String>,
-    in_initrd: bool,
-    sysroot: Option<Sysroot>,
+    root_fs: RootFs,
     gave_origin: bool,
-    reconnect_deadline: Instant,
 }
 
 impl Feed {
-    pub fn new(scope: Scope, target: Option<String>) -> Self {
+    pub fn new(scope: Scope, target: RootRequest) -> Self {
         Self {
             connections: 0,
-            in_initrd: scope == Scope::System && FilePath::new(INITRD_RELEASE).exists(),
+            root_fs: if scope == Scope::System && FilePath::new(INITRD_RELEASE).exists() {
+                RootFs::Initrd
+            } else {
+                RootFs::Host
+            },
             scope,
             target,
-            session: None,
+            link: Link::connecting(),
             unit_paths: HashMap::new(),
-            sysroot: None,
             gave_origin: false,
-            reconnect_deadline: Instant::now() + RECONNECT_PATIENCE,
+        }
+    }
+
+    pub fn session_fd(&self) -> Option<BorrowedFd<'_>> {
+        match &self.link {
+            Link::Connected(session) => Some(session.as_fd()),
+            Link::Connecting { .. } => None,
         }
     }
 
@@ -61,47 +95,49 @@ impl Feed {
         if state.manager_exited_at.is_some() {
             return Ok(());
         }
-        let Some(session) = self.session.take() else {
-            return self.connect(state);
-        };
-        match session.receive() {
-            Ok(signals) => {
-                signals
-                    .into_iter()
-                    .for_each(|signal| self.apply(&session, state, signal));
-                self.session = Some(session);
-            }
-            Err(_) => self.lose_connection(state)?,
+        match mem::replace(&mut self.link, Link::connecting()) {
+            Link::Connecting { deadline } => self.connect(state, deadline),
+            Link::Connected(session) => match session.receive() {
+                Ok(signals) => {
+                    signals
+                        .into_iter()
+                        .for_each(|signal| self.apply(&session, state, signal));
+                    self.link = Link::Connected(session);
+                    Ok(())
+                }
+                Err(_) => self.lose_connection(state),
+            },
         }
-        Ok(())
     }
 
-    fn connect(&mut self, state: &mut BootState) -> Result<(), Error> {
+    fn connect(&mut self, state: &mut BootState, deadline: Instant) -> Result<(), Error> {
         match self.open_session(state) {
             Ok(session) => {
-                self.session = Some(session);
+                self.link = Link::Connected(session);
                 self.connections += 1;
                 Ok(())
             }
-            Err(_) if Instant::now() < self.reconnect_deadline => Ok(()),
+            Err(_) if Instant::now() < deadline => {
+                self.link = Link::Connecting { deadline };
+                Ok(())
+            }
             Err(_) => Err(Error::ManagerUnreachable),
         }
     }
 
     fn lose_connection(&mut self, state: &mut BootState) -> Result<(), Error> {
-        match self.sysroot.take() {
-            Some(sysroot) => {
+        match &self.root_fs {
+            RootFs::SwitchingTo(sysroot) => {
                 sysroot.enter()?;
-                self.in_initrd = false;
+                self.root_fs = RootFs::Host;
                 self.unit_paths.clear();
                 state.switch_root(monotonic_now());
             }
-            None if state.phase == Phase::Shutdown => {
+            RootFs::Initrd | RootFs::Host if state.phase == Phase::Shutdown => {
                 state.manager_exited_at = Some(monotonic_now());
             }
-            None => state.forget_jobs(),
+            RootFs::Initrd | RootFs::Host => state.forget_jobs(),
         }
-        self.reconnect_deadline = Instant::now() + RECONNECT_PATIENCE;
         Ok(())
     }
 
@@ -118,8 +154,8 @@ impl Feed {
             .filter(|job| shutting_down || job.kind == JobKind::BringsUp)
             .collect();
         let requested_root = match &self.target {
-            Some(target) => target.clone(),
-            None if shutting_down => SHUTDOWN_ROOTS
+            RootRequest::Named(target) => target.clone(),
+            RootRequest::ManagerDefault if shutting_down => SHUTDOWN_ROOTS
                 .into_iter()
                 .find(|root| {
                     jobs.iter()
@@ -127,7 +163,7 @@ impl Feed {
                 })
                 .unwrap_or(SHUTDOWN_FALLBACK_ROOT)
                 .to_owned(),
-            None => session.default_target()?,
+            RootRequest::ManagerDefault => session.default_target()?,
         };
         let milestones: &[&str] = if shutting_down {
             &SHUTDOWN_MILESTONES
@@ -193,8 +229,11 @@ impl Feed {
                     return;
                 }
                 let unit = self.track(session, state, &unit).unwrap_or(unit);
-                if self.in_initrd && unit == SWITCH_ROOT_UNIT {
-                    self.sysroot = Sysroot::hold().ok();
+                if matches!(self.root_fs, RootFs::Initrd)
+                    && unit == SWITCH_ROOT_UNIT
+                    && let Ok(sysroot) = Sysroot::hold()
+                {
+                    self.root_fs = RootFs::SwitchingTo(sysroot);
                 }
                 state.queue_job(id, &unit, kind, monotonic_now());
             }
@@ -210,7 +249,7 @@ impl Feed {
 
 impl Drop for Feed {
     fn drop(&mut self) {
-        if let Some(session) = &self.session
+        if let Link::Connected(session) = &self.link
             && self.scope == Scope::System
         {
             session.set_show_status(CONFIGURED_STATUS).ok();

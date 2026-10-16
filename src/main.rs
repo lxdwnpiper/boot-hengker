@@ -14,7 +14,8 @@ use clap::Parser;
 use jiff::fmt::friendly::SpanParser;
 
 use crate::{
-    run::{Options, run},
+    feed::RootRequest,
+    run::{Settings, run},
     systemd::Scope,
 };
 
@@ -61,17 +62,19 @@ fn main() -> ExitCode {
             Config::default()
         }
     };
-    let options = Options {
+    let settings = Settings {
         scope: if cli.user { Scope::User } else { Scope::System },
         shutdown: cli.shutdown,
-        target: cli.target,
+        target: cli
+            .target
+            .map_or(RootRequest::ManagerDefault, RootRequest::Named),
         timing: Timing {
             keep_final_frame_for: cli.hold.unwrap_or(config.timing.keep_final_frame_for),
             ..config.timing
         },
         palette: config.palette,
     };
-    match run(&options) {
+    match run(&settings) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("bootvine: {error}");

@@ -56,10 +56,14 @@ fn width_of(text: &str) -> u16 {
 }
 
 impl UnitTree<'_> {
-    pub fn height(&self) -> u16 {
-        u16::try_from(self.rows.len() + usize::from(self.hidden > 0))
+    pub fn height_of(rows: usize, hidden: usize) -> u16 {
+        u16::try_from(rows + usize::from(hidden > 0))
             .unwrap_or(u16::MAX)
             .saturating_add(HEADER_ROWS)
+    }
+
+    pub fn height(&self) -> u16 {
+        Self::height_of(self.rows.len(), self.hidden)
     }
 
     fn phase_fits_its_column(&self, columns: &Columns) -> bool {
@@ -103,7 +107,7 @@ impl UnitTree<'_> {
             (Stage::Reached, ..) => self.palette.done.into(),
             (_, _, RowStatus::Failed) => Style::from(self.palette.failed).bold(),
             (_, UnitKind::Target, _) => self.palette.target.into(),
-            (_, _, RowStatus::Running) => self.palette.text.into(),
+            (_, _, RowStatus::Running { .. }) => self.palette.text.into(),
             (_, _, RowStatus::Waiting) => self.palette.waiting.into(),
             (_, _, RowStatus::Done) => self.palette.muted.into(),
         }
@@ -122,17 +126,13 @@ impl UnitTree<'_> {
                 format!("[{}] ", self.glyphs.failed).fg(self.palette.failed)
             }
             (_, UnitKind::Target, _) => Span::default(),
-            (_, _, RowStatus::Running) => {
+            (_, _, RowStatus::Running { .. }) => {
                 let spinner = SPINNER[usize::try_from(self.frame % 4).unwrap_or_default()];
                 format!("[{spinner}] ").fg(self.palette.running)
             }
             (_, _, RowStatus::Waiting) => "[ ] ".fg(self.palette.waiting),
             (_, _, RowStatus::Done) => format!("[{}] ", self.glyphs.done).fg(self.palette.done),
         }
-    }
-
-    fn lead_width(&self, row: &TreeRow, stage: Stage) -> usize {
-        tree_prefix(row).width() + self.status_marker(row, stage).width()
     }
 
     fn chained_label(&self, row: &TreeRow, room: usize) -> String {
@@ -182,10 +182,9 @@ impl UnitTree<'_> {
         )
     }
 
-    fn row(&self, row: &TreeRow, stage: Stage, columns: &Columns) -> Row<'static> {
-        let prefix = tree_prefix(row);
+    fn row(&self, row: &TreeRow, stage: Stage, prefix: String, columns: &Columns) -> Row<'static> {
         let marker = self.status_marker(row, stage);
-        let room = usize::from(columns.label).saturating_sub(self.lead_width(row, stage));
+        let room = usize::from(columns.label).saturating_sub(prefix.width() + marker.width());
         let annotation = |text: &str, width: u16| {
             if row.chain.is_empty() {
                 fit_width(text, usize::from(width), self.glyphs.ellipsis)
@@ -193,12 +192,14 @@ impl UnitTree<'_> {
                 String::new()
             }
         };
-        let timer = row
-            .running_since
-            .map(|since| self.now.saturating_sub(since))
-            .filter(|running_for| *running_for >= self.hide_runs_shorter_than)
-            .map(|running_for| ELAPSED.unsigned_duration_to_string(&running_for))
-            .unwrap_or_default();
+        let timer = match row.status {
+            RowStatus::Running { since, .. }
+                if self.now.saturating_sub(since) >= self.hide_runs_shorter_than =>
+            {
+                ELAPSED.unsigned_duration_to_string(&self.now.saturating_sub(since))
+            }
+            _ => String::new(),
+        };
         let style = self.label_style(row, stage);
         Row::new(columns.shown([
             Line::from(vec![
@@ -248,8 +249,9 @@ impl Widget for UnitTree<'_> {
             self.rows
                 .iter()
                 .zip(self.stages())
+                .zip(tree_prefixes(self.rows))
                 .take(shown)
-                .map(|(row, stage)| self.row(row, stage, &columns))
+                .map(|((row, stage), prefix)| self.row(row, stage, prefix, &columns))
                 .chain(overflow),
             columns.widths(),
         )
@@ -261,24 +263,63 @@ impl Widget for UnitTree<'_> {
     }
 }
 
-fn tree_prefix(row: &TreeRow) -> String {
-    let ancestors = row
-        .is_last_sibling
+fn tree_prefixes(rows: &[TreeRow]) -> Vec<String> {
+    let mut later_sibling: Vec<bool> = Vec::new();
+    let mut is_last: Vec<bool> = rows
         .iter()
-        .take(row.depth)
-        .map(|ancestor_is_last| {
-            if *ancestor_is_last {
-                ENDED_TRUNK
-            } else {
-                PASSING_TRUNK
-            }
-        });
-    let connector = match row.is_last_sibling.last() {
-        Some(false) => BRANCH,
-        _ => LAST_BRANCH,
-    };
-    once(ENDED_TRUNK)
-        .chain(ancestors)
-        .chain(once(connector))
+        .rev()
+        .map(|row| {
+            let last = !later_sibling.get(row.depth).copied().unwrap_or(false);
+            later_sibling.resize(row.depth + 1, false);
+            later_sibling[row.depth] = true;
+            last
+        })
+        .collect();
+    is_last.reverse();
+    let mut trunks: Vec<&str> = Vec::new();
+    rows.iter()
+        .zip(is_last)
+        .map(|(row, last)| {
+            trunks.truncate(row.depth);
+            let connector = if last { LAST_BRANCH } else { BRANCH };
+            let prefix = once(ENDED_TRUNK)
+                .chain(trunks.iter().copied())
+                .chain(once(connector))
+                .collect();
+            trunks.push(if last { ENDED_TRUNK } else { PASSING_TRUNK });
+            prefix
+        })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn at_depth(depth: usize) -> TreeRow {
+        TreeRow {
+            depth,
+            label: String::new(),
+            description: String::new(),
+            kind: UnitKind::Service,
+            status: RowStatus::Waiting,
+            chain: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn prefixes_close_each_branch_at_its_last_sibling() {
+        let rows: Vec<TreeRow> = [0, 0, 1, 1, 2, 0].into_iter().map(at_depth).collect();
+        assert_eq!(
+            tree_prefixes(&rows),
+            [
+                "   ├─ ",
+                "   ├─ ",
+                "   │  ├─ ",
+                "   │  └─ ",
+                "   │     └─ ",
+                "   └─ ",
+            ]
+        );
+    }
 }
