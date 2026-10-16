@@ -26,7 +26,9 @@ libraries that clash with QEMU's.
 - No comments or doc comments; intent lives in names and call flow.
 - Pub fields instead of getters, `Duration` instead of raw integers, crates
   instead of hand-written formatting.
-- One thread: the loop waits on the bus with a timeout, then draws.
+- One thread: the loop sleeps in one `poll(2)` on the terminal, the bus and an
+  inotify watch on `/run/systemd/ask-password`, with the next frame as timeout,
+  then draws.
 - Ratatui views are built declaratively from iterators.
 
 ## systemd's private socket

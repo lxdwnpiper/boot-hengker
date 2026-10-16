@@ -2,7 +2,6 @@ use std::{
     collections::HashMap,
     path::Path as FilePath,
     process,
-    thread::sleep,
     time::{Duration, Instant},
 };
 
@@ -58,15 +57,14 @@ impl Feed {
         }
     }
 
-    pub fn pump(&mut self, state: &mut BootState, wait: Duration) -> Result<(), Error> {
+    pub fn pump(&mut self, state: &mut BootState) -> Result<(), Error> {
         if state.manager_exited_at.is_some() {
-            sleep(wait);
             return Ok(());
         }
         let Some(session) = self.session.take() else {
-            return self.connect_or_wait(state, wait);
+            return self.connect(state);
         };
-        match session.receive(wait) {
+        match session.receive() {
             Ok(signals) => {
                 signals
                     .into_iter()
@@ -78,17 +76,14 @@ impl Feed {
         Ok(())
     }
 
-    fn connect_or_wait(&mut self, state: &mut BootState, wait: Duration) -> Result<(), Error> {
-        match self.connect(state) {
+    fn connect(&mut self, state: &mut BootState) -> Result<(), Error> {
+        match self.open_session(state) {
             Ok(session) => {
                 self.session = Some(session);
                 self.connections += 1;
                 Ok(())
             }
-            Err(_) if Instant::now() < self.reconnect_deadline => {
-                sleep(wait);
-                Ok(())
-            }
+            Err(_) if Instant::now() < self.reconnect_deadline => Ok(()),
             Err(_) => Err(Error::ManagerUnreachable),
         }
     }
@@ -110,7 +105,7 @@ impl Feed {
         Ok(())
     }
 
-    fn connect(&mut self, state: &mut BootState) -> Result<Session, Error> {
+    fn open_session(&mut self, state: &mut BootState) -> Result<Session, Error> {
         let session = Session::open(self.scope)?;
         session.subscribe()?;
         if self.scope == Scope::System {

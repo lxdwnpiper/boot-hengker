@@ -1,4 +1,8 @@
-use std::{iter, time::Duration};
+use std::{
+    iter,
+    os::fd::{AsFd, BorrowedFd},
+    time::Duration,
+};
 
 use bootvine::model::{ActiveState, Activity, JobKind, JobResult, UnitFacts};
 use dbus::{
@@ -88,19 +92,13 @@ impl Session {
             && let Ok(channel) = Channel::open_private(PRIVATE_SOCKET)
         {
             send_authentication_carrier(&channel)?;
-            return Ok(Self {
-                channel,
-                peer_to_peer: true,
-            });
+            return Ok(Self::watching(channel, true));
         }
         let bus = match scope {
             Scope::System => BusType::System,
             Scope::User => BusType::Session,
         };
-        let session = Self {
-            channel: Channel::get_private(bus)?,
-            peer_to_peer: false,
-        };
+        let session = Self::watching(Channel::get_private(bus)?, false);
         session.call(
             BUS_DESTINATION,
             BUS_PATH,
@@ -109,6 +107,14 @@ impl Session {
             (SIGNAL_RULE,),
         )?;
         Ok(session)
+    }
+
+    fn watching(mut channel: Channel, peer_to_peer: bool) -> Self {
+        channel.set_watch_enabled(true);
+        Self {
+            channel,
+            peer_to_peer,
+        }
     }
 
     fn call(
@@ -237,20 +243,19 @@ impl Session {
         })
     }
 
-    pub fn receive(&self, timeout: Duration) -> Result<Vec<Signal>, Error> {
-        let drain = || -> Vec<Signal> {
-            iter::from_fn(|| self.channel.pop_message())
-                .filter_map(|message| parse_signal(&message))
-                .collect()
-        };
-        let queued = drain();
-        if !queued.is_empty() {
-            return Ok(queued);
-        }
-        if self.channel.read_write(Some(timeout)).is_err() || !self.channel.is_connected() {
+    pub fn receive(&self) -> Result<Vec<Signal>, Error> {
+        if self.channel.read_write(Some(Duration::ZERO)).is_err() || !self.channel.is_connected() {
             return Err(Error::Disconnected);
         }
-        Ok(drain())
+        Ok(iter::from_fn(|| self.channel.pop_message())
+            .filter_map(|message| parse_signal(&message))
+            .collect())
+    }
+}
+
+impl AsFd for Session {
+    fn as_fd(&self) -> BorrowedFd<'_> {
+        unsafe { BorrowedFd::borrow_raw(self.channel.watch().fd) }
     }
 }
 

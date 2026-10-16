@@ -1,4 +1,6 @@
 use std::{
+    io,
+    os::fd::{AsFd, BorrowedFd},
     path::Path,
     sync::{
         Arc,
@@ -21,6 +23,12 @@ use ratatui::{
     backend::Backend,
     buffer::{Buffer, CellDiffOption},
 };
+use rustix::{
+    event::{PollFd, PollFlags, poll},
+    io::Errno,
+    stdio::stdin,
+    time::Timespec,
+};
 use signal_hook::{consts::SIGTERM, flag};
 
 use crate::{
@@ -28,7 +36,7 @@ use crate::{
     console::Console,
     error::Error,
     feed::Feed,
-    password::PasswordEntry,
+    password::{PasswordEntry, RequestWatch},
     sysroot::INITRD_RELEASE,
     systemd::{Scope, Session},
 };
@@ -79,6 +87,23 @@ pub fn run(options: &Options) -> Result<(), Error> {
     watched
 }
 
+fn sleep_until_readable<'fd>(
+    sources: impl IntoIterator<Item = BorrowedFd<'fd>>,
+    timeout: Duration,
+) -> io::Result<()> {
+    let mut watched: Vec<PollFd<'fd>> = sources
+        .into_iter()
+        .map(|source| PollFd::from_borrowed_fd(source, PollFlags::IN))
+        .collect();
+    match poll(
+        &mut watched,
+        Some(&Timespec::try_from(timeout).unwrap_or_default()),
+    ) {
+        Ok(_) | Err(Errno::INTR) => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
 fn asks_to_quit(event: &Event) -> bool {
     let Event::Key(KeyEvent {
         code, modifiers, ..
@@ -119,18 +144,21 @@ fn watch(
     let mut frame: u64 = 0;
     let mut painted_connections = feed.connections;
     let mut last_full_repaint = Instant::now();
+    let mut next_frame = Instant::now() + FRAME_INTERVAL;
+    let requests = RequestWatch::open();
     let mut password_entry: Option<PasswordEntry> = None;
     loop {
-        feed.pump(state, FRAME_INTERVAL)?;
+        feed.pump(state)?;
         if state.phase != origin_phase {
             origin = BootOrigin::read();
             origin_phase = state.phase;
         }
-        if console.come_forward_once_prompts_are_gone() {
+        let requests_changed = requests.as_ref().is_none_or(RequestWatch::changed);
+        if requests_changed && console.come_forward_once_prompts_are_gone() {
             terminal.clear()?;
         }
         password_entry = if console.answers_password_prompts() {
-            PasswordEntry::follow(password_entry.take())
+            PasswordEntry::follow(password_entry.take(), requests_changed)
         } else {
             None
         };
@@ -171,6 +199,20 @@ fn watch(
         if terminate.load(Ordering::Relaxed) {
             return Ok(());
         }
+        sleep_until_readable(
+            [
+                Some(stdin()),
+                feed.session.as_ref().map(AsFd::as_fd),
+                requests.as_ref().map(AsFd::as_fd),
+            ]
+            .into_iter()
+            .flatten(),
+            next_frame.saturating_duration_since(Instant::now()),
+        )?;
+        if Instant::now() >= next_frame {
+            frame += 1;
+            next_frame = Instant::now() + FRAME_INTERVAL;
+        }
         while event::poll(Duration::ZERO)? {
             let event = event::read()?;
             match &mut password_entry {
@@ -183,6 +225,5 @@ fn watch(
                 None => {}
             }
         }
-        frame += 1;
     }
 }

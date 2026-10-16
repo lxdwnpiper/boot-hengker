@@ -1,13 +1,20 @@
 use std::{
-    fs, io,
-    os::unix::net::UnixDatagram,
+    fs, io, iter,
+    os::{
+        fd::{AsFd, BorrowedFd, OwnedFd},
+        unix::net::UnixDatagram,
+    },
     path::{Path, PathBuf},
     time::Duration,
 };
 
 use bootvine::{passphrase, view::PasswordPrompt};
 use crossterm::event::Event;
-use rustix::process::{Pid, test_kill_process};
+use rustix::{
+    fs::inotify::{self, CreateFlags, WatchFlags},
+    io::read,
+    process::{Pid, test_kill_process},
+};
 use zeroize::Zeroizing;
 
 use crate::clock::monotonic_now;
@@ -15,6 +22,46 @@ use crate::clock::monotonic_now;
 const REQUESTS: &str = "/run/systemd/ask-password";
 const REQUEST_PREFIX: &str = "ask.";
 const ASK_SECTION: &str = "[Ask]";
+const INOTIFY_BUFFER: usize = 4096;
+
+pub struct RequestWatch {
+    inotify: OwnedFd,
+}
+
+impl RequestWatch {
+    pub fn open() -> Option<Self> {
+        fs::create_dir_all(REQUESTS).ok()?;
+        let inotify = inotify::init(CreateFlags::CLOEXEC | CreateFlags::NONBLOCK).ok()?;
+        inotify::add_watch(
+            &inotify,
+            REQUESTS,
+            WatchFlags::CLOSE_WRITE
+                | WatchFlags::MOVED_TO
+                | WatchFlags::MOVED_FROM
+                | WatchFlags::DELETE
+                | WatchFlags::ONLYDIR,
+        )
+        .ok()?;
+        Some(Self { inotify })
+    }
+
+    pub fn changed(&self) -> bool {
+        let mut events = [0_u8; INOTIFY_BUFFER];
+        iter::from_fn(|| {
+            read(&self.inotify, &mut events)
+                .ok()
+                .filter(|read| *read > 0)
+        })
+        .count()
+            > 0
+    }
+}
+
+impl AsFd for RequestWatch {
+    fn as_fd(&self) -> BorrowedFd<'_> {
+        self.inotify.as_fd()
+    }
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct PasswordRequest {
@@ -49,13 +96,6 @@ fn request_files() -> Vec<PathBuf> {
 }
 
 impl PasswordRequest {
-    fn first_live() -> Option<Self> {
-        request_files()
-            .iter()
-            .filter_map(|file| Self::read(file))
-            .find(Self::is_live)
-    }
-
     fn read(file: &Path) -> Option<Self> {
         Self::parse(file, &fs::read_to_string(file).ok()?)
     }
@@ -92,11 +132,9 @@ impl PasswordRequest {
         })
     }
 
-    fn is_live(&self) -> bool {
-        self.file.exists()
-            && self
-                .not_after
-                .is_none_or(|deadline| monotonic_now() <= deadline)
+    fn is_awaited(&self) -> bool {
+        self.not_after
+            .is_none_or(|deadline| monotonic_now() <= deadline)
             && self
                 .asker
                 .is_none_or(|asker| test_kill_process(asker).is_ok())
@@ -125,20 +163,36 @@ pub struct PasswordEntry {
 }
 
 impl PasswordEntry {
-    pub fn follow(current: Option<Self>) -> Option<Self> {
-        if let Some(entry) = current.filter(|entry| entry.request.is_live()) {
-            return Some(entry);
+    pub fn follow(current: Option<Self>, requests_changed: bool) -> Option<Self> {
+        match current {
+            Some(entry) if entry.is_live(requests_changed) => return Some(entry),
+            None if !requests_changed => return None,
+            _ => {}
         }
-        let request = PasswordRequest::first_live()?;
+        let entry = request_files()
+            .iter()
+            .filter_map(|file| PasswordRequest::read(file))
+            .find_map(Self::open)?;
         eprintln!(
             "bootvine: asking for a password: {}",
-            request.file.display()
+            entry.request.file.display()
         );
+        Some(entry)
+    }
+
+    fn open(request: PasswordRequest) -> Option<Self> {
+        if !request.is_awaited() {
+            return None;
+        }
         Some(Self {
             request,
             typed: passphrase::empty(),
             sent: false,
         })
+    }
+
+    fn is_live(&self, requests_changed: bool) -> bool {
+        self.request.is_awaited() && (!requests_changed || self.request.file.exists())
     }
 
     pub fn prompt(&self) -> PasswordPrompt<'_> {
