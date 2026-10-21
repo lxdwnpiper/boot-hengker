@@ -1,6 +1,7 @@
 mod run_timeline;
 mod screen_chrome;
 mod stage_summary;
+mod tree_height_fitting;
 mod unit_tree;
 
 use std::time::Duration;
@@ -21,10 +22,11 @@ use self::{
     run_timeline::{RunningRun, Timeline},
     screen_chrome::{FOOTER_HEIGHT, Footer, Header, PasswordPopup},
     stage_summary::Stages,
+    tree_height_fitting::rows_within_height,
     unit_tree::UnitTree,
 };
 use crate::{
-    boot_model::{BootState, RowStatus, TreeRow, UnitKind, fit_to_height, fold_chains},
+    boot_model::{BootState, RowStatus, TreeRow, UnitKind, flatten_forest},
     boot_origin::BootOrigin,
     color_scheme::Colors,
     config_file::Timing,
@@ -101,9 +103,10 @@ impl BootView<'_> {
 
 impl Widget for BootView<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let all_rows = self
+        let forest = self
             .state
-            .tree_rows(self.now.saturating_sub(self.timing.keep_finished_units_for));
+            .waiting_forest(self.now.saturating_sub(self.timing.keep_finished_units_for));
+        let all_rows = flatten_forest(forest.clone());
         let pending_count = all_rows.len();
         let header = Header {
             origin: self.origin,
@@ -134,10 +137,7 @@ impl Widget for BootView<'_> {
             if fits_timeline { timeline.height() } else { 0 },
         );
         let budget = usize::from(heights.tree.saturating_sub(1));
-        let rows = [all_rows.clone(), fold_chains(all_rows.clone())]
-            .into_iter()
-            .find(|rows| rows.len() <= budget)
-            .unwrap_or_else(|| fold_chains(fit_to_height(all_rows.clone(), budget)));
+        let rows = rows_within_height(&forest, budget);
         let tree = UnitTree {
             phase: stages.current_phase(),
             rows: &rows,

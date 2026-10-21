@@ -1,8 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
-    iter::{self, Peekable},
     time::Duration,
-    vec::IntoIter,
 };
 
 use petgraph::{
@@ -621,7 +619,7 @@ impl BootState {
     }
 
     #[must_use]
-    pub fn tree_rows(&self, finished_since: Duration) -> Vec<TreeRow> {
+    pub fn waiting_forest(&self, finished_since: Duration) -> Vec<TreeNode> {
         let mut graph = WaitingGraph::new();
         self.units
             .iter()
@@ -668,7 +666,7 @@ impl BootState {
         }
         let mut space = DfsSpace::new(&graph);
         let mut visited = HashSet::new();
-        let mut rows = Vec::new();
+        let mut forest = Vec::new();
         stages
             .iter()
             .copied()
@@ -680,10 +678,10 @@ impl BootState {
                 }
                 let stage = self.grow(top, &graph, &mut space, &mut visited);
                 if stage.row.status != RowStatus::Done || !stage.children.is_empty() {
-                    stage.flatten_into(0, &mut rows);
+                    forest.push(stage);
                 }
             });
-        rows
+        forest
     }
 
     fn grow<'a>(
@@ -807,97 +805,13 @@ impl MilestoneWalk {
     }
 }
 
-fn on_paths_to_running(rows: &[TreeRow]) -> Vec<bool> {
-    let mut kept_below: Vec<bool> = Vec::new();
-    let mut kept: Vec<bool> = rows
-        .iter()
-        .rev()
-        .map(|row| {
-            let descendant_kept = kept_below.iter().skip(row.depth + 1).any(|kept| *kept);
-            kept_below.resize(row.depth + 1, false);
-            let anchors_the_tree = row.depth == 0 && row.kind == UnitKind::Target;
-            let keep = matches!(row.status, RowStatus::Running { .. } | RowStatus::Failed)
-                || descendant_kept
-                || anchors_the_tree;
-            kept_below[row.depth] |= keep;
-            keep
-        })
-        .collect();
-    kept.reverse();
-    kept
-}
-
-fn with_spare_rows(essential: &[bool], budget: usize) -> Vec<bool> {
-    let essential_count = essential.iter().filter(|keep| **keep).count();
-    let spare = budget.saturating_sub(essential_count + 1);
-    let earliest_optional: HashSet<usize> = essential
-        .iter()
-        .enumerate()
-        .filter(|(_, keep)| !**keep)
-        .map(|(index, _)| index)
-        .take(spare)
-        .collect();
-    (0..essential.len())
-        .map(|index| essential[index] || earliest_optional.contains(&index))
-        .collect()
-}
-
-#[must_use]
-pub fn fit_to_height(rows: Vec<TreeRow>, budget: usize) -> Vec<TreeRow> {
-    if rows.len() <= budget {
-        return rows;
-    }
-    let kept = with_spare_rows(&on_paths_to_running(&rows), budget);
-    rows.into_iter()
-        .zip(kept)
-        .filter_map(|(row, keep)| keep.then_some(row))
-        .collect()
-}
-
-const MIN_FOLDED_LINKS: usize = 2;
-
-struct TreeNode {
-    row: TreeRow,
-    children: Vec<TreeNode>,
+#[derive(Clone, Debug)]
+pub struct TreeNode {
+    pub row: TreeRow,
+    pub children: Vec<TreeNode>,
 }
 
 impl TreeNode {
-    fn is_chain_link(&self) -> bool {
-        self.row.status == RowStatus::Waiting && self.children.len() == 1
-    }
-
-    fn foldable_links(&self) -> usize {
-        let mut links = 0;
-        let mut cursor = self;
-        while cursor.is_chain_link() && cursor.children[0].is_chain_link() {
-            links += 1;
-            cursor = &cursor.children[0];
-        }
-        links
-    }
-
-    fn fold(mut self, may_absorb: bool) -> Self {
-        let links = if may_absorb { self.foldable_links() } else { 0 };
-        if links >= MIN_FOLDED_LINKS {
-            let (chain, below) = (0..links).fold(
-                (Vec::new(), self.children),
-                |(mut chain, mut children), _| {
-                    let only = children.remove(0);
-                    chain.push(only.row.label);
-                    (chain, only.children)
-                },
-            );
-            self.row.chain = chain;
-            self.children = below;
-        }
-        self.children = self
-            .children
-            .into_iter()
-            .map(|child| child.fold(true))
-            .collect();
-        self
-    }
-
     fn flatten_into(self, depth: usize, rows: &mut Vec<TreeRow>) {
         rows.push(TreeRow { depth, ..self.row });
         self.children
@@ -906,24 +820,13 @@ impl TreeNode {
     }
 }
 
-fn grow_forest(rows: &mut Peekable<IntoIter<TreeRow>>, depth: usize) -> Vec<TreeNode> {
-    iter::from_fn(|| {
-        let row = rows.next_if(|row| row.depth == depth)?;
-        Some(TreeNode {
-            row,
-            children: grow_forest(rows, depth + 1),
-        })
-    })
-    .collect()
-}
-
 #[must_use]
-pub fn fold_chains(rows: Vec<TreeRow>) -> Vec<TreeRow> {
-    let mut flattened = Vec::new();
-    grow_forest(&mut rows.into_iter().peekable(), 0)
+pub fn flatten_forest(forest: Vec<TreeNode>) -> Vec<TreeRow> {
+    let mut rows = Vec::new();
+    forest
         .into_iter()
-        .for_each(|root| root.fold(false).flatten_into(0, &mut flattened));
-    flattened
+        .for_each(|root| root.flatten_into(0, &mut rows));
+    rows
 }
 
 fn labelled_by_description(facts: &UnitFacts) -> bool {
@@ -958,30 +861,16 @@ fn summary(facts: &UnitFacts) -> String {
 mod tests {
     use super::*;
     use crate::boot_test_fixtures::{
-        MS, activating, facts, queue_unit, queued_boot, running, tree_outline, waiting,
+        MS, activating, facts, nested_boot_sample as sample, queue_unit, queued_boot, tree_outline,
+        waiting,
     };
 
-    fn sample() -> BootState {
-        queued_boot(
-            Phase::Host,
-            500 * MS,
-            [
-                waiting("graphical.target", &["multi-user.target"]),
-                waiting(
-                    "multi-user.target",
-                    &["docker.service", "nm-wait.service", "basic.target"],
-                ),
-                waiting("nm-wait.service", &["nm.service"]),
-                running("nm.service", &[], 1000 * MS),
-                running("docker.service", &["containerd.service"], 3000 * MS),
-                waiting("containerd.service", &[]),
-                waiting("basic.target", &[]),
-            ],
-        )
+    fn rows(state: &BootState) -> Vec<TreeRow> {
+        flatten_forest(state.waiting_forest(Duration::MAX))
     }
 
     fn outline(state: &BootState) -> Vec<String> {
-        tree_outline(&state.tree_rows(Duration::MAX))
+        tree_outline(&rows(state))
     }
 
     #[test]
@@ -997,41 +886,6 @@ mod tests {
                 "    nm",
                 "graphical.target",
             ]
-        );
-    }
-
-    #[test]
-    fn only_chains_leading_to_running_units_stay_in_view() {
-        assert_eq!(
-            tree_outline(&fit_to_height(sample().tree_rows(Duration::MAX), 0)),
-            [
-                "basic.target",
-                "multi-user.target",
-                "  docker",
-                "  nm-wait",
-                "    nm",
-                "graphical.target",
-            ]
-        );
-    }
-
-    #[test]
-    fn spare_rows_bring_back_waiting_units_under_kept_parents() {
-        let state = chain_state(
-            &[
-                ("root.target", &["a.service", "b.service"]),
-                ("a.service", &["a1.service"]),
-                ("a1.service", &["a2.service"]),
-                ("a2.service", &[]),
-                ("b.service", &[]),
-            ],
-            "b.service",
-        );
-        let outline = |budget| tree_outline(&fit_to_height(state.tree_rows(Duration::MAX), budget));
-        assert_eq!(outline(4), ["root.target", "  b", "  a"]);
-        assert_eq!(
-            outline(5),
-            ["root.target", "  b", "  a", "    a1", "      a2"]
         );
     }
 
@@ -1082,92 +936,6 @@ mod tests {
         assert_eq!(described("demo.service", ""), "");
     }
 
-    fn chain_state(waits: &[(&str, &[&str])], running_unit: &str) -> BootState {
-        queued_boot(
-            Phase::Host,
-            Duration::ZERO,
-            waits.iter().map(|(name, after)| {
-                if *name == running_unit {
-                    running(name, after, Duration::ZERO)
-                } else {
-                    waiting(name, after)
-                }
-            }),
-        )
-    }
-
-    fn folded_outline(state: &BootState) -> Vec<String> {
-        tree_outline(&fold_chains(fit_to_height(
-            state.tree_rows(Duration::MAX),
-            0,
-        )))
-    }
-
-    #[test]
-    fn single_child_waiting_chains_fold_into_one_row() {
-        let state = chain_state(
-            &[
-                ("root.target", &["a.service"]),
-                ("a.service", &["b.target"]),
-                ("b.target", &["c.service"]),
-                ("c.service", &["d.service"]),
-                ("d.service", &[]),
-            ],
-            "d.service",
-        );
-        assert_eq!(
-            folded_outline(&state),
-            ["root.target", "  a > b.target > c", "    d"]
-        );
-    }
-
-    #[test]
-    fn branches_and_short_chains_stay_unfolded() {
-        let state = chain_state(
-            &[
-                ("root.target", &["a.service"]),
-                ("a.service", &["b.service", "c.service"]),
-                ("b.service", &["d.service"]),
-                ("c.service", &[]),
-                ("d.service", &[]),
-            ],
-            "d.service",
-        );
-        let mut both = chain_state(
-            &[
-                ("root.target", &["a.service"]),
-                ("a.service", &["b.service", "c.service"]),
-                ("b.service", &[]),
-                ("c.service", &[]),
-            ],
-            "b.service",
-        );
-        both.update_activity("c.service", activating(Duration::ZERO));
-        assert_eq!(
-            folded_outline(&state),
-            ["root.target", "  a", "    b", "      d"]
-        );
-        assert_eq!(
-            folded_outline(&both),
-            ["root.target", "  a", "    b", "    c"]
-        );
-    }
-
-    #[test]
-    fn with_nothing_running_only_the_root_target_stays_in_view() {
-        let state = queued_boot(
-            Phase::Host,
-            Duration::ZERO,
-            [
-                waiting("demo.target", &["idle.service"]),
-                waiting("idle.service", &[]),
-            ],
-        );
-        let rows = fit_to_height(state.tree_rows(Duration::MAX), 0);
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].label, "demo.target");
-    }
-
     #[test]
     fn finished_jobs_leave_the_tree_and_count_toward_their_milestone() {
         let mut state = sample();
@@ -1182,9 +950,9 @@ mod tests {
                 active_exit: None,
             },
         );
-        let rows = state.tree_rows(Duration::MAX);
         assert!(
-            rows.iter()
+            rows(&state)
+                .iter()
                 .all(|row| row.label != "containerd" && row.label != "basic.target")
         );
         let milestones = state.milestones();
@@ -1264,7 +1032,7 @@ mod tests {
         );
         assert_eq!(state.milestones()[0].reached_at, 2000 * MS);
         assert_eq!(state.tally().done, 2);
-        assert!(state.tree_rows(Duration::MAX).is_empty());
+        assert!(rows(&state).is_empty());
     }
 
     #[test]
@@ -1274,10 +1042,7 @@ mod tests {
             Duration::ZERO,
             [waiting("dev-nvme1n1.device", &[]).described("Lexar SSD NM790 2TB")],
         );
-        assert_eq!(
-            state.tree_rows(Duration::MAX)[0].label,
-            "Lexar SSD NM790 2TB"
-        );
+        assert_eq!(rows(&state)[0].label, "Lexar SSD NM790 2TB");
     }
 
     #[test]
@@ -1354,7 +1119,7 @@ mod tests {
             },
         );
         assert_eq!(
-            state.tree_rows(Duration::MAX)[0].status,
+            rows(&state)[0].status,
             RowStatus::Running {
                 queued_at: 1000 * MS,
                 since: 1200 * MS
@@ -1402,6 +1167,6 @@ mod tests {
                 waiting("b.service", &["a.service"]),
             ],
         );
-        assert_eq!(state.tree_rows(Duration::MAX).len(), 2);
+        assert_eq!(rows(&state).len(), 2);
     }
 }

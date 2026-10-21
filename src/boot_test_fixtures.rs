@@ -76,6 +76,25 @@ pub fn queued_boot(
     state
 }
 
+pub fn nested_boot_sample() -> BootState {
+    queued_boot(
+        Phase::Host,
+        500 * MS,
+        [
+            waiting("graphical.target", &["multi-user.target"]),
+            waiting(
+                "multi-user.target",
+                &["docker.service", "nm-wait.service", "basic.target"],
+            ),
+            waiting("nm-wait.service", &["nm.service"]),
+            running("nm.service", &[], 1000 * MS),
+            running("docker.service", &["containerd.service"], 3000 * MS),
+            waiting("containerd.service", &[]),
+            waiting("basic.target", &[]),
+        ],
+    )
+}
+
 pub fn queue_unit(state: &mut BootState, id: u32, unit: QueuedUnit, queued_at: Duration) {
     let name = unit.facts.name.clone();
     state.track_unit(unit.facts, unit.activity);
