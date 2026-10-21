@@ -1,73 +1,81 @@
 # Contributing
 
-## Workflow
+## Setup
 
-Work inside the dev shell (`direnv allow` once). Run `cargo clippy --workspace
---all-targets` before committing (the workspace warns on clippy pedantic plus
-`absolute_paths`) and `cargo fmt --all`, which needs the nightly toolchain for
-`.rustfmt.toml`. Version control is jj, not the `git` CLI.
+Work inside the dev shell (`direnv allow` once). Version control is jj, not
+the `git` CLI.
 
-The workspace has two crates: `bootvine` itself and `xtask`, the repository
-tasks behind `cargo xtask` (`record-screencasts`, `install`, `uninstall`).
+## Before committing
+
+```sh
+cargo clippy --workspace --all-targets
+cargo fmt --all
+```
+
+Clippy runs with the pedantic lints and forbids absolute paths; formatting
+needs the nightly toolchain the dev shell provides.
 
 ## Testing
 
-Everything that boots a machine or a service manager lives under `tests/`:
-`tests/sample-machine/` holds the sample host, its slow and failing sample units
-and the interactive VM; `tests/vm-checks/` holds the NixOS tests that boot it.
+| What | Command |
+| --- | --- |
+| Model and render tests | `cargo test --workspace` |
+| Scripted demos | `cargo run --example boot` (also `shutdown`, `luks`) |
+| Sample machine in a window | `nix run .#sample-machine-vm` |
+| Boot and shutdown in a VM | `nix build .#checks.x86_64-linux.vm-boot-and-shutdown` |
+| Passphrase prompt in a VM | `nix build .#checks.x86_64-linux.vm-luks-passphrase` |
 
-- `cargo test --workspace`: model and render snapshot tests.
-- Live against your user manager, with the sample units:
+To watch your own user manager start the sample units:
 
-  ```sh
-  units=$(nix build --no-link --print-out-paths .#sample-unit-files)
-  systemctl --user link --runtime $units/*
-  systemctl --user start --no-block bootvine-demo.target
-  cargo run -- --user --target bootvine-demo.target --hold 3s
-  systemctl --user stop $(ls $units)
-  systemctl --user disable --runtime $(ls $units)
-  ```
+```sh
+units=$(nix build --no-link --print-out-paths .#sample-unit-files)
+systemctl --user link --runtime $units/*
+systemctl --user start --no-block bootvine-demo.target
+cargo run -- --user --target bootvine-demo.target --hold 3s
+systemctl --user stop $(ls $units)
+systemctl --user disable --runtime $(ls $units)
+```
 
-- `nix run .#sample-machine-vm`: the sample host in a QEMU window. Its disk
-  image goes to `~/.cache/bootvine-sample-machine.qcow2`.
-- `nix build .#checks.x86_64-linux.<name>`: each `tests/vm-checks/<test>.nix`
-  boots a VM and runs `console.py` followed by `<test>.py`.
-  `vm-boot-and-shutdown` follows the initrd, stage 2 and a poweroff;
-  `vm-luks-passphrase` answers a passphrase prompt in the initrd. They read
-  tty12 as text from `/dev/vcsu12`, hold the boot with the initrd backdoor and
-  gate files under `/run` instead of sleeping. Run one by hand with
-  `nix run .#checks.x86_64-linux.vm-boot-and-shutdown.driverInteractive`, then
-  `test_script()`.
-- `nix run .#record-screencasts`, from the repository root: runs
-  `cargo xtask record-screencasts`, which records `recordings/boot.tape` and
-  `recordings/shutdown.tape` with VHS against the scripted examples into the README
-  GIFs and copies the passphrase screenshot from the `vm-luks-passphrase` check.
-- `cargo xtask install --destdir <dir> --initrd dracut`: stages an install
-  without touching the system; `cargo xtask uninstall --destdir <dir>` empties
+The VM checks read the console as text, hold the boot at fixed points and wait
+on marker files instead of sleeping. To step through one by hand, run
+`nix run .#checks.x86_64-linux.vm-boot-and-shutdown.driverInteractive` and
+call `test_script()`.
+
+Prefix VM and recording commands with `env -u LD_LIBRARY_PATH` when your shell
+exports libraries that clash with QEMU or Chromium.
+
+## Repository tasks
+
+- `nix run .#record-screencasts` re-records the README animations from the
+  scripted demos and copies the passphrase screenshot from the VM check.
+- `cargo xtask install --destdir <dir> --initrd dracut` stages an install
+  without touching the system; `cargo xtask uninstall --destdir <dir>` removes
   it again.
 
-Prefix the VM and VHS commands with `env -u LD_LIBRARY_PATH` when the shell
-exports libraries that clash with QEMU's or Chromium's.
+## Code style
 
-## Conventions
+- No comments; names and call flow carry the intent.
+- Public fields over getters, durations over raw integers, existing crates over
+  hand-written formatting.
+- Iterator and stream combinators over loops.
 
-- No comments or doc comments; intent lives in names and call flow.
-- Pub fields instead of getters, `Duration` instead of raw integers, crates
-  instead of hand-written formatting.
-- One thread, Elm-style: a tokio current-thread runtime merges streams of
-  `ScreenInput` (the bus as `BootChange` batches, keys, frame ticks, full
-  repaints, the ask-password inotify watch, SIGTERM) with `stream::select`,
-  and one owned `WatchScreen` absorbs each ready batch and draws once. The
-  live boot and the scripted demos share this loop and differ only in their
-  console desk.
-- Ratatui views are built declaratively from iterators.
+## Design notes
 
-## systemd's private socket
+### One event loop
 
-- zbus rejects it: PID 1 sends as `org.freedesktop.systemd1`, not a unique
-  name. libdbus works.
-- libdbus pipelines `BEGIN` with the first message and sd-bus leaves it unread,
-  so a no-reply `Ping` goes out right after connecting.
-- Surviving switch-root needs `argv[0]` starting with `@`, `IgnoreOnIsolate`,
-  and a chroot through an fd to `/sysroot` taken when
-  `initrd-switch-root.service` is queued.
+Everything runs on one thread. The service manager, the keyboard, the frame
+timer, password prompts and termination each produce a stream of inputs; the
+streams are merged, applied in batches to a single screen state, and the screen
+is drawn once per batch. The live boot and the scripted demos share this loop
+and differ only in where their inputs come from.
+
+### systemd's private socket
+
+- zbus rejects it, because PID 1 sends under its well-known name rather than a
+  unique one. libdbus works.
+- libdbus sends its authentication handshake together with the first message,
+  which systemd leaves unread, so a no-reply ping goes out right after
+  connecting.
+- Surviving the switch to the real root needs a process name starting with `@`,
+  a unit that is not stopped on isolate, and a chroot through a file descriptor
+  to the new root taken as soon as the switch is queued.
