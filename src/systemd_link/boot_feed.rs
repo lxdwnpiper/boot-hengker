@@ -1,20 +1,27 @@
 use std::{
     collections::HashMap,
-    mem,
-    os::fd::{AsFd, BorrowedFd},
-    process,
+    iter::once,
+    mem, process,
     time::{Duration, Instant},
 };
 
 use dbus::Path;
+use futures::{Stream, StreamExt, stream};
+use tokio::{io::unix::AsyncFd, time::sleep};
 
 use crate::{
-    boot_model::{BootState, HANDOFF_UNIT, JobKind, Phase},
+    boot_model::{BootChange, BootState, HANDOFF_UNIT, JobKind, Phase},
+    console_session::{
+        stream_sources::{
+            CarriedItem, FRAME_INTERVAL, readable_or_timeout, readable_source, unfold_carrying,
+        },
+        watch_screen::ScreenInput,
+    },
     systemd_link::{
         link_error::Error,
         monotonic_clock::monotonic_now,
         switch_root::Sysroot,
-        systemd_bus::{Scope, Session, Signal},
+        systemd_bus::{FetchedUnit, JobListing, Scope, Session, Signal},
     },
 };
 
@@ -38,8 +45,9 @@ pub enum RootRequest {
 }
 
 enum Link {
-    Connected(Session),
+    Connected(AsyncFd<Session>),
     Connecting { deadline: Instant },
+    Finished,
 }
 
 impl Link {
@@ -56,144 +64,162 @@ enum RootFs {
     Host,
 }
 
-pub struct Feed {
-    pub connections: u32,
+struct TrackedUnit {
+    name: String,
+    change: Option<BootChange>,
+}
+
+struct BusFeed {
     scope: Scope,
     target: RootRequest,
+    phase: Phase,
     link: Link,
     unit_paths: HashMap<Path<'static>, String>,
     root_fs: RootFs,
     gave_origin: bool,
 }
 
-impl Feed {
-    #[must_use]
-    pub fn new(phase: Phase, scope: Scope, target: RootRequest) -> Self {
+fn boot_inputs(changes: Vec<BootChange>) -> Vec<ScreenInput> {
+    if changes.is_empty() {
+        return Vec::new();
+    }
+    vec![ScreenInput::Boot(changes)]
+}
+
+impl BusFeed {
+    fn new(phase: Phase, scope: Scope, target: RootRequest) -> Self {
         Self {
-            connections: 0,
+            scope,
+            target,
             root_fs: if phase == Phase::Initrd {
                 RootFs::Initrd
             } else {
                 RootFs::Host
             },
-            scope,
-            target,
+            phase,
             link: Link::connecting(),
             unit_paths: HashMap::new(),
             gave_origin: false,
         }
     }
 
-    #[must_use]
-    pub fn session_fd(&self) -> Option<BorrowedFd<'_>> {
-        match &self.link {
-            Link::Connected(session) => Some(session.as_fd()),
-            Link::Connecting { .. } => None,
+    async fn next_inputs(&mut self) -> Option<Vec<ScreenInput>> {
+        if let Link::Connected(readiness) = &self.link {
+            readable_or_timeout(readiness, FRAME_INTERVAL).await;
+        }
+        match mem::replace(&mut self.link, Link::Finished) {
+            Link::Finished => None,
+            Link::Connecting { deadline } => Some(self.connect(deadline).await),
+            Link::Connected(readiness) => Some(self.receive(readiness)),
         }
     }
 
-    pub fn pump(&mut self, state: &mut BootState) -> Result<(), Error> {
-        if state.manager_exited_at.is_some() {
-            return Ok(());
-        }
-        match mem::replace(&mut self.link, Link::connecting()) {
-            Link::Connecting { deadline } => self.connect(state, deadline),
-            Link::Connected(session) => match session.receive() {
-                Ok(signals) => {
-                    signals
-                        .into_iter()
-                        .for_each(|signal| self.apply(&session, state, signal));
-                    self.link = Link::Connected(session);
-                    Ok(())
-                }
-                Err(_) => self.lose_connection(state),
-            },
-        }
-    }
-
-    fn connect(&mut self, state: &mut BootState, deadline: Instant) -> Result<(), Error> {
-        match self.open_session(state) {
-            Ok(session) => {
-                self.link = Link::Connected(session);
-                self.connections += 1;
-                Ok(())
-            }
+    async fn connect(&mut self, deadline: Instant) -> Vec<ScreenInput> {
+        match self.open_session() {
+            Ok(changes) => vec![ScreenInput::Boot(changes), ScreenInput::Reconnected],
             Err(_) if Instant::now() < deadline => {
+                sleep(FRAME_INTERVAL).await;
                 self.link = Link::Connecting { deadline };
-                Ok(())
+                Vec::new()
             }
-            Err(_) => Err(Error::ManagerUnreachable),
+            Err(_) => vec![ScreenInput::Failed(Error::ManagerUnreachable)],
         }
     }
 
-    fn lose_connection(&mut self, state: &mut BootState) -> Result<(), Error> {
-        match &self.root_fs {
-            RootFs::SwitchingTo(sysroot) => {
-                sysroot.enter()?;
-                self.root_fs = RootFs::Host;
-                self.unit_paths.clear();
-                state.switch_root(monotonic_now());
-            }
-            RootFs::Initrd | RootFs::Host if state.phase == Phase::Shutdown => {
-                state.manager_exited_at = Some(monotonic_now());
-            }
-            RootFs::Initrd | RootFs::Host => state.forget_jobs(),
-        }
-        Ok(())
+    fn receive(&mut self, readiness: AsyncFd<Session>) -> Vec<ScreenInput> {
+        let Ok(signals) = readiness.get_ref().receive() else {
+            return self.lose_connection();
+        };
+        let changes = signals
+            .into_iter()
+            .flat_map(|signal| self.changes_for(readiness.get_ref(), signal))
+            .collect();
+        self.link = Link::Connected(readiness);
+        boot_inputs(changes)
     }
 
-    fn open_session(&mut self, state: &mut BootState) -> Result<Session, Error> {
+    fn lose_connection(&mut self) -> Vec<ScreenInput> {
+        let at = monotonic_now();
+        let RootFs::SwitchingTo(sysroot) = mem::replace(&mut self.root_fs, RootFs::Host) else {
+            if self.phase == Phase::Shutdown {
+                return boot_inputs(vec![BootChange::ManagerExited { at }]);
+            }
+            self.link = Link::connecting();
+            return boot_inputs(vec![BootChange::ForgetJobs]);
+        };
+        if let Err(error) = sysroot.enter() {
+            return vec![ScreenInput::Failed(error.into())];
+        }
+        self.unit_paths.clear();
+        self.phase = Phase::Host;
+        self.link = Link::connecting();
+        boot_inputs(vec![BootChange::SwitchRoot { at }])
+    }
+
+    fn requested_root(&self, session: &Session, jobs: &[JobListing]) -> Result<String, Error> {
+        let RootRequest::Named(target) = &self.target else {
+            return if self.phase == Phase::Shutdown {
+                Ok(SHUTDOWN_ROOTS
+                    .into_iter()
+                    .find(|root| {
+                        jobs.iter()
+                            .any(|job| job.unit == *root && job.kind == JobKind::BringsUp)
+                    })
+                    .unwrap_or(SHUTDOWN_FALLBACK_ROOT)
+                    .to_owned())
+            } else {
+                session.default_target()
+            };
+        };
+        Ok(target.clone())
+    }
+
+    fn origin_change(&mut self, session: &Session) -> Result<Option<BootChange>, Error> {
+        if self.gave_origin {
+            return Ok(None);
+        }
+        self.gave_origin = true;
+        let origin = if session.boot_in_progress()? {
+            Duration::ZERO
+        } else {
+            monotonic_now()
+        };
+        Ok(Some(BootChange::SetOrigin(origin)))
+    }
+
+    fn open_session(&mut self) -> Result<Vec<BootChange>, Error> {
         let session = Session::open(self.scope)?;
         session.subscribe()?;
         if self.scope == Scope::System {
             session.set_show_status(SILENT_STATUS).ok();
         }
-        let shutting_down = state.phase == Phase::Shutdown;
-        let jobs: Vec<_> = session
+        let shutting_down = self.phase == Phase::Shutdown;
+        let jobs: Vec<JobListing> = session
             .list_jobs()?
             .into_iter()
             .filter(|job| shutting_down || job.kind == JobKind::BringsUp)
             .collect();
-        let requested_root = match &self.target {
-            RootRequest::Named(target) => target.clone(),
-            RootRequest::ManagerDefault if shutting_down => SHUTDOWN_ROOTS
-                .into_iter()
-                .find(|root| {
-                    jobs.iter()
-                        .any(|job| job.unit == *root && job.kind == JobKind::BringsUp)
-                })
-                .unwrap_or(SHUTDOWN_FALLBACK_ROOT)
-                .to_owned(),
-            RootRequest::ManagerDefault => session.default_target()?,
-        };
-        let milestones = state.milestone_targets.clone();
-        if !self.gave_origin {
-            state.origin = if session.boot_in_progress()? {
-                Duration::ZERO
-            } else {
-                monotonic_now()
-            };
-            self.gave_origin = true;
-        }
-        let root = self
-            .track(&session, state, &requested_root)
-            .unwrap_or(requested_root);
-        if let Some(handoff) = self.track(&session, state, HANDOFF_UNIT) {
-            state.set_handoff(handoff);
-        }
-        jobs.iter()
+        let requested_root = self.requested_root(&session, &jobs)?;
+        let origin_change = self.origin_change(&session)?;
+        let tracked_root = self.track(&session, &requested_root);
+        let root = tracked_root
+            .as_ref()
+            .map_or(requested_root, |tracked| tracked.name.clone());
+        let tracked_handoff = self.track(&session, HANDOFF_UNIT);
+        let handoff = tracked_handoff
+            .as_ref()
+            .map(|tracked| BootChange::SetHandoff(tracked.name.clone()));
+        let milestones = BootState::new(self.phase).milestone_targets;
+        let tracked_changes: Vec<BootChange> = jobs
+            .iter()
             .map(|job| job.unit.as_str())
             .chain(milestones.iter().map(String::as_str))
-            .for_each(|unit| {
-                self.track(&session, state, unit);
-            });
-        state.set_root(root.clone());
-        let now = monotonic_now();
-        jobs.iter()
-            .for_each(|job| state.queue_job(job.id, &job.unit, job.kind, now));
+            .filter_map(|unit| self.track(&session, unit))
+            .filter_map(|tracked| tracked.change)
+            .collect();
         eprintln!(
             "bootvine: watching {root} in {} as pid {} over {}",
-            state.phase.label(),
+            self.phase.label(),
             process::id(),
             if session.peer_to_peer {
                 "the private socket"
@@ -201,55 +227,116 @@ impl Feed {
                 "the bus"
             },
         );
-        Ok(session)
+        let queued_at = monotonic_now();
+        let changes = origin_change
+            .into_iter()
+            .chain(tracked_root.and_then(|tracked| tracked.change))
+            .chain(tracked_handoff.and_then(|tracked| tracked.change))
+            .chain(handoff)
+            .chain(tracked_changes)
+            .chain(once(BootChange::SetRoot(root)))
+            .chain(jobs.into_iter().map(|job| BootChange::QueueJob {
+                id: job.id,
+                unit: job.unit,
+                kind: job.kind,
+                at: queued_at,
+            }))
+            .collect();
+        self.link = Link::Connected(readable_source(session)?);
+        Ok(changes)
     }
 
-    fn track(&mut self, session: &Session, state: &mut BootState, unit: &str) -> Option<String> {
+    fn track(&mut self, session: &Session, unit: &str) -> Option<TrackedUnit> {
         if let Some(known) = self.unit_paths.values().find(|known| *known == unit) {
-            return Some(known.clone());
+            return Some(TrackedUnit {
+                name: known.clone(),
+                change: None,
+            });
         }
-        let fetched = session.fetch_unit(unit).ok()?;
-        let canonical = fetched.facts.name.clone();
-        if self.unit_paths.values().any(|known| *known == canonical) {
-            return Some(canonical);
+        let FetchedUnit {
+            path,
+            facts,
+            activity,
+        } = session.fetch_unit(unit).ok()?;
+        let name = facts.name.clone();
+        if self.unit_paths.values().any(|known| *known == name) {
+            return Some(TrackedUnit { name, change: None });
         }
-        self.unit_paths.insert(fetched.path, canonical.clone());
-        state.track_unit(fetched.facts, fetched.activity);
-        Some(canonical)
+        self.unit_paths.insert(path, name.clone());
+        Some(TrackedUnit {
+            name,
+            change: Some(BootChange::TrackUnit { facts, activity }),
+        })
     }
 
-    fn apply(&mut self, session: &Session, state: &mut BootState, signal: Signal) {
+    fn changes_for(&mut self, session: &Session, signal: Signal) -> Vec<BootChange> {
+        let at = monotonic_now();
         match signal {
-            Signal::JobNew { id, job, unit } => {
-                let kind = session.job_kind(&job).unwrap_or(JobKind::Unknown);
-                if kind == JobKind::TakesDown && state.phase != Phase::Shutdown {
-                    return;
-                }
-                let unit = self.track(session, state, &unit).unwrap_or(unit);
-                if matches!(self.root_fs, RootFs::Initrd)
-                    && unit == SWITCH_ROOT_UNIT
-                    && let Ok(sysroot) = Sysroot::hold()
-                {
-                    self.root_fs = RootFs::SwitchingTo(sysroot);
-                }
-                state.queue_job(id, &unit, kind, monotonic_now());
-            }
-            Signal::JobRemoved { id, result } => state.finish_job(id, result, monotonic_now()),
-            Signal::UnitChanged { path, activity } => {
-                if let Some(unit) = self.unit_paths.get(&path) {
-                    state.update_activity(unit, activity);
-                }
-            }
+            Signal::JobNew { id, job, unit } => self.queue_new_job(session, id, &job, unit, at),
+            Signal::JobRemoved { id, result } => vec![BootChange::FinishJob { id, result, at }],
+            Signal::UnitChanged { path, activity } => self
+                .unit_paths
+                .get(&path)
+                .map(|unit| BootChange::UpdateActivity {
+                    unit: unit.clone(),
+                    activity,
+                })
+                .into_iter()
+                .collect(),
+        }
+    }
+
+    fn queue_new_job(
+        &mut self,
+        session: &Session,
+        id: u32,
+        job: &Path<'static>,
+        unit: String,
+        at: Duration,
+    ) -> Vec<BootChange> {
+        let kind = session.job_kind(job).unwrap_or(JobKind::Unknown);
+        if kind == JobKind::TakesDown && self.phase != Phase::Shutdown {
+            return Vec::new();
+        }
+        let tracked = self.track(session, &unit);
+        let unit = tracked
+            .as_ref()
+            .map_or(unit, |tracked| tracked.name.clone());
+        if matches!(self.root_fs, RootFs::Initrd)
+            && unit == SWITCH_ROOT_UNIT
+            && let Ok(sysroot) = Sysroot::hold()
+        {
+            self.root_fs = RootFs::SwitchingTo(sysroot);
+        }
+        tracked
+            .and_then(|tracked| tracked.change)
+            .into_iter()
+            .chain(once(BootChange::QueueJob { id, unit, kind, at }))
+            .collect()
+    }
+}
+
+impl Drop for BusFeed {
+    fn drop(&mut self) {
+        if let Link::Connected(readiness) = &self.link
+            && self.scope == Scope::System
+        {
+            readiness.get_ref().set_show_status(CONFIGURED_STATUS).ok();
         }
     }
 }
 
-impl Drop for Feed {
-    fn drop(&mut self) {
-        if let Link::Connected(session) = &self.link
-            && self.scope == Scope::System
-        {
-            session.set_show_status(CONFIGURED_STATUS).ok();
-        }
-    }
+pub fn bus_inputs(
+    phase: Phase,
+    scope: Scope,
+    target: RootRequest,
+) -> impl Stream<Item = ScreenInput> {
+    unfold_carrying(BusFeed::new(phase, scope, target), |mut feed| async move {
+        let inputs = feed.next_inputs().await?;
+        Some(CarriedItem {
+            item: inputs,
+            state: feed,
+        })
+    })
+    .flat_map(stream::iter)
 }

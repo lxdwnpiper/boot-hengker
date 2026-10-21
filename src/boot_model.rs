@@ -1,3 +1,4 @@
+mod boot_change;
 pub mod boot_origin;
 mod job_ingestion;
 mod reached_milestones;
@@ -7,6 +8,7 @@ mod waiting_tree;
 use std::{collections::HashMap, time::Duration};
 
 pub use self::{
+    boot_change::BootChange,
     reached_milestones::MilestoneRow,
     unit_facts::{ActiveState, Activity, JobKind, JobResult, UnitFacts, UnitKind},
     waiting_tree::{RowStatus, TreeNode, TreeRow, flatten_forest},

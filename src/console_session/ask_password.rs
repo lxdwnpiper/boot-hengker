@@ -1,7 +1,7 @@
 use std::{
     fs, io, iter,
     os::{
-        fd::{AsFd, BorrowedFd, OwnedFd},
+        fd::{AsRawFd, OwnedFd, RawFd},
         unix::net::UnixDatagram,
     },
     path::{Path, PathBuf},
@@ -61,9 +61,9 @@ impl RequestWatch {
     }
 }
 
-impl AsFd for RequestWatch {
-    fn as_fd(&self) -> BorrowedFd<'_> {
-        self.inotify.as_fd()
+impl AsRawFd for RequestWatch {
+    fn as_raw_fd(&self) -> RawFd {
+        self.inotify.as_raw_fd()
     }
 }
 

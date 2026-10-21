@@ -1,25 +1,30 @@
 use std::{
     collections::{HashMap, HashSet},
     io,
-    time::{Duration, Instant},
+    ops::ControlFlow,
+    time::Duration,
 };
 
-use ratatui::{
-    DefaultTerminal,
-    crossterm::event::{self, Event},
-};
+use futures::stream;
+use ratatui::{DefaultTerminal, crossterm::event::Event};
+use tokio::runtime::Builder;
+use zeroize::Zeroizing;
 
 use crate::{
     boot_model::{
         ActiveState, Activity, BootState, JobKind, JobResult, Phase, UnitFacts,
         boot_origin::BootOrigin,
     },
-    boot_view::{BootView, PasswordPrompt},
-    console_session::passphrase_input,
+    boot_view::PasswordPrompt,
+    console_session::{
+        passphrase_input,
+        stream_sources::{frame_inputs, key_inputs},
+        watch_screen::{ConsoleDesk, WatchEnding, WatchScreen, watch_until_ending},
+    },
     screen_settings::{color_scheme::Colors, config_file::Timing, font_glyphs::Glyphs},
+    systemd_link::monotonic_clock::monotonic_now,
 };
 
-const FRAME_INTERVAL: Duration = Duration::from_millis(100);
 const FINAL_FRAME: Duration = Duration::from_secs(3);
 
 pub const DEMO_PASSPHRASE: &str = "demo";
@@ -282,70 +287,108 @@ impl Script {
     }
 }
 
-fn next_event() -> io::Result<Option<Event>> {
-    if event::poll(FRAME_INTERVAL)? {
-        event::read().map(Some)
-    } else {
-        Ok(None)
+struct DemoDesk {
+    script: Script,
+    after_switch_root: Option<&'static [Step]>,
+    describe: fn(&str) -> &'static str,
+    settled_at: Option<Duration>,
+    typed: Zeroizing<String>,
+    glyphs: Glyphs,
+}
+
+impl ConsoleDesk for DemoDesk {
+    fn frame_passed(&mut self, state: &mut BootState, now: Duration) -> ControlFlow<WatchEnding> {
+        self.script.advance(state, now);
+        if self.script.is_done()
+            && let Some(steps) = self.after_switch_root.take()
+        {
+            state.switch_root(now);
+            self.script = Script::begin(steps, self.describe, 1000, state, now);
+        }
+        if !self.script.is_done() {
+            return ControlFlow::Continue(());
+        }
+        let settled_at = *self.settled_at.get_or_insert(now);
+        if now.saturating_sub(settled_at) >= FINAL_FRAME {
+            ControlFlow::Break(WatchEnding::BootCompleted)
+        } else {
+            ControlFlow::Continue(())
+        }
+    }
+
+    fn glyphs(&self) -> &Glyphs {
+        &self.glyphs
+    }
+
+    fn drops_bold(&self) -> bool {
+        false
+    }
+
+    fn prompt(&self, now: Duration) -> Option<PasswordPrompt<'_>> {
+        self.script.prompt(&self.typed, now)
+    }
+
+    fn press_key(&mut self, event: &Event, now: Duration) -> ControlFlow<WatchEnding> {
+        let asking = self.script.asking().is_some();
+        if passphrase_input::asks_to_quit(event, asking) {
+            return ControlFlow::Break(WatchEnding::ViewerLeft);
+        }
+        if asking
+            && !self.script.is_checking(now)
+            && let Some(submitted) = passphrase_input::type_key(&mut self.typed, event)
+        {
+            self.script.answer(&submitted, now);
+        }
+        ControlFlow::Continue(())
     }
 }
 
-pub fn play(terminal: &mut DefaultTerminal, scenario: &Scenario) -> io::Result<()> {
-    let clock = Instant::now();
-    let now = || clock.elapsed();
-    let origin = BootOrigin {
+fn demo_origin() -> BootOrigin {
+    BootOrigin {
         host: "demo".to_owned(),
         system: "NixOS 26.11.20261007.39ad350".to_owned(),
         generation: "42".to_owned(),
         kernel: "Linux 7.2.9".to_owned(),
-    };
-    let mut state = BootState::new(scenario.phase);
-    let mut script = Script::begin(scenario.steps, scenario.describe, 1, &mut state, now());
-    let mut switched_root = scenario.after_switch_root.is_empty();
-    let mut settled_at = None;
-    let mut typed = passphrase_input::empty();
-    loop {
-        script.advance(&mut state, now());
-        if script.is_done() && !switched_root {
-            state.switch_root(now());
-            script = Script::begin(
-                scenario.after_switch_root,
-                scenario.describe,
-                1000,
-                &mut state,
-                now(),
-            );
-            switched_root = true;
-        }
-        terminal.draw(|canvas| {
-            canvas.render_widget(
-                BootView {
-                    state: &state,
-                    colors: &Colors::default(),
-                    timing: &Timing::default(),
-                    glyphs: &Glyphs::default(),
-                    now: now(),
-                    origin: &origin,
-                    password_prompt: script.prompt(&typed, now()),
-                },
-                canvas.area(),
-            );
-        })?;
-        if script.is_done() && settled_at.get_or_insert_with(Instant::now).elapsed() >= FINAL_FRAME
-        {
-            return Ok(());
-        }
-        if let Some(event) = next_event()? {
-            let asking = script.asking().is_some();
-            if passphrase_input::asks_to_quit(&event, asking) {
-                return Ok(());
-            }
-            if asking
-                && !script.is_checking(now())
-                && let Some(submitted) = passphrase_input::type_key(&mut typed, &event)
-            {
-                script.answer(&submitted, now());
-            }
-        }
     }
+}
+
+async fn play_scenario(terminal: &mut DefaultTerminal, scenario: &Scenario) -> io::Result<()> {
+    let mut state = BootState::new(scenario.phase);
+    let script = Script::begin(
+        scenario.steps,
+        scenario.describe,
+        1,
+        &mut state,
+        Duration::ZERO,
+    );
+    let desk = DemoDesk {
+        script,
+        after_switch_root: (!scenario.after_switch_root.is_empty())
+            .then_some(scenario.after_switch_root),
+        describe: scenario.describe,
+        settled_at: None,
+        typed: passphrase_input::empty(),
+        glyphs: Glyphs::default(),
+    };
+    let mut screen = WatchScreen::new(
+        state,
+        desk,
+        demo_origin(),
+        Colors::default(),
+        Timing::default(),
+        monotonic_now(),
+    );
+    let inputs = stream::select(frame_inputs(), key_inputs()?);
+    match watch_until_ending(&mut screen, terminal, inputs).await {
+        WatchEnding::Failed(error) => Err(io::Error::other(error)),
+        WatchEnding::BootCompleted | WatchEnding::ViewerLeft => Ok(()),
+    }
+}
+
+pub fn play(terminal: &mut DefaultTerminal, scenario: &Scenario) -> io::Result<()> {
+    Builder::new_current_thread()
+        .enable_io()
+        .enable_time()
+        .build()?
+        .block_on(play_scenario(terminal, scenario))
 }

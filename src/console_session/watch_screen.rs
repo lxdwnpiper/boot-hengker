@@ -1,0 +1,222 @@
+use std::{future::ready, ops::ControlFlow, time::Duration};
+
+use crossterm::event::Event;
+use futures::{Stream, StreamExt};
+use ratatui::{
+    Terminal,
+    backend::Backend,
+    buffer::{Buffer, CellDiffOption},
+    style::Modifier,
+};
+
+use crate::{
+    boot_model::{BootChange, BootState, boot_origin::BootOrigin},
+    boot_view::{BootView, PasswordPrompt},
+    screen_settings::{color_scheme::Colors, config_file::Timing, font_glyphs::Glyphs},
+    systemd_link::{link_error::Error, monotonic_clock::monotonic_now},
+};
+
+const INPUT_BATCH: usize = 64;
+
+pub enum ScreenInput {
+    Boot(Vec<BootChange>),
+    Reconnected,
+    Key(Event),
+    Frame,
+    FullRepaint,
+    PasswordRequests,
+    Terminate,
+    Failed(Error),
+}
+
+pub enum WatchEnding {
+    BootCompleted,
+    ViewerLeft,
+    Failed(Error),
+}
+
+pub trait ConsoleDesk {
+    fn glyphs(&self) -> &Glyphs;
+    fn drops_bold(&self) -> bool;
+    fn prompt(&self, now: Duration) -> Option<PasswordPrompt<'_>>;
+    fn press_key(&mut self, event: &Event, now: Duration) -> ControlFlow<WatchEnding>;
+    fn frame_passed(&mut self, state: &mut BootState, now: Duration) -> ControlFlow<WatchEnding>;
+
+    fn password_requests_changed(&mut self) {}
+
+    fn keep_console_up(&mut self) {}
+
+    fn take_clear_request(&mut self) -> bool {
+        false
+    }
+
+    fn refreshed_origin(&self) -> Option<BootOrigin> {
+        None
+    }
+}
+
+pub struct WatchScreen<Desk> {
+    pub state: BootState,
+    pub desk: Desk,
+    origin: BootOrigin,
+    full_repaint_due: bool,
+    colors: Colors,
+    timing: Timing,
+    epoch: Duration,
+}
+
+impl<Desk: ConsoleDesk> WatchScreen<Desk> {
+    pub fn new(
+        state: BootState,
+        desk: Desk,
+        origin: BootOrigin,
+        colors: Colors,
+        timing: Timing,
+        epoch: Duration,
+    ) -> Self {
+        Self {
+            state,
+            desk,
+            origin,
+            full_repaint_due: false,
+            colors,
+            timing,
+            epoch,
+        }
+    }
+
+    #[must_use]
+    pub fn now(&self) -> Duration {
+        monotonic_now().saturating_sub(self.epoch)
+    }
+
+    fn absorb(&mut self, input: ScreenInput) -> ControlFlow<WatchEnding> {
+        let now = self.now();
+        match input {
+            ScreenInput::Boot(changes) => self.apply_boot_changes(changes),
+            ScreenInput::Reconnected => {
+                self.full_repaint_due = true;
+                ControlFlow::Continue(())
+            }
+            ScreenInput::Key(event) => self.desk.press_key(&event, now),
+            ScreenInput::Frame => self.desk.frame_passed(&mut self.state, now),
+            ScreenInput::FullRepaint => {
+                self.desk.keep_console_up();
+                self.full_repaint_due = true;
+                ControlFlow::Continue(())
+            }
+            ScreenInput::PasswordRequests => {
+                self.desk.password_requests_changed();
+                ControlFlow::Continue(())
+            }
+            ScreenInput::Terminate => ControlFlow::Break(WatchEnding::ViewerLeft),
+            ScreenInput::Failed(error) => ControlFlow::Break(WatchEnding::Failed(error)),
+        }
+    }
+
+    fn apply_boot_changes(&mut self, changes: Vec<BootChange>) -> ControlFlow<WatchEnding> {
+        let phase_before = self.state.phase;
+        changes
+            .into_iter()
+            .for_each(|change| self.state.apply(change));
+        if self.state.phase != phase_before
+            && let Some(origin) = self.desk.refreshed_origin()
+        {
+            self.origin = origin;
+        }
+        if !self.state.is_complete() {
+            return ControlFlow::Continue(());
+        }
+        eprintln!(
+            "bootvine: {} reached, handing the console over",
+            self.state.root.unit().unwrap_or("boot")
+        );
+        ControlFlow::Break(WatchEnding::BootCompleted)
+    }
+
+    fn absorb_batch<B: Backend>(
+        &mut self,
+        batch: Vec<ScreenInput>,
+        terminal: &mut Terminal<B>,
+    ) -> ControlFlow<WatchEnding>
+    where
+        Error: From<B::Error>,
+    {
+        batch.into_iter().try_for_each(|input| self.absorb(input))?;
+        match self.draw(terminal) {
+            Ok(()) => ControlFlow::Continue(()),
+            Err(error) => ControlFlow::Break(WatchEnding::Failed(error)),
+        }
+    }
+
+    fn draw<B: Backend>(&mut self, terminal: &mut Terminal<B>) -> Result<(), Error>
+    where
+        Error: From<B::Error>,
+    {
+        if self.desk.take_clear_request() {
+            terminal.clear()?;
+        }
+        let now = self.now();
+        let completed = terminal.draw(|canvas| {
+            canvas.render_widget(
+                BootView {
+                    state: &self.state,
+                    colors: &self.colors,
+                    timing: &self.timing,
+                    glyphs: self.desk.glyphs(),
+                    now,
+                    origin: &self.origin,
+                    password_prompt: self.desk.prompt(now),
+                },
+                canvas.area(),
+            );
+            if self.desk.drops_bold() {
+                drop_bold(canvas.buffer_mut());
+            }
+        })?;
+        if self.full_repaint_due {
+            let painted = completed.buffer.clone();
+            overwrite_every_cell(terminal.backend_mut(), &painted)?;
+            self.full_repaint_due = false;
+        }
+        Ok(())
+    }
+}
+
+pub async fn watch_until_ending<Desk: ConsoleDesk, B: Backend>(
+    screen: &mut WatchScreen<Desk>,
+    terminal: &mut Terminal<B>,
+    inputs: impl Stream<Item = ScreenInput>,
+) -> WatchEnding
+where
+    Error: From<B::Error>,
+{
+    inputs
+        .ready_chunks(INPUT_BATCH)
+        .filter_map(|batch| ready(screen.absorb_batch(batch, terminal).break_value()))
+        .take(1)
+        .fold(WatchEnding::ViewerLeft, |_, ending| ready(ending))
+        .await
+}
+
+fn overwrite_every_cell<B: Backend>(backend: &mut B, frame: &Buffer) -> Result<(), B::Error> {
+    backend.draw(
+        frame
+            .content
+            .iter()
+            .enumerate()
+            .filter(|(_, cell)| cell.diff_option != CellDiffOption::Skip)
+            .map(|(index, cell)| {
+                let (x, y) = frame.pos_of(index);
+                (x, y, cell)
+            }),
+    )?;
+    backend.flush()
+}
+
+fn drop_bold(frame: &mut Buffer) {
+    frame
+        .content
+        .iter_mut()
+        .for_each(|cell| cell.modifier.remove(Modifier::BOLD));
+}

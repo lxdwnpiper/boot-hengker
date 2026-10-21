@@ -1,4 +1,4 @@
-use std::io;
+use std::{convert::Infallible, io};
 
 use dbus::{Error as BusError, arg::TypeMismatchError};
 use rustix::io::Errno;
@@ -19,4 +19,10 @@ pub enum Error {
     RootSwitch(#[from] Errno),
     #[error("the service manager did not come back")]
     ManagerUnreachable,
+}
+
+impl From<Infallible> for Error {
+    fn from(never: Infallible) -> Self {
+        match never {}
+    }
 }

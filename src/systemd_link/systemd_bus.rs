@@ -1,6 +1,6 @@
 use std::{
     iter,
-    os::fd::{AsFd, BorrowedFd},
+    os::fd::{AsRawFd, RawFd},
     time::Duration,
 };
 
@@ -246,9 +246,9 @@ impl Session {
     }
 }
 
-impl AsFd for Session {
-    fn as_fd(&self) -> BorrowedFd<'_> {
-        unsafe { BorrowedFd::borrow_raw(self.channel.watch().fd) }
+impl AsRawFd for Session {
+    fn as_raw_fd(&self) -> RawFd {
+        self.channel.watch().fd
     }
 }
 
