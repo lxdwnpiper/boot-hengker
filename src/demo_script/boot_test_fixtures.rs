@@ -15,7 +15,7 @@ pub struct QueuedUnit {
 pub fn facts(name: &str, after: &[&str]) -> UnitFacts {
     UnitFacts {
         name: name.to_owned(),
-        description: String::new(),
+        description: None,
         after: after.iter().map(ToString::to_string).collect(),
         before: Vec::new(),
     }
@@ -58,7 +58,7 @@ impl QueuedUnit {
     }
 
     pub fn described(mut self, description: &str) -> Self {
-        description.clone_into(&mut self.facts.description);
+        self.facts.description = (!description.is_empty()).then(|| description.to_owned());
         self
     }
 }

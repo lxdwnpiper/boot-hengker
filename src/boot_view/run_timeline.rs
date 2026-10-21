@@ -75,9 +75,10 @@ impl Timeline<'_> {
         let bar_rows = usize::from(height.saturating_sub(CHROME_HEIGHT));
         let room = bar_rows.saturating_sub(self.milestones.len() + self.running.len());
         let mut longest_first = self.finished.clone();
-        longest_first.sort_by_key(|run| Reverse(run.finished_at.saturating_sub(run.started_at)));
+        longest_first
+            .sort_unstable_by_key(|run| Reverse(run.finished_at.saturating_sub(run.started_at)));
         longest_first.truncate(room.min(SLOWEST_RUNS_SHOWN));
-        longest_first.sort_by_key(|run| run.started_at);
+        longest_first.sort_unstable_by_key(|run| run.started_at);
         longest_first
     }
 
@@ -143,10 +144,14 @@ impl Timeline<'_> {
             symbol: self.glyphs.waiting_bead,
             color: self.colors.queued_bar,
         });
+        let running_bar = self
+            .glyphs
+            .growing_tip
+            .map_or(self.glyphs.bead, |tips| tips[7]);
         let ran = Segment {
             from: run.since,
             to: self.now,
-            symbol: self.glyphs.bead,
+            symbol: running_bar,
             color: self.colors.running,
         };
         TimelineEntry {

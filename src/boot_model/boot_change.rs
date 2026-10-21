@@ -32,6 +32,7 @@ pub enum BootChange {
     ManagerExited {
         at: Duration,
     },
+    BootFinished,
 }
 
 impl BootState {
@@ -47,6 +48,7 @@ impl BootState {
             BootChange::SwitchRoot { at } => self.switch_root(at),
             BootChange::ForgetJobs => self.forget_jobs(),
             BootChange::ManagerExited { at } => self.manager_exited_at = Some(at),
+            BootChange::BootFinished => self.mark_boot_finished(),
         }
     }
 }
@@ -92,5 +94,13 @@ mod tests {
         assert_eq!(applied.tally(), called.tally());
         assert_eq!(applied.is_complete(), called.is_complete());
         assert_eq!(waiting_rows(&applied), waiting_rows(&called));
+    }
+
+    #[test]
+    fn boot_finished_change_marks_the_boot_complete() {
+        let mut state = BootState::new(Phase::Host);
+        assert!(!state.is_complete());
+        state.apply(BootChange::BootFinished);
+        assert!(state.is_complete());
     }
 }

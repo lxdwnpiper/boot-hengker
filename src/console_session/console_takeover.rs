@@ -19,6 +19,7 @@ pub struct Console {
     quiet_kernel: Option<QuietKernelConsole>,
     foreground: Option<ForegroundVt>,
     for_system: bool,
+    handing_over: bool,
     pub glyphs: Glyphs,
     pub bold_is_brightness: bool,
 }
@@ -37,6 +38,7 @@ impl Console {
                 ForegroundVt::take()
             },
             for_system,
+            handing_over: false,
             glyphs: font_glyphs(),
             bold_is_brightness: own_vt().is_some(),
         }
@@ -63,11 +65,29 @@ impl Console {
             .quiet_kernel
             .as_mut()
             .is_some_and(QuietKernelConsole::keep_quiet);
-        let terminal_was_taken = self.foreground.as_ref().is_some_and(ForegroundVt::insist);
+        let terminal_was_taken =
+            !self.handing_over && self.foreground.as_ref().is_some_and(ForegroundVt::insist);
         let glyphs = font_glyphs();
         let font_changed = glyphs != self.glyphs;
         self.glyphs = glyphs;
         kernel_got_loud || terminal_was_taken || font_changed
+    }
+
+    pub fn begin_handover(&mut self) {
+        self.handing_over = true;
+    }
+
+    #[must_use]
+    pub fn console_was_taken(&self) -> bool {
+        self.foreground
+            .as_ref()
+            .is_some_and(ForegroundVt::taken_away)
+    }
+
+    pub fn leave_console(&mut self) {
+        if let Some(foreground) = &mut self.foreground {
+            foreground.leave = true;
+        }
     }
 }
 
@@ -162,6 +182,7 @@ struct VtState {
 struct ForegroundVt {
     own: u16,
     previous: u16,
+    leave: bool,
 }
 
 fn active_vt() -> Option<u16> {
@@ -186,11 +207,19 @@ impl ForegroundVt {
         if previous != own {
             activate(own).ok()?;
         }
-        Some(Self { own, previous })
+        Some(Self {
+            own,
+            previous,
+            leave: false,
+        })
     }
 
     fn insist(&self) -> bool {
         active_vt().is_some_and(|active| active != self.own) && activate(self.own).is_ok()
+    }
+
+    fn taken_away(&self) -> bool {
+        active_vt().is_some_and(|active| active != self.own)
     }
 }
 
@@ -198,6 +227,9 @@ impl Drop for ForegroundVt {
     fn drop(&mut self) {
         if ask_password::requested() {
             eprintln!("bootvine: leaving a password prompt to the console agent on this terminal");
+            return;
+        }
+        if self.leave {
             return;
         }
         let _ = activate(self.previous);

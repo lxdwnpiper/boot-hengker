@@ -54,7 +54,7 @@ fn tree_on_top_timeline_below() {
         "{screen}"
     );
     assert!(
-        lines[timeline + 4].contains("·■")
+        lines[timeline + 4].contains("·█")
             && lines[timeline + 4].ends_with(['▏', '▎', '▍', '▌', '▋', '▊', '▉', '█']),
         "{screen}"
     );

@@ -1,3 +1,5 @@
+use std::iter::successors;
+
 use crate::boot_model::{RowStatus, TreeNode, TreeRow, UnitKind, flatten_forest};
 
 const MIN_FOLDED_LINKS: usize = 2;
@@ -55,13 +57,12 @@ impl TreeNode {
     }
 
     fn foldable_links(&self) -> usize {
-        let mut links = 0;
-        let mut cursor = self;
-        while cursor.is_chain_link() && cursor.children[0].is_chain_link() {
-            links += 1;
-            cursor = &cursor.children[0];
-        }
-        links
+        successors(Some(self), |cursor| {
+            (cursor.is_chain_link() && cursor.children[0].is_chain_link())
+                .then(|| &cursor.children[0])
+        })
+        .count()
+        .saturating_sub(1)
     }
 
     fn fold(mut self, may_absorb: bool) -> Self {

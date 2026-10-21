@@ -71,6 +71,7 @@ impl BootState {
             handoff_unit,
             manager_exited_at: None,
             milestone_targets,
+            boot_finished: false,
             finished_before_reconnect: 0,
             units: HashMap::new(),
             jobs: HashMap::new(),
@@ -90,6 +91,10 @@ impl BootState {
         if self.handoff_unit.is_some() {
             self.handoff_unit = Some(unit);
         }
+    }
+
+    pub fn mark_boot_finished(&mut self) {
+        self.boot_finished = true;
     }
 
     pub fn track_unit(&mut self, facts: UnitFacts, activity: Activity) {
@@ -212,13 +217,7 @@ impl BootState {
         if matches!(self.phase, Phase::Initrd | Phase::Shutdown) {
             return false;
         }
-        if self
-            .handoff_unit
-            .as_deref()
-            .and_then(|unit| self.units.get(unit))
-            .and_then(|handoff| handoff.activity.state)
-            .is_some_and(|state| state != ActiveState::Inactive)
-        {
+        if self.boot_finished {
             return true;
         }
         let Root::Queued(root) = &self.root else {
@@ -285,30 +284,26 @@ mod tests {
     }
 
     #[test]
-    fn display_manager_activation_hands_the_console_over() {
+    fn display_manager_activation_does_not_hand_the_console_over() {
         let mut state = sample();
         queue_unit(&mut state, 20, waiting(HANDOFF_UNIT, &[]), 500 * MS);
-        assert!(!state.is_complete());
         state.update_activity(HANDOFF_UNIT, activating(6000 * MS));
+        assert!(!state.is_complete());
+    }
+
+    #[test]
+    fn boot_finished_hands_the_console_over() {
+        let mut state = sample();
+        queue_unit(&mut state, 20, waiting(HANDOFF_UNIT, &[]), 500 * MS);
+        state.mark_boot_finished();
         assert!(state.is_complete());
     }
 
     #[test]
-    fn display_manager_started_in_one_step_hands_the_console_over() {
-        let mut state = sample();
-        queue_unit(&mut state, 20, waiting(HANDOFF_UNIT, &[]), 500 * MS);
-        state.finish_job(20, JobResult::Done, 6000 * MS);
+    fn boot_finished_is_ignored_in_the_initrd() {
+        let mut state = BootState::new(Phase::Initrd);
+        state.mark_boot_finished();
         assert!(!state.is_complete());
-        state.update_activity(
-            HANDOFF_UNIT,
-            Activity {
-                state: Some(ActiveState::Active),
-                inactive_exit: Some(6000 * MS),
-                active_enter: Some(6000 * MS),
-                active_exit: None,
-            },
-        );
-        assert!(state.is_complete());
     }
 
     #[test]

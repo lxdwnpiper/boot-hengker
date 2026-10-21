@@ -27,6 +27,7 @@ pub struct LiveDesk {
     entry: Option<PasswordEntry>,
     requests_watched: bool,
     clear_requested: bool,
+    handover_deadline: Option<Duration>,
 }
 
 impl LiveDesk {
@@ -37,6 +38,7 @@ impl LiveDesk {
             entry: None,
             requests_watched,
             clear_requested: false,
+            handover_deadline: None,
         }
     }
 
@@ -78,8 +80,21 @@ impl ConsoleDesk for LiveDesk {
         ControlFlow::Continue(())
     }
 
-    fn frame_passed(&mut self, _state: &mut BootState, _now: Duration) -> ControlFlow<WatchEnding> {
-        ControlFlow::Continue(())
+    fn begin_handover(&mut self, now: Duration, hold_for: Duration) {
+        self.console.begin_handover();
+        self.handover_deadline = Some(now + hold_for);
+    }
+
+    fn frame_passed(&mut self, _state: &mut BootState, now: Duration) -> ControlFlow<WatchEnding> {
+        let Some(deadline) = self.handover_deadline else {
+            return ControlFlow::Continue(());
+        };
+        if self.console.console_was_taken() || now >= deadline {
+            self.console.leave_console();
+            ControlFlow::Break(WatchEnding::BootCompleted)
+        } else {
+            ControlFlow::Continue(())
+        }
     }
 
     fn password_requests_changed(&mut self) {

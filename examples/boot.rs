@@ -140,8 +140,8 @@ const HOST: &[Step] = &[
     ),
 ];
 
-fn description(unit: &str) -> &'static str {
-    match unit {
+fn description(unit: &str) -> Option<&'static str> {
+    let description = match unit {
         "initrd.target" => "Initrd Default Target",
         "initrd-fs.target" => "Initrd File Systems",
         "initrd-root-device.target" => "Initrd Root Device",
@@ -168,8 +168,9 @@ fn description(unit: &str) -> &'static str {
         "nvidia-powerd.service" => "NVIDIA Dynamic Boost",
         "sys-devices-virtual-misc-rfkill.device" => "/sys/devices/virtual/misc/rfkill",
         "systemd-rfkill.service" => "Load/Save RF Kill Switch Status",
-        _ => "",
-    }
+        _ => return None,
+    };
+    Some(description)
 }
 
 fn main() -> io::Result<()> {

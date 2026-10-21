@@ -209,9 +209,9 @@ impl BusFeed {
     async fn origin_change(
         &mut self,
         connection: &mut BusConnection,
-    ) -> Result<Option<BootChange>, Error> {
+    ) -> Result<Vec<BootChange>, Error> {
         if self.gave_origin {
-            return Ok(None);
+            return Ok(Vec::new());
         }
         self.gave_origin = true;
         let origin = if connection.boot_in_progress().await? {
@@ -219,7 +219,9 @@ impl BusFeed {
         } else {
             monotonic_now()
         };
-        Ok(Some(BootChange::SetOrigin(origin)))
+        Ok(once(BootChange::SetOrigin(origin))
+            .chain(self.boot_finished())
+            .collect())
     }
 
     async fn track_all(
@@ -347,7 +349,15 @@ impl BusFeed {
                 })
                 .into_iter()
                 .collect(),
+            Signal::BootFinished => self.boot_finished(),
         }
+    }
+
+    fn boot_finished(&self) -> Vec<BootChange> {
+        (self.phase == Phase::Host)
+            .then_some(BootChange::BootFinished)
+            .into_iter()
+            .collect()
     }
 
     async fn queue_new_job(

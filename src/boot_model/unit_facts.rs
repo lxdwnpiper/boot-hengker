@@ -29,7 +29,7 @@ pub enum JobResult {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UnitFacts {
     pub name: String,
-    pub description: String,
+    pub description: Option<String>,
     pub after: Vec<String>,
     pub before: Vec<String>,
 }
@@ -90,18 +90,18 @@ impl UnitKind {
     }
 
     #[must_use]
-    pub fn tag(self) -> &'static str {
+    pub fn tag(self) -> Option<&'static str> {
         match self {
-            Self::Service | Self::Target | Self::Other => "",
-            Self::Socket => "Socket",
-            Self::Mount => "Mount",
-            Self::Automount => "Automount",
-            Self::Device => "Device",
-            Self::Swap => "Swap",
-            Self::Path => "Path",
-            Self::Timer => "Timer",
-            Self::Slice => "Slice",
-            Self::Scope => "Scope",
+            Self::Service | Self::Target | Self::Other => None,
+            Self::Socket => Some("Socket"),
+            Self::Mount => Some("Mount"),
+            Self::Automount => Some("Automount"),
+            Self::Device => Some("Device"),
+            Self::Swap => Some("Swap"),
+            Self::Path => Some("Path"),
+            Self::Timer => Some("Timer"),
+            Self::Slice => Some("Slice"),
+            Self::Scope => Some("Scope"),
         }
     }
 
@@ -114,12 +114,15 @@ impl UnitKind {
 }
 
 fn labelled_by_description(facts: &UnitFacts) -> bool {
-    !facts.description.is_empty() && UnitKind::of(&facts.name).labelled_by_description()
+    facts.description.is_some() && UnitKind::of(&facts.name).labelled_by_description()
 }
 
 pub(super) fn display_label(facts: &UnitFacts) -> String {
     if labelled_by_description(facts) {
-        return facts.description.clone();
+        return facts
+            .description
+            .clone()
+            .unwrap_or_else(|| facts.name.clone());
     }
     match UnitKind::of(&facts.name) {
         UnitKind::Target | UnitKind::Other => facts.name.clone(),
@@ -130,13 +133,12 @@ pub(super) fn display_label(facts: &UnitFacts) -> String {
     }
 }
 
-pub(super) fn summary(facts: &UnitFacts) -> String {
-    let repeats_the_name = facts.description == facts.name
-        || facts
-            .description
-            .eq_ignore_ascii_case(&display_label(facts));
+pub(super) fn summary(facts: &UnitFacts) -> Option<String> {
+    let repeats_the_name = facts.description.as_deref().is_some_and(|description| {
+        description == facts.name || description.eq_ignore_ascii_case(&display_label(facts))
+    });
     if labelled_by_description(facts) || repeats_the_name {
-        return String::new();
+        return None;
     }
     facts.description.clone()
 }
@@ -168,11 +170,11 @@ mod tests {
     fn kinds_with_a_tag_drop_their_suffix() {
         let socket = facts("docker.socket", &[]);
         assert_eq!(UnitKind::of(&socket.name), UnitKind::Socket);
-        assert_eq!(UnitKind::Socket.tag(), "Socket");
+        assert_eq!(UnitKind::Socket.tag(), Some("Socket"));
         assert_eq!(display_label(&socket), "docker");
         assert_eq!(display_label(&facts("sshd.service", &[])), "sshd");
         assert_eq!(display_label(&facts("basic.target", &[])), "basic.target");
-        assert_eq!(UnitKind::Target.tag(), "");
+        assert_eq!(UnitKind::Target.tag(), None);
     }
 
     #[test]
@@ -182,11 +184,11 @@ mod tests {
         };
         assert_eq!(
             described("multi-user.target", "Multi-User System"),
-            "Multi-User System"
+            Some("Multi-User System".to_owned())
         );
-        assert_eq!(described("greetd.service", "greetd.service"), "");
-        assert_eq!(described("greetd.service", "Greetd"), "");
-        assert_eq!(described("dev-sda.device", "Samsung SSD"), "");
-        assert_eq!(described("demo.service", ""), "");
+        assert_eq!(described("greetd.service", "greetd.service"), None);
+        assert_eq!(described("greetd.service", "Greetd"), None);
+        assert_eq!(described("dev-sda.device", "Samsung SSD"), None);
+        assert_eq!(described("demo.service", ""), None);
     }
 }

@@ -1,5 +1,6 @@
 use std::{
     fs::{read_dir, read_link, read_to_string},
+    iter::once,
     path::{Path, PathBuf},
 };
 
@@ -13,8 +14,8 @@ const NIXOS_SYSTEM: &str = "nixos-system-";
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct BootOrigin {
     pub host: String,
-    pub system: String,
-    pub generation: String,
+    pub system: Option<String>,
+    pub generation: Option<String>,
     pub kernel: String,
 }
 
@@ -33,11 +34,9 @@ impl BootOrigin {
                     .iter()
                     .find_map(|path| read_to_string(path).ok())
                     .and_then(|release| pretty_name(&release))
-            })
-            .unwrap_or_default();
-        let generation = system_path
-            .map(|path| generation_of(Path::new(path), &system_links()))
-            .unwrap_or_default();
+            });
+        let generation =
+            system_path.and_then(|path| generation_of(Path::new(path), &system_links()));
         Self {
             kernel: format!("Linux {}", names.release().to_string_lossy()),
             host,
@@ -48,19 +47,15 @@ impl BootOrigin {
 
     #[must_use]
     pub fn parts(&self) -> Vec<String> {
-        [
-            self.host.clone(),
-            self.system.clone(),
-            if self.generation.is_empty() {
-                String::new()
-            } else {
-                format!("generation {}", self.generation)
-            },
-            self.kernel.clone(),
-        ]
-        .into_iter()
-        .filter(|part| !part.is_empty())
-        .collect()
+        once(self.host.clone())
+            .chain(self.system.clone())
+            .chain(
+                self.generation
+                    .as_ref()
+                    .map(|generation| format!("generation {generation}")),
+            )
+            .chain(once(self.kernel.clone()))
+            .collect()
     }
 }
 
@@ -107,12 +102,11 @@ fn system_links() -> Vec<SystemLink> {
         .collect()
 }
 
-fn generation_of(system_path: &Path, links: &[SystemLink]) -> String {
+fn generation_of(system_path: &Path, links: &[SystemLink]) -> Option<String> {
     links
         .iter()
         .find(|link| link.target == system_path)
         .map(|link| link.generation.clone())
-        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -147,8 +141,11 @@ mod tests {
                 target: system.into(),
             },
         ];
-        assert_eq!(generation_of(Path::new(system), &links), "2771");
-        assert_eq!(generation_of(Path::new(system), &links[..1]), "");
+        assert_eq!(
+            generation_of(Path::new(system), &links),
+            Some("2771".to_owned())
+        );
+        assert_eq!(generation_of(Path::new(system), &links[..1]), None);
     }
 
     #[test]
@@ -163,8 +160,8 @@ mod tests {
     fn unknown_parts_are_left_out() {
         let origin = BootOrigin {
             host: "ryzen".to_owned(),
-            system: "NixOS 26.11".to_owned(),
-            generation: String::new(),
+            system: Some("NixOS 26.11".to_owned()),
+            generation: None,
             kernel: "Linux 7.2.9".to_owned(),
         };
         assert_eq!(origin.parts(), ["ryzen", "NixOS 26.11", "Linux 7.2.9"]);

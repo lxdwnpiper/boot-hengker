@@ -67,6 +67,7 @@ pub enum Signal {
         path: Path<'static>,
         activity: Activity,
     },
+    BootFinished,
 }
 
 pub struct FetchedUnit {
@@ -355,7 +356,7 @@ fn unit_facts_from(name: &str, properties: &PropMap) -> UnitFacts {
     };
     UnitFacts {
         name: text("Id").unwrap_or_else(|| name.to_owned()),
-        description: text("Description").unwrap_or_default(),
+        description: text("Description").filter(|description| !description.is_empty()),
         after: names("After"),
         before: names("Before"),
     }
@@ -386,9 +387,10 @@ fn parse_signal(message: &Message) -> Option<Signal> {
     }
     let interface = message.interface()?;
     let member = message.member()?;
-    match &*interface {
-        MANAGER_INTERFACE => parse_job_signal(message, &member),
-        PROPERTIES_INTERFACE if &*member == "PropertiesChanged" => parse_unit_change(message),
+    match (&*interface, &*member) {
+        (MANAGER_INTERFACE, "JobNew" | "JobRemoved") => parse_job_signal(message, &member),
+        (MANAGER_INTERFACE, "PropertiesChanged") => parse_manager_change(message),
+        (PROPERTIES_INTERFACE, "PropertiesChanged") => parse_unit_change(message),
         _ => None,
     }
 }
@@ -421,6 +423,24 @@ fn parse_unit_change(message: &Message) -> Option<Signal> {
         path: message.path()?.into_static(),
         activity: activity_from(&changed),
     })
+}
+
+fn parse_manager_change(message: &Message) -> Option<Signal> {
+    let (changed_interface, changed, _invalidated): (String, PropMap, Vec<String>) =
+        message.read3().ok()?;
+    if changed_interface != MANAGER_INTERFACE {
+        return None;
+    }
+    finish_timestamp(&changed)
+        .is_some()
+        .then_some(Signal::BootFinished)
+}
+
+fn finish_timestamp(properties: &PropMap) -> Option<u64> {
+    properties
+        .get("FinishTimestampMonotonic")
+        .and_then(|value| value.0.as_u64())
+        .filter(|micros| *micros != 0)
 }
 
 fn activity_from(properties: &PropMap) -> Activity {

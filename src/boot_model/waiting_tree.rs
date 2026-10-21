@@ -13,6 +13,11 @@ use super::{
 
 type WaitingGraph<'a> = DiGraphMap<&'a str, ()>;
 
+struct WaitingEdge<'a> {
+    waiter: &'a str,
+    dependency: &'a str,
+}
+
 struct ReachableSibling<'a> {
     unit: &'a str,
     reaches: HashSet<&'a str>,
@@ -33,7 +38,7 @@ pub enum RowStatus {
 pub struct TreeRow {
     pub depth: usize,
     pub label: String,
-    pub description: String,
+    pub description: Option<String>,
     pub kind: UnitKind,
     pub status: RowStatus,
     pub chain: Vec<String>,
@@ -103,15 +108,15 @@ impl BootState {
             .for_each(|(name, _)| {
                 graph.add_node(name.as_str());
             });
-        let edges: Vec<(&str, &str)> = graph
+        let edges: Vec<WaitingEdge> = graph
             .nodes()
             .flat_map(|waiter| {
                 self.waits_for(waiter, &graph)
                     .into_iter()
-                    .map(move |dependency| (waiter, dependency))
+                    .map(move |dependency| WaitingEdge { waiter, dependency })
             })
             .collect();
-        graph.extend(edges);
+        graph.extend(edges.into_iter().map(|edge| (edge.waiter, edge.dependency)));
         let root = self.root.unit().filter(|root| graph.contains_node(root));
         let stages: Vec<&str> = self
             .milestone_targets

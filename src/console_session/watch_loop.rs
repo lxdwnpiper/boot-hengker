@@ -1,7 +1,7 @@
 use std::{path::Path, time::Duration};
 
 use futures::{StreamExt, stream};
-use tokio::{runtime::Builder, time::sleep};
+use tokio::runtime::Builder;
 
 use crate::{
     boot_model::{BootState, Phase, boot_origin::BootOrigin},
@@ -110,9 +110,6 @@ async fn watch_live_boot(settings: &Settings, phase: Phase) -> Result<(), Error>
     );
     let mut terminal = ratatui::try_init()?;
     let ending = watch_until_ending(&mut screen, &mut terminal, inputs).await;
-    if matches!(ending, WatchEnding::BootCompleted) {
-        sleep(settings.timing.keep_final_frame_for).await;
-    }
     ratatui::restore();
     match ending {
         WatchEnding::Failed(error) => Err(error),

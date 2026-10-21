@@ -64,8 +64,8 @@ const SHUTDOWN: &[Step] = &[
     ),
 ];
 
-fn description(unit: &str) -> &'static str {
-    match unit {
+fn description(unit: &str) -> Option<&'static str> {
+    let description = match unit {
         "poweroff.target" | "systemd-poweroff.service" => "System Power Off",
         "final.target" => "Late Shutdown Services",
         "umount.target" => "Unmount All Filesystems",
@@ -78,8 +78,9 @@ fn description(unit: &str) -> &'static str {
         "NetworkManager.service" => "Network Manager",
         "var-lib-docker.mount" => "/var/lib/docker",
         "home.mount" => "/home",
-        _ => "",
-    }
+        _ => return None,
+    };
+    Some(description)
 }
 
 fn main() -> io::Result<()> {

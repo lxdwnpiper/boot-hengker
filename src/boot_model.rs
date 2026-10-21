@@ -117,6 +117,7 @@ pub struct BootState {
     pub handoff_unit: Option<String>,
     pub manager_exited_at: Option<Duration>,
     pub milestone_targets: Vec<String>,
+    boot_finished: bool,
     finished_before_reconnect: usize,
     units: HashMap<String, UnitRecord>,
     jobs: HashMap<u32, String>,

@@ -170,12 +170,12 @@ impl UnitTree<'_> {
             .iter()
             .zip(self.stages())
             .filter(|(row, _)| {
-                row.chain.is_empty() && !(row.description.is_empty() && row.kind.tag().is_empty())
+                row.chain.is_empty() && !(row.description.is_none() && row.kind.tag().is_none())
             })
             .collect();
         let tag = annotated
             .iter()
-            .map(|(row, _)| width_of(row.kind.tag()))
+            .map(|(row, _)| width_of(row.kind.tag().unwrap_or_default()))
             .fold(MIN_TAG_WIDTH, u16::max);
         let content = unannotated.saturating_sub(2);
         let label = (content * 3 / 5).max(MIN_LABEL_WIDTH);
@@ -214,16 +214,23 @@ impl UnitTree<'_> {
             _ => String::new(),
         };
         let style = self.label_style(row, stage);
-        Row::new(columns.shown([
-            Line::from(vec![
-                prefix.fg(self.colors.branches),
-                marker,
-                Span::styled(self.chained_label(row, room), style),
+        Row::new(
+            columns.shown([
+                Line::from(vec![
+                    prefix.fg(self.colors.branches),
+                    marker,
+                    Span::styled(self.chained_label(row, room), style),
+                ]),
+                Line::from(annotation(row.kind.tag().unwrap_or_default(), columns.tag))
+                    .fg(self.colors.columns),
+                Line::from(annotation(
+                    row.description.as_deref().unwrap_or_default(),
+                    columns.description,
+                ))
+                .fg(self.colors.columns),
+                Line::from(timer).style(style).right_aligned(),
             ]),
-            Line::from(annotation(row.kind.tag(), columns.tag)).fg(self.colors.columns),
-            Line::from(annotation(&row.description, columns.description)).fg(self.colors.columns),
-            Line::from(timer).style(style).right_aligned(),
-        ]))
+        )
     }
 }
 
@@ -277,22 +284,21 @@ impl Widget for UnitTree<'_> {
 }
 
 fn tree_prefixes(rows: &[TreeRow]) -> Vec<String> {
-    let mut later_sibling: Vec<bool> = Vec::new();
-    let mut is_last: Vec<bool> = rows
+    let is_last = rows
         .iter()
         .rev()
-        .map(|row| {
+        .scan(Vec::<bool>::new(), |later_sibling, row| {
             let last = !later_sibling.get(row.depth).copied().unwrap_or(false);
             later_sibling.resize(row.depth + 1, false);
             later_sibling[row.depth] = true;
-            last
+            Some(last)
         })
-        .collect();
-    is_last.reverse();
-    let mut trunks: Vec<&str> = Vec::new();
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev();
     rows.iter()
         .zip(is_last)
-        .map(|(row, last)| {
+        .scan(Vec::<&str>::new(), |trunks, (row, last)| {
             trunks.truncate(row.depth);
             let connector = if last { LAST_BRANCH } else { BRANCH };
             let prefix = once(ENDED_TRUNK)
@@ -300,7 +306,7 @@ fn tree_prefixes(rows: &[TreeRow]) -> Vec<String> {
                 .chain(once(connector))
                 .collect();
             trunks.push(if last { ENDED_TRUNK } else { PASSING_TRUNK });
-            prefix
+            Some(prefix)
         })
         .collect()
 }
@@ -325,7 +331,7 @@ mod tests {
         TreeRow {
             depth,
             label: String::new(),
-            description: String::new(),
+            description: None,
             kind: UnitKind::Service,
             status: RowStatus::Waiting,
             chain: Vec::new(),

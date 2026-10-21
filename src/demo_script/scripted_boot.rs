@@ -84,7 +84,7 @@ pub struct Scenario {
     pub phase: Phase,
     pub steps: &'static [Step],
     pub after_switch_root: &'static [Step],
-    pub describe: fn(&str) -> &'static str,
+    pub describe: fn(&str) -> Option<&'static str>,
 }
 
 struct ScriptedJob {
@@ -93,13 +93,13 @@ struct ScriptedJob {
 }
 
 impl ScriptedJob {
-    fn facts(&self, steps: &[Step], describe: fn(&str) -> &'static str) -> UnitFacts {
+    fn facts(&self, steps: &[Step], describe: fn(&str) -> Option<&'static str>) -> UnitFacts {
         let is_stopping = |unit: &&str| steps.iter().any(|step| step.unit == *unit && step.stops);
         let (before, after): (Vec<&str>, Vec<&str>) =
             self.step.after.iter().copied().partition(is_stopping);
         UnitFacts {
             name: self.step.unit.to_owned(),
-            description: describe(self.step.unit).to_owned(),
+            description: describe(self.step.unit).map(str::to_owned),
             after: after.into_iter().map(ToString::to_string).collect(),
             before: before.into_iter().map(ToString::to_string).collect(),
         }
@@ -176,7 +176,7 @@ struct Answer {
 impl Script {
     fn begin(
         steps: &'static [Step],
-        describe: fn(&str) -> &'static str,
+        describe: fn(&str) -> Option<&'static str>,
         first_job: u32,
         state: &mut BootState,
         now: Duration,
@@ -298,7 +298,7 @@ impl Script {
 struct DemoDesk {
     script: Script,
     after_switch_root: Option<&'static [Step]>,
-    describe: fn(&str) -> &'static str,
+    describe: fn(&str) -> Option<&'static str>,
     settled_at: Option<Duration>,
     typed: Zeroizing<String>,
     glyphs: Glyphs,
@@ -354,8 +354,8 @@ impl ConsoleDesk for DemoDesk {
 fn demo_origin() -> BootOrigin {
     BootOrigin {
         host: "demo".to_owned(),
-        system: "NixOS 26.11.20261007.39ad350".to_owned(),
-        generation: "42".to_owned(),
+        system: Some("NixOS 26.11.20261007.39ad350".to_owned()),
+        generation: Some("42".to_owned()),
         kernel: "Linux 7.2.9".to_owned(),
     }
 }
@@ -420,7 +420,7 @@ mod tests {
 
     fn asking_demo() -> AskingDemo {
         let mut state = BootState::new(Phase::Initrd);
-        let mut script = Script::begin(UNLOCK_ONLY, |_| "", 1, &mut state, Duration::ZERO);
+        let mut script = Script::begin(UNLOCK_ONLY, |_| None, 1, &mut state, Duration::ZERO);
         script.advance(&mut state, Duration::ZERO);
         AskingDemo { script, state }
     }

@@ -59,6 +59,8 @@ pub trait ConsoleDesk {
     fn refreshed_origin(&self) -> Option<BootOrigin> {
         None
     }
+
+    fn begin_handover(&mut self, _now: Duration, _hold_for: Duration) {}
 }
 
 struct CachedProjection {
@@ -71,6 +73,7 @@ pub struct WatchScreen<Desk> {
     pub desk: Desk,
     origin: BootOrigin,
     full_repaint_due: bool,
+    handover_begun: bool,
     colors: Colors,
     timing: Timing,
     epoch: Duration,
@@ -91,6 +94,7 @@ impl<Desk: ConsoleDesk> WatchScreen<Desk> {
             desk,
             origin,
             full_repaint_due: false,
+            handover_begun: false,
             colors,
             timing,
             epoch,
@@ -106,7 +110,7 @@ impl<Desk: ConsoleDesk> WatchScreen<Desk> {
     fn absorb(&mut self, input: ScreenInput) -> ControlFlow<WatchEnding> {
         let now = self.now();
         match input {
-            ScreenInput::Boot(changes) => self.apply_boot_changes(changes),
+            ScreenInput::Boot(changes) => self.apply_boot_changes(changes, now),
             ScreenInput::Key(event) => self.desk.press_key(&event, now),
             ScreenInput::Frame => self.desk.frame_passed(&mut self.state, now),
             ScreenInput::PromptCheck => {
@@ -130,7 +134,11 @@ impl<Desk: ConsoleDesk> WatchScreen<Desk> {
         }
     }
 
-    fn apply_boot_changes(&mut self, changes: Vec<BootChange>) -> ControlFlow<WatchEnding> {
+    fn apply_boot_changes(
+        &mut self,
+        changes: Vec<BootChange>,
+        now: Duration,
+    ) -> ControlFlow<WatchEnding> {
         let phase_before = self.state.phase;
         changes
             .into_iter()
@@ -144,11 +152,16 @@ impl<Desk: ConsoleDesk> WatchScreen<Desk> {
         if !self.state.is_complete() {
             return ControlFlow::Continue(());
         }
-        eprintln!(
-            "bootvine: {} reached, handing the console over",
-            self.state.root.unit().unwrap_or("boot")
-        );
-        ControlFlow::Break(WatchEnding::BootCompleted)
+        if !self.handover_begun {
+            self.handover_begun = true;
+            eprintln!(
+                "bootvine: {} reached, handing the console over",
+                self.state.root.unit().unwrap_or("boot")
+            );
+            self.desk
+                .begin_handover(now, self.timing.keep_final_frame_for);
+        }
+        ControlFlow::Continue(())
     }
 
     fn absorb_batch<B: Backend>(

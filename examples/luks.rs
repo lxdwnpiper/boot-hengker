@@ -154,8 +154,8 @@ const HOST: &[Step] = &[
     ),
 ];
 
-fn description(unit: &str) -> &'static str {
-    match unit {
+fn description(unit: &str) -> Option<&'static str> {
+    let description = match unit {
         "initrd.target" => "Initrd Default Target",
         "initrd-fs.target" => "Initrd File Systems",
         "initrd-root-fs.target" => "Initrd Root File System",
@@ -185,8 +185,9 @@ fn description(unit: &str) -> &'static str {
         "systemd-logind.service" => "User Login Management",
         "NetworkManager.service" => "Network Manager",
         "systemd-timesyncd.service" => "Network Time Synchronization",
-        _ => "",
-    }
+        _ => return None,
+    };
+    Some(description)
 }
 
 fn main() -> io::Result<()> {

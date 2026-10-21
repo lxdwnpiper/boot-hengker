@@ -46,8 +46,8 @@ pub fn render_prompted(
 pub fn ryzen_origin() -> BootOrigin {
     BootOrigin {
         host: "ryzen".to_owned(),
-        system: "NixOS 26.11".to_owned(),
-        generation: "2771".to_owned(),
+        system: Some("NixOS 26.11".to_owned()),
+        generation: Some("2771".to_owned()),
         kernel: "Linux 7.2.9".to_owned(),
     }
 }
