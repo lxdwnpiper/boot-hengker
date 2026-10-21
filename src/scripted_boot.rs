@@ -6,7 +6,7 @@ use std::{
 
 use ratatui::{
     DefaultTerminal,
-    crossterm::event::{self, Event, KeyCode},
+    crossterm::event::{self, Event},
 };
 
 use crate::{
@@ -290,13 +290,6 @@ fn next_event() -> io::Result<Option<Event>> {
     }
 }
 
-fn quits(event: &Event, typing: bool) -> bool {
-    matches!(
-        event,
-        Event::Key(key) if key.code == KeyCode::Esc || (!typing && key.code == KeyCode::Char('q'))
-    )
-}
-
 pub fn play(terminal: &mut DefaultTerminal, scenario: &Scenario) -> io::Result<()> {
     let clock = Instant::now();
     let now = || clock.elapsed();
@@ -346,7 +339,7 @@ pub fn play(terminal: &mut DefaultTerminal, scenario: &Scenario) -> io::Result<(
         }
         if let Some(event) = next_event()? {
             let asking = script.asking().is_some();
-            if quits(&event, asking) {
+            if passphrase_input::asks_to_quit(&event, asking) {
                 return Ok(());
             }
             if asking

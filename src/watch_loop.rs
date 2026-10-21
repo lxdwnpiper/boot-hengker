@@ -16,8 +16,9 @@ use bootvine::{
     boot_view::BootView,
     color_scheme::Colors,
     config_file::Timing,
+    passphrase_input::asks_to_quit,
 };
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event;
 use ratatui::{
     DefaultTerminal,
     backend::Backend,
@@ -72,7 +73,7 @@ pub fn run(settings: &Settings) -> Result<(), Error> {
         Scope::System => Phase::Host,
     };
     let mut state = BootState::new(phase);
-    let mut feed = Feed::new(settings.scope, settings.target.clone());
+    let mut feed = Feed::new(phase, settings.scope, settings.target.clone());
     let mut console = Console::take(settings.scope == Scope::System);
     let mut terminal = ratatui::try_init()?;
     let watched = watch(
@@ -102,17 +103,6 @@ fn sleep_until_readable<'fd>(
         Ok(_) | Err(Errno::INTR) => Ok(()),
         Err(error) => Err(error.into()),
     }
-}
-
-fn asks_to_quit(event: &Event) -> bool {
-    let Event::Key(KeyEvent {
-        code, modifiers, ..
-    }) = event
-    else {
-        return false;
-    };
-    *code == KeyCode::Char('q')
-        || (*code == KeyCode::Char('c') && modifiers.contains(KeyModifiers::CONTROL))
 }
 
 fn overwrite_every_cell<B: Backend>(backend: &mut B, frame: &Buffer) -> Result<(), B::Error> {
@@ -229,7 +219,7 @@ fn watch(
                         eprintln!("bootvine: cannot answer the password prompt: {error}");
                     }
                 }
-                None if asks_to_quit(&event) => return Ok(()),
+                None if asks_to_quit(&event, false) => return Ok(()),
                 None => {}
             }
         }

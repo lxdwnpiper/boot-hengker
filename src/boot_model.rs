@@ -114,19 +114,19 @@ pub struct BootState {
     pub finished_runs: Vec<FinishedRun>,
     pub handoff_unit: Option<String>,
     pub manager_exited_at: Option<Duration>,
-    milestone_targets: Vec<String>,
+    pub milestone_targets: Vec<String>,
     finished_before_reconnect: usize,
     units: HashMap<String, UnitRecord>,
     jobs: HashMap<u32, String>,
 }
 
-pub const HOST_MILESTONES: [&str; 4] = [
+const HOST_MILESTONES: [&str; 4] = [
     "sysinit.target",
     "basic.target",
     "multi-user.target",
     "graphical.target",
 ];
 
-pub const SHUTDOWN_MILESTONES: [&str; 3] = ["shutdown.target", "umount.target", "final.target"];
+const SHUTDOWN_MILESTONES: [&str; 3] = ["shutdown.target", "umount.target", "final.target"];
 
 pub const HANDOFF_UNIT: &str = "display-manager.service";

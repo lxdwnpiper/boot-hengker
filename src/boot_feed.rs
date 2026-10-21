@@ -2,19 +2,16 @@ use std::{
     collections::HashMap,
     mem,
     os::fd::{AsFd, BorrowedFd},
-    path::Path as FilePath,
     process,
     time::{Duration, Instant},
 };
 
-use bootvine::boot_model::{
-    BootState, HANDOFF_UNIT, HOST_MILESTONES, JobKind, Phase, SHUTDOWN_MILESTONES,
-};
+use bootvine::boot_model::{BootState, HANDOFF_UNIT, JobKind, Phase};
 use dbus::Path;
 
 use crate::{
     monotonic_clock::monotonic_now,
-    switch_root::{INITRD_RELEASE, Sysroot},
+    switch_root::Sysroot,
     systemd_bus::{Scope, Session, Signal},
     watch_error::Error,
 };
@@ -68,10 +65,10 @@ pub struct Feed {
 }
 
 impl Feed {
-    pub fn new(scope: Scope, target: RootRequest) -> Self {
+    pub fn new(phase: Phase, scope: Scope, target: RootRequest) -> Self {
         Self {
             connections: 0,
-            root_fs: if scope == Scope::System && FilePath::new(INITRD_RELEASE).exists() {
+            root_fs: if phase == Phase::Initrd {
                 RootFs::Initrd
             } else {
                 RootFs::Host
@@ -165,11 +162,7 @@ impl Feed {
                 .to_owned(),
             RootRequest::ManagerDefault => session.default_target()?,
         };
-        let milestones: &[&str] = if shutting_down {
-            &SHUTDOWN_MILESTONES
-        } else {
-            &HOST_MILESTONES
-        };
+        let milestones = state.milestone_targets.clone();
         if !self.gave_origin {
             state.origin = if session.boot_in_progress()? {
                 Duration::ZERO
@@ -186,7 +179,7 @@ impl Feed {
         }
         jobs.iter()
             .map(|job| job.unit.as_str())
-            .chain(milestones.iter().copied())
+            .chain(milestones.iter().map(String::as_str))
             .for_each(|unit| {
                 self.track(&session, state, unit);
             });

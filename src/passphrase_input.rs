@@ -15,6 +15,18 @@ pub fn masked(typed: &str) -> String {
     "*".repeat(typed.chars().count())
 }
 
+#[must_use]
+pub fn asks_to_quit(event: &Event, typing: bool) -> bool {
+    let Event::Key(KeyEvent {
+        code, modifiers, ..
+    }) = event
+    else {
+        return false;
+    };
+    let control_c = *code == KeyCode::Char('c') && modifiers.contains(KeyModifiers::CONTROL);
+    *code == KeyCode::Esc || (!typing && (*code == KeyCode::Char('q') || control_c))
+}
+
 pub fn type_key(typed: &mut Zeroizing<String>, event: &Event) -> Option<Zeroizing<String>> {
     let Event::Key(KeyEvent {
         code,
