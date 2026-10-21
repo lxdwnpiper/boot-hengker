@@ -13,6 +13,8 @@ pub enum Error {
     MalformedCall,
     #[error("the service manager closed the connection")]
     Disconnected,
+    #[error("the service manager did not answer in time")]
+    CallTimedOut,
     #[error("console: {0}")]
     Console(#[from] io::Error),
     #[error("entering the new root: {0}")]

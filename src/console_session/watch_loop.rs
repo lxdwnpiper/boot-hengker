@@ -17,7 +17,7 @@ use crate::{
         boot_feed::{RootRequest, bus_inputs},
         link_error::Error,
         switch_root::INITRD_RELEASE,
-        systemd_bus::{Scope, Session},
+        systemd_bus::{Scope, Session, StatusOutput},
     },
 };
 
@@ -27,6 +27,20 @@ pub struct Settings {
     pub target: RootRequest,
     pub timing: Timing,
     pub colors: Colors,
+}
+
+struct ConfiguredStatusOnExit {
+    scope: Scope,
+}
+
+impl Drop for ConfiguredStatusOnExit {
+    fn drop(&mut self) {
+        if self.scope == Scope::System
+            && let Ok(session) = Session::open(Scope::System)
+        {
+            session.set_show_status(StatusOutput::Configured).ok();
+        }
+    }
 }
 
 fn boot_already_finished(settings: &Settings) -> bool {
@@ -59,6 +73,9 @@ pub fn run(settings: &Settings) -> Result<(), Error> {
 }
 
 async fn watch_live_boot(settings: &Settings, phase: Phase) -> Result<(), Error> {
+    let _restores_status = ConfiguredStatusOnExit {
+        scope: settings.scope,
+    };
     let requests = RequestWatch::open();
     let desk = LiveDesk::new(
         Console::take(settings.scope == Scope::System),

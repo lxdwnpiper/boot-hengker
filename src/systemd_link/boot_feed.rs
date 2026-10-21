@@ -7,21 +7,21 @@ use std::{
 
 use dbus::Path;
 use futures::{Stream, StreamExt, stream};
-use tokio::{io::unix::AsyncFd, time::sleep};
+use tokio::time::sleep;
 
 use crate::{
     boot_model::{BootChange, BootState, HANDOFF_UNIT, JobKind, Phase},
     console_session::{
-        stream_sources::{
-            CarriedItem, FRAME_INTERVAL, readable_or_timeout, readable_source, unfold_carrying,
-        },
+        stream_sources::{CarriedItem, FRAME_INTERVAL, unfold_carrying},
         watch_screen::ScreenInput,
     },
     systemd_link::{
         link_error::Error,
         monotonic_clock::monotonic_now,
         switch_root::Sysroot,
-        systemd_bus::{FetchedUnit, JobListing, Scope, Session, Signal},
+        systemd_bus::{
+            BusConnection, FetchedUnit, JobListing, Scope, Session, Signal, StatusOutput,
+        },
     },
 };
 
@@ -35,8 +35,6 @@ const SHUTDOWN_ROOTS: [&str; 5] = [
     "soft-reboot.target",
 ];
 const SHUTDOWN_FALLBACK_ROOT: &str = "shutdown.target";
-const SILENT_STATUS: &str = "no";
-const CONFIGURED_STATUS: &str = "";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RootRequest {
@@ -45,7 +43,7 @@ pub enum RootRequest {
 }
 
 enum Link {
-    Connected(AsyncFd<Session>),
+    Connected(BusConnection),
     Connecting { deadline: Instant },
     Finished,
 }
@@ -79,6 +77,17 @@ struct BusFeed {
     gave_origin: bool,
 }
 
+struct FeedProgress<'feed> {
+    feed: &'feed mut BusFeed,
+    connection: &'feed mut BusConnection,
+    changes: Vec<BootChange>,
+}
+
+struct WatchedConnection {
+    connection: BusConnection,
+    changes: Vec<BootChange>,
+}
+
 fn boot_inputs(changes: Vec<BootChange>) -> Vec<ScreenInput> {
     if changes.is_empty() {
         return Vec::new();
@@ -104,19 +113,28 @@ impl BusFeed {
     }
 
     async fn next_inputs(&mut self) -> Option<Vec<ScreenInput>> {
-        if let Link::Connected(readiness) = &self.link {
-            readable_or_timeout(readiness, FRAME_INTERVAL).await;
-        }
         match mem::replace(&mut self.link, Link::Finished) {
             Link::Finished => None,
             Link::Connecting { deadline } => Some(self.connect(deadline).await),
-            Link::Connected(readiness) => Some(self.receive(readiness)),
+            Link::Connected(connection) => Some(self.receive(connection).await),
         }
     }
 
+    async fn open_watched(&mut self) -> Result<WatchedConnection, Error> {
+        let mut connection = BusConnection::register(Session::open(self.scope)?)?;
+        let changes = self.start_watching(&mut connection).await?;
+        Ok(WatchedConnection {
+            connection,
+            changes,
+        })
+    }
+
     async fn connect(&mut self, deadline: Instant) -> Vec<ScreenInput> {
-        match self.open_session() {
-            Ok(changes) => vec![ScreenInput::Boot(changes), ScreenInput::Reconnected],
+        match self.open_watched().await {
+            Ok(watched) => {
+                self.link = Link::Connected(watched.connection);
+                vec![ScreenInput::Boot(watched.changes), ScreenInput::Reconnected]
+            }
             Err(_) if Instant::now() < deadline => {
                 sleep(FRAME_INTERVAL).await;
                 self.link = Link::Connecting { deadline };
@@ -126,15 +144,26 @@ impl BusFeed {
         }
     }
 
-    fn receive(&mut self, readiness: AsyncFd<Session>) -> Vec<ScreenInput> {
-        let Ok(signals) = readiness.get_ref().receive() else {
+    async fn receive(&mut self, mut connection: BusConnection) -> Vec<ScreenInput> {
+        let Ok(signals) = connection.receive_signals(FRAME_INTERVAL).await else {
             return self.lose_connection();
         };
-        let changes = signals
-            .into_iter()
-            .flat_map(|signal| self.changes_for(readiness.get_ref(), signal))
-            .collect();
-        self.link = Link::Connected(readiness);
+        let progress = stream::iter(signals)
+            .fold(
+                FeedProgress {
+                    feed: &mut *self,
+                    connection: &mut connection,
+                    changes: Vec::new(),
+                },
+                |mut progress, signal| async move {
+                    let changes = progress.feed.changes_for(progress.connection, signal).await;
+                    progress.changes.extend(changes);
+                    progress
+                },
+            )
+            .await;
+        let changes = progress.changes;
+        self.link = Link::Connected(connection);
         boot_inputs(changes)
     }
 
@@ -156,30 +185,36 @@ impl BusFeed {
         boot_inputs(vec![BootChange::SwitchRoot { at }])
     }
 
-    fn requested_root(&self, session: &Session, jobs: &[JobListing]) -> Result<String, Error> {
+    async fn requested_root(
+        &self,
+        connection: &mut BusConnection,
+        jobs: &[JobListing],
+    ) -> Result<String, Error> {
         let RootRequest::Named(target) = &self.target else {
-            return if self.phase == Phase::Shutdown {
-                Ok(SHUTDOWN_ROOTS
-                    .into_iter()
-                    .find(|root| {
-                        jobs.iter()
-                            .any(|job| job.unit == *root && job.kind == JobKind::BringsUp)
-                    })
-                    .unwrap_or(SHUTDOWN_FALLBACK_ROOT)
-                    .to_owned())
-            } else {
-                session.default_target()
-            };
+            if self.phase != Phase::Shutdown {
+                return connection.default_target().await;
+            }
+            return Ok(SHUTDOWN_ROOTS
+                .into_iter()
+                .find(|root| {
+                    jobs.iter()
+                        .any(|job| job.unit == *root && job.kind == JobKind::BringsUp)
+                })
+                .unwrap_or(SHUTDOWN_FALLBACK_ROOT)
+                .to_owned());
         };
         Ok(target.clone())
     }
 
-    fn origin_change(&mut self, session: &Session) -> Result<Option<BootChange>, Error> {
+    async fn origin_change(
+        &mut self,
+        connection: &mut BusConnection,
+    ) -> Result<Option<BootChange>, Error> {
         if self.gave_origin {
             return Ok(None);
         }
         self.gave_origin = true;
-        let origin = if session.boot_in_progress()? {
+        let origin = if connection.boot_in_progress().await? {
             Duration::ZERO
         } else {
             monotonic_now()
@@ -187,48 +222,73 @@ impl BusFeed {
         Ok(Some(BootChange::SetOrigin(origin)))
     }
 
-    fn open_session(&mut self) -> Result<Vec<BootChange>, Error> {
-        let session = Session::open(self.scope)?;
-        session.subscribe()?;
+    async fn track_all(
+        &mut self,
+        connection: &mut BusConnection,
+        units: Vec<String>,
+    ) -> Vec<BootChange> {
+        stream::iter(units)
+            .fold(
+                FeedProgress {
+                    feed: &mut *self,
+                    connection: &mut *connection,
+                    changes: Vec::new(),
+                },
+                |mut progress, unit| async move {
+                    let tracked = progress.feed.track(progress.connection, &unit).await;
+                    progress
+                        .changes
+                        .extend(tracked.and_then(|tracked| tracked.change));
+                    progress
+                },
+            )
+            .await
+            .changes
+    }
+
+    async fn start_watching(
+        &mut self,
+        connection: &mut BusConnection,
+    ) -> Result<Vec<BootChange>, Error> {
+        connection.subscribe().await?;
         if self.scope == Scope::System {
-            session.set_show_status(SILENT_STATUS).ok();
+            connection.set_show_status(StatusOutput::Silent).await.ok();
         }
         let shutting_down = self.phase == Phase::Shutdown;
-        let jobs: Vec<JobListing> = session
-            .list_jobs()?
+        let jobs: Vec<JobListing> = connection
+            .list_jobs()
+            .await?
             .into_iter()
             .filter(|job| shutting_down || job.kind == JobKind::BringsUp)
             .collect();
-        let requested_root = self.requested_root(&session, &jobs)?;
-        let origin_change = self.origin_change(&session)?;
-        let tracked_root = self.track(&session, &requested_root);
+        let requested_root = self.requested_root(connection, &jobs).await?;
+        let origin_change = self.origin_change(connection).await?;
+        let tracked_root = self.track(connection, &requested_root).await;
         let root = tracked_root
             .as_ref()
             .map_or(requested_root, |tracked| tracked.name.clone());
-        let tracked_handoff = self.track(&session, HANDOFF_UNIT);
+        let tracked_handoff = self.track(connection, HANDOFF_UNIT).await;
         let handoff = tracked_handoff
             .as_ref()
             .map(|tracked| BootChange::SetHandoff(tracked.name.clone()));
-        let milestones = BootState::new(self.phase).milestone_targets;
-        let tracked_changes: Vec<BootChange> = jobs
+        let watched_units = jobs
             .iter()
-            .map(|job| job.unit.as_str())
-            .chain(milestones.iter().map(String::as_str))
-            .filter_map(|unit| self.track(&session, unit))
-            .filter_map(|tracked| tracked.change)
+            .map(|job| job.unit.clone())
+            .chain(BootState::new(self.phase).milestone_targets)
             .collect();
+        let tracked_changes = self.track_all(connection, watched_units).await;
         eprintln!(
             "bootvine: watching {root} in {} as pid {} over {}",
             self.phase.label(),
             process::id(),
-            if session.peer_to_peer {
+            if connection.peer_to_peer() {
                 "the private socket"
             } else {
                 "the bus"
             },
         );
         let queued_at = monotonic_now();
-        let changes = origin_change
+        Ok(origin_change
             .into_iter()
             .chain(tracked_root.and_then(|tracked| tracked.change))
             .chain(tracked_handoff.and_then(|tracked| tracked.change))
@@ -241,12 +301,10 @@ impl BusFeed {
                 kind: job.kind,
                 at: queued_at,
             }))
-            .collect();
-        self.link = Link::Connected(readable_source(session)?);
-        Ok(changes)
+            .collect())
     }
 
-    fn track(&mut self, session: &Session, unit: &str) -> Option<TrackedUnit> {
+    async fn track(&mut self, connection: &mut BusConnection, unit: &str) -> Option<TrackedUnit> {
         if let Some(known) = self.unit_paths.values().find(|known| *known == unit) {
             return Some(TrackedUnit {
                 name: known.clone(),
@@ -257,7 +315,7 @@ impl BusFeed {
             path,
             facts,
             activity,
-        } = session.fetch_unit(unit).ok()?;
+        } = connection.fetch_unit(unit).await.ok()?;
         let name = facts.name.clone();
         if self.unit_paths.values().any(|known| *known == name) {
             return Some(TrackedUnit { name, change: None });
@@ -269,10 +327,16 @@ impl BusFeed {
         })
     }
 
-    fn changes_for(&mut self, session: &Session, signal: Signal) -> Vec<BootChange> {
+    async fn changes_for(
+        &mut self,
+        connection: &mut BusConnection,
+        signal: Signal,
+    ) -> Vec<BootChange> {
         let at = monotonic_now();
         match signal {
-            Signal::JobNew { id, job, unit } => self.queue_new_job(session, id, &job, unit, at),
+            Signal::JobNew { id, job, unit } => {
+                self.queue_new_job(connection, id, &job, unit, at).await
+            }
             Signal::JobRemoved { id, result } => vec![BootChange::FinishJob { id, result, at }],
             Signal::UnitChanged { path, activity } => self
                 .unit_paths
@@ -286,19 +350,19 @@ impl BusFeed {
         }
     }
 
-    fn queue_new_job(
+    async fn queue_new_job(
         &mut self,
-        session: &Session,
+        connection: &mut BusConnection,
         id: u32,
         job: &Path<'static>,
         unit: String,
         at: Duration,
     ) -> Vec<BootChange> {
-        let kind = session.job_kind(job).unwrap_or(JobKind::Unknown);
+        let kind = connection.job_kind(job).await.unwrap_or(JobKind::Unknown);
         if kind == JobKind::TakesDown && self.phase != Phase::Shutdown {
             return Vec::new();
         }
-        let tracked = self.track(session, &unit);
+        let tracked = self.track(connection, &unit).await;
         let unit = tracked
             .as_ref()
             .map_or(unit, |tracked| tracked.name.clone());
@@ -313,16 +377,6 @@ impl BusFeed {
             .into_iter()
             .chain(once(BootChange::QueueJob { id, unit, kind, at }))
             .collect()
-    }
-}
-
-impl Drop for BusFeed {
-    fn drop(&mut self) {
-        if let Link::Connected(readiness) = &self.link
-            && self.scope == Scope::System
-        {
-            readiness.get_ref().set_show_status(CONFIGURED_STATUS).ok();
-        }
     }
 }
 

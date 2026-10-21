@@ -1,5 +1,6 @@
 use std::{
-    iter,
+    future::ready,
+    io, iter, mem,
     os::fd::{AsRawFd, RawFd},
     time::Duration,
 };
@@ -9,9 +10,12 @@ use dbus::{
     arg::{AppendAll, PropMap, RefArg, Variant},
     channel::{BusType, Channel},
 };
+use futures::{StreamExt, stream};
+use tokio::{io::unix::AsyncFd, time::timeout};
 
 use crate::{
     boot_model::{Activity, JobKind, JobResult, UnitFacts},
+    console_session::stream_sources::{CarriedItem, readable_source, unfold_carrying},
     systemd_link::link_error::Error,
 };
 
@@ -32,6 +36,21 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(1);
 pub enum Scope {
     System,
     User,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StatusOutput {
+    Silent,
+    Configured,
+}
+
+impl StatusOutput {
+    fn bus_mode(self) -> &'static str {
+        match self {
+            Self::Silent => "no",
+            Self::Configured => "",
+        }
+    }
 }
 
 pub enum Signal {
@@ -79,6 +98,49 @@ pub struct Session {
     pub peer_to_peer: bool,
 }
 
+fn method_call(
+    destination: &str,
+    path: &str,
+    interface: &str,
+    member: &str,
+    arguments: impl AppendAll,
+) -> Result<Message, Error> {
+    let Ok(mut call) = Message::new_method_call(destination, path, interface, member) else {
+        return Err(Error::MalformedCall);
+    };
+    call.append_all(arguments);
+    Ok(call)
+}
+
+fn manager_call(member: &str, arguments: impl AppendAll) -> Result<Message, Error> {
+    method_call(
+        DESTINATION,
+        MANAGER_PATH,
+        MANAGER_INTERFACE,
+        member,
+        arguments,
+    )
+}
+
+fn property_call(path: &str, interface: &str, property: &str) -> Result<Message, Error> {
+    method_call(
+        DESTINATION,
+        path,
+        PROPERTIES_INTERFACE,
+        "Get",
+        (interface, property),
+    )
+}
+
+fn boot_in_progress_call() -> Result<Message, Error> {
+    property_call(MANAGER_PATH, MANAGER_INTERFACE, "FinishTimestampMonotonic")
+}
+
+fn read_boot_in_progress(reply: &Message) -> Result<bool, Error> {
+    let finished: Variant<u64> = reply.read1()?;
+    Ok(finished.0 == 0)
+}
+
 impl Session {
     pub fn open(scope: Scope) -> Result<Self, Error> {
         if scope == Scope::System
@@ -92,13 +154,13 @@ impl Session {
             Scope::User => BusType::Session,
         };
         let session = Self::watching(Channel::get_private(bus)?, false);
-        session.call(
+        session.blocking_call(method_call(
             BUS_DESTINATION,
             BUS_PATH,
             BUS_DESTINATION,
             "AddMatch",
             (SIGNAL_RULE,),
-        )?;
+        )?)?;
         Ok(session)
     }
 
@@ -110,139 +172,192 @@ impl Session {
         }
     }
 
-    fn call(
-        &self,
-        destination: &str,
-        path: &str,
-        interface: &str,
-        member: &str,
-        arguments: impl AppendAll,
-    ) -> Result<Message, Error> {
-        let Ok(mut call) = Message::new_method_call(destination, path, interface, member) else {
-            return Err(Error::MalformedCall);
-        };
-        call.append_all(arguments);
+    fn blocking_call(&self, call: Message) -> Result<Message, Error> {
         Ok(self.channel.send_with_reply_and_block(call, CALL_TIMEOUT)?)
     }
 
-    pub fn subscribe(&self) -> Result<(), Error> {
-        self.call(
-            DESTINATION,
-            MANAGER_PATH,
-            MANAGER_INTERFACE,
-            "Subscribe",
-            (),
-        )?;
+    pub fn set_show_status(&self, output: StatusOutput) -> Result<(), Error> {
+        self.blocking_call(manager_call("SetShowStatus", (output.bus_mode(),))?)?;
         Ok(())
-    }
-
-    pub fn set_show_status(&self, mode: &str) -> Result<(), Error> {
-        self.call(
-            DESTINATION,
-            MANAGER_PATH,
-            MANAGER_INTERFACE,
-            "SetShowStatus",
-            (mode,),
-        )?;
-        Ok(())
-    }
-
-    pub fn default_target(&self) -> Result<String, Error> {
-        let reply = self.call(
-            DESTINATION,
-            MANAGER_PATH,
-            MANAGER_INTERFACE,
-            "GetDefaultTarget",
-            (),
-        )?;
-        Ok(reply.read1()?)
     }
 
     pub fn boot_in_progress(&self) -> Result<bool, Error> {
-        let reply = self.call(
-            DESTINATION,
-            MANAGER_PATH,
-            PROPERTIES_INTERFACE,
-            "Get",
-            (MANAGER_INTERFACE, "FinishTimestampMonotonic"),
-        )?;
-        let finished: Variant<u64> = reply.read1()?;
-        Ok(finished.0 == 0)
+        read_boot_in_progress(&self.blocking_call(boot_in_progress_call()?)?)
+    }
+}
+
+pub struct BusConnection {
+    readiness: AsyncFd<Session>,
+    early_signals: Vec<Signal>,
+}
+
+fn into_results(batch: Result<Vec<Message>, Error>) -> Vec<Result<Message, Error>> {
+    match batch {
+        Ok(messages) => messages.into_iter().map(Ok).collect(),
+        Err(error) => vec![Err(error)],
+    }
+}
+
+impl BusConnection {
+    pub fn register(session: Session) -> io::Result<Self> {
+        Ok(Self {
+            readiness: readable_source(session)?,
+            early_signals: Vec::new(),
+        })
     }
 
-    pub fn list_jobs(&self) -> Result<Vec<JobListing>, Error> {
-        let reply = self.call(DESTINATION, MANAGER_PATH, MANAGER_INTERFACE, "ListJobs", ())?;
+    #[must_use]
+    pub fn peer_to_peer(&self) -> bool {
+        self.readiness.get_ref().peer_to_peer
+    }
+
+    fn drain_replies(&mut self) -> Result<Vec<Message>, Error> {
+        let channel = &self.readiness.get_mut().channel;
+        if channel.read_write(Some(Duration::ZERO)).is_err() || !channel.is_connected() {
+            return Err(Error::Disconnected);
+        }
+        let (signals, replies): (Vec<Message>, Vec<Message>) =
+            iter::from_fn(|| channel.pop_message())
+                .partition(|message| message.msg_type() == MessageType::Signal);
+        self.early_signals
+            .extend(signals.iter().filter_map(parse_signal));
+        Ok(replies)
+    }
+
+    async fn next_replies(&mut self) -> Result<Vec<Message>, Error> {
+        let drained = self.drain_replies()?;
+        if !drained.is_empty() {
+            return Ok(drained);
+        }
+        self.readiness.readable_mut().await?.clear_ready();
+        self.drain_replies()
+    }
+
+    async fn reply_to(&mut self, serial: u32) -> Result<Message, Error> {
+        unfold_carrying(self, |connection| async move {
+            let replies = connection.next_replies().await;
+            Some(CarriedItem {
+                item: replies,
+                state: connection,
+            })
+        })
+        .flat_map(|replies| stream::iter(into_results(replies)))
+        .filter(|reply| {
+            ready(
+                reply
+                    .as_ref()
+                    .map_or(true, |message| message.get_reply_serial() == Some(serial)),
+            )
+        })
+        .take(1)
+        .fold(Err(Error::Disconnected), |_, reply| ready(reply))
+        .await
+    }
+
+    async fn call(&mut self, call: Message) -> Result<Message, Error> {
+        let channel = &self.readiness.get_ref().channel;
+        let Ok(serial) = channel.send(call) else {
+            return Err(Error::Disconnected);
+        };
+        channel.flush();
+        let Ok(reply) = timeout(CALL_TIMEOUT, self.reply_to(serial)).await else {
+            return Err(Error::CallTimedOut);
+        };
+        let mut reply = reply?;
+        reply.as_result()?;
+        Ok(reply)
+    }
+
+    pub async fn subscribe(&mut self) -> Result<(), Error> {
+        self.call(manager_call("Subscribe", ())?).await?;
+        Ok(())
+    }
+
+    pub async fn set_show_status(&mut self, output: StatusOutput) -> Result<(), Error> {
+        self.call(manager_call("SetShowStatus", (output.bus_mode(),))?)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn default_target(&mut self) -> Result<String, Error> {
+        let reply = self.call(manager_call("GetDefaultTarget", ())?).await?;
+        Ok(reply.read1()?)
+    }
+
+    pub async fn boot_in_progress(&mut self) -> Result<bool, Error> {
+        read_boot_in_progress(&self.call(boot_in_progress_call()?).await?)
+    }
+
+    pub async fn list_jobs(&mut self) -> Result<Vec<JobListing>, Error> {
+        let reply = self.call(manager_call("ListJobs", ())?).await?;
         let listed: Vec<ListedJob> = reply.read1()?;
         Ok(listed.into_iter().map(JobListing::from).collect())
     }
 
-    pub fn job_kind(&self, job: &Path) -> Result<JobKind, Error> {
-        let reply = self.call(
-            DESTINATION,
-            job,
-            PROPERTIES_INTERFACE,
-            "Get",
-            (JOB_INTERFACE, "JobType"),
-        )?;
+    pub async fn job_kind(&mut self, job: &Path<'_>) -> Result<JobKind, Error> {
+        let reply = self
+            .call(property_call(job, JOB_INTERFACE, "JobType")?)
+            .await?;
         let kind: Variant<String> = reply.read1()?;
         Ok(serde_plain::from_str(&kind.0).unwrap_or(JobKind::Unknown))
     }
 
-    pub fn fetch_unit(&self, name: &str) -> Result<FetchedUnit, Error> {
+    pub async fn fetch_unit(&mut self, name: &str) -> Result<FetchedUnit, Error> {
         let path: Path<'static> = self
-            .call(
-                DESTINATION,
-                MANAGER_PATH,
-                MANAGER_INTERFACE,
-                "GetUnit",
-                (name,),
-            )?
+            .call(manager_call("GetUnit", (name,))?)
+            .await?
             .read1()?;
         let properties: PropMap = self
-            .call(
+            .call(method_call(
                 DESTINATION,
                 &path,
                 PROPERTIES_INTERFACE,
                 "GetAll",
                 (UNIT_INTERFACE,),
-            )?
+            )?)
+            .await?
             .read1()?;
-        let text = |property: &str| {
-            properties
-                .get(property)
-                .and_then(|value| value.0.as_str())
-                .map(ToOwned::to_owned)
-        };
-        let names = |property: &str| {
-            properties
-                .get(property)
-                .and_then(|value| value.0.as_iter())
-                .map(|items| {
-                    items
-                        .filter_map(|item| item.as_str().map(ToOwned::to_owned))
-                        .collect()
-                })
-                .unwrap_or_default()
-        };
         Ok(FetchedUnit {
-            facts: UnitFacts {
-                name: text("Id").unwrap_or_else(|| name.to_owned()),
-                description: text("Description").unwrap_or_default(),
-                after: names("After"),
-                before: names("Before"),
-            },
+            facts: unit_facts_from(name, &properties),
             activity: activity_from(&properties),
             path,
         })
     }
 
-    pub fn receive(&self) -> Result<Vec<Signal>, Error> {
-        if self.channel.read_write(Some(Duration::ZERO)).is_err() || !self.channel.is_connected() {
-            return Err(Error::Disconnected);
+    pub async fn receive_signals(&mut self, patience: Duration) -> Result<Vec<Signal>, Error> {
+        if self.early_signals.is_empty()
+            && let Ok(Ok(mut guard)) = timeout(patience, self.readiness.readable_mut()).await
+        {
+            guard.clear_ready();
         }
-        Ok(iter::from_fn(|| self.channel.pop_message())
-            .filter_map(|message| parse_signal(&message))
-            .collect())
+        self.drain_replies()?;
+        Ok(mem::take(&mut self.early_signals))
+    }
+}
+
+fn unit_facts_from(name: &str, properties: &PropMap) -> UnitFacts {
+    let text = |property: &str| {
+        properties
+            .get(property)
+            .and_then(|value| value.0.as_str())
+            .map(ToOwned::to_owned)
+    };
+    let names = |property: &str| {
+        properties
+            .get(property)
+            .and_then(|value| value.0.as_iter())
+            .map(|items| {
+                items
+                    .filter_map(|item| item.as_str().map(ToOwned::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    UnitFacts {
+        name: text("Id").unwrap_or_else(|| name.to_owned()),
+        description: text("Description").unwrap_or_default(),
+        after: names("After"),
+        before: names("Before"),
     }
 }
 
