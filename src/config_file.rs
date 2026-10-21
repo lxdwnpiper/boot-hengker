@@ -1,4 +1,4 @@
-use std::{error, fmt, fs, io, path::Path, time::Duration};
+use std::{fs, io, path::Path, time::Duration};
 
 use heck::ToKebabCase;
 use jiff::fmt::serde::unsigned_duration::friendly::compact::required as friendly_duration;
@@ -35,26 +35,16 @@ impl Default for Timing {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
-    Unreadable(io::Error),
-    Invalid(ParseError),
+    #[error("cannot read: {0}")]
+    Unreadable(#[from] io::Error),
+    #[error("invalid: {0}")]
+    Invalid(#[from] ParseError),
 }
-
-impl fmt::Display for ConfigError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Unreadable(error) => write!(formatter, "cannot read: {error}"),
-            Self::Invalid(error) => write!(formatter, "invalid: {error}"),
-        }
-    }
-}
-
-impl error::Error for ConfigError {}
 
 pub fn read_config_file(path: &Path) -> Result<Config, ConfigError> {
-    let text = fs::read_to_string(path).map_err(ConfigError::Unreadable)?;
-    toml::from_str(&text).map_err(ConfigError::Invalid)
+    Ok(toml::from_str(&fs::read_to_string(path)?)?)
 }
 
 pub fn default_config_table() -> Result<Table, SerializeError> {

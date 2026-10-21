@@ -29,6 +29,7 @@ rustix = { version = "1.1.5", features = ["event", "fs", "process", "stdio", "sy
 ser_nix = "0.2.4"
 serde = { version = "1.0.229", features = ["derive"] }
 signal-hook = "0.4.5"
+thiserror = "2.0.12"
 toml = { version = "1.1.8", features = ["preserve_order"] }
 unicode-truncate = "2.0.1"
 unicode-width = "0.2.2"
