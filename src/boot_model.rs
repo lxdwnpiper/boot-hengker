@@ -955,76 +955,38 @@ fn summary(facts: &UnitFacts) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::iter::once;
-
     use super::*;
-
-    const MS: Duration = Duration::from_millis(1);
-
-    fn facts(name: &str, after: &[&str]) -> UnitFacts {
-        UnitFacts {
-            name: name.to_owned(),
-            description: format!("{name} description"),
-            after: after.iter().map(ToString::to_string).collect(),
-            before: Vec::new(),
-        }
-    }
-
-    fn activating(since: Duration) -> Activity {
-        Activity {
-            state: Some(ActiveState::Activating),
-            inactive_exit: Some(since),
-            active_enter: None,
-            active_exit: None,
-        }
-    }
+    use crate::boot_test_fixtures::{
+        MS, activating, facts, queue_unit, queued_boot, running, tree_outline, waiting,
+    };
 
     fn sample() -> BootState {
-        let mut state = BootState::new(Phase::Host);
-        state.set_root("graphical.target".to_owned());
-        [
-            (
-                facts("graphical.target", &["multi-user.target"]),
-                Activity::default(),
-            ),
-            (
-                facts(
+        queued_boot(
+            Phase::Host,
+            500 * MS,
+            [
+                waiting("graphical.target", &["multi-user.target"]),
+                waiting(
                     "multi-user.target",
                     &["docker.service", "nm-wait.service", "basic.target"],
                 ),
-                Activity::default(),
-            ),
-            (
-                facts("nm-wait.service", &["nm.service"]),
-                Activity::default(),
-            ),
-            (facts("nm.service", &[]), activating(1000 * MS)),
-            (
-                facts("docker.service", &["containerd.service"]),
-                activating(3000 * MS),
-            ),
-            (facts("containerd.service", &[]), Activity::default()),
-            (facts("basic.target", &[]), Activity::default()),
-        ]
-        .into_iter()
-        .zip(1..)
-        .for_each(|((unit, activity), id)| {
-            let name = unit.name.clone();
-            state.track_unit(unit, activity);
-            state.queue_job(id, &name, JobKind::BringsUp, 500 * MS);
-        });
-        state
+                waiting("nm-wait.service", &["nm.service"]),
+                running("nm.service", &[], 1000 * MS),
+                running("docker.service", &["containerd.service"], 3000 * MS),
+                waiting("containerd.service", &[]),
+                waiting("basic.target", &[]),
+            ],
+        )
+    }
+
+    fn outline(state: &BootState) -> Vec<String> {
+        tree_outline(&state.tree_rows(Duration::MAX))
     }
 
     #[test]
     fn pending_units_nest_under_what_waits_on_them() {
-        let outline: Vec<String> = sample()
-            .tree_rows(Duration::MAX)
-            .into_iter()
-            .map(|row| format!("{}{}", "  ".repeat(row.depth), row.label))
-            .collect();
         assert_eq!(
-            outline,
+            outline(&sample()),
             [
                 "basic.target",
                 "multi-user.target",
@@ -1039,13 +1001,8 @@ mod tests {
 
     #[test]
     fn only_chains_leading_to_running_units_stay_in_view() {
-        let rows = fit_to_height(sample().tree_rows(Duration::MAX), 0);
-        let outline: Vec<String> = rows
-            .iter()
-            .map(|row| format!("{}{}", "  ".repeat(row.depth), row.label))
-            .collect();
         assert_eq!(
-            outline,
+            tree_outline(&fit_to_height(sample().tree_rows(Duration::MAX), 0)),
             [
                 "basic.target",
                 "multi-user.target",
@@ -1069,12 +1026,7 @@ mod tests {
             ],
             "b.service",
         );
-        let outline = |budget| -> Vec<String> {
-            fit_to_height(state.tree_rows(Duration::MAX), budget)
-                .into_iter()
-                .map(|row| format!("{}{}", "  ".repeat(row.depth), row.label))
-                .collect()
-        };
+        let outline = |budget| tree_outline(&fit_to_height(state.tree_rows(Duration::MAX), budget));
         assert_eq!(outline(4), ["root.target", "  b", "  a"]);
         assert_eq!(
             outline(5),
@@ -1084,31 +1036,21 @@ mod tests {
 
     #[test]
     fn a_unit_sits_in_the_earliest_stage_that_waits_on_it() {
-        let mut state = BootState::new(Phase::Host);
-        state.set_root("multi-user.target".to_owned());
-        [
-            facts(
-                "multi-user.target",
-                &["basic.target", "dbus.service", "web.service"],
-            ),
-            facts("basic.target", &["dbus.service"]),
-            facts("dbus.service", &[]),
-            facts("web.service", &[]),
-        ]
-        .into_iter()
-        .zip(1..)
-        .for_each(|(unit, id)| {
-            let name = unit.name.clone();
-            state.track_unit(unit, Activity::default());
-            state.queue_job(id, &name, JobKind::BringsUp, Duration::ZERO);
-        });
-        let outline: Vec<String> = state
-            .tree_rows(Duration::MAX)
-            .into_iter()
-            .map(|row| format!("{}{}", "  ".repeat(row.depth), row.label))
-            .collect();
+        let state = queued_boot(
+            Phase::Host,
+            Duration::ZERO,
+            [
+                waiting(
+                    "multi-user.target",
+                    &["basic.target", "dbus.service", "web.service"],
+                ),
+                waiting("basic.target", &["dbus.service"]),
+                waiting("dbus.service", &[]),
+                waiting("web.service", &[]),
+            ],
+        );
         assert_eq!(
-            outline,
+            outline(&state),
             ["basic.target", "  dbus", "multi-user.target", "  web"]
         );
     }
@@ -1127,12 +1069,7 @@ mod tests {
     #[test]
     fn descriptions_that_repeat_the_label_are_dropped() {
         let described = |name: &str, description: &str| {
-            summary(&UnitFacts {
-                name: name.to_owned(),
-                description: description.to_owned(),
-                after: Vec::new(),
-                before: Vec::new(),
-            })
+            summary(&waiting(name, &[]).described(description).facts)
         };
         assert_eq!(
             described("multi-user.target", "Multi-User System"),
@@ -1144,32 +1081,25 @@ mod tests {
         assert_eq!(described("demo.service", ""), "");
     }
 
-    fn chain_state(waits: &[(&str, &[&str])], running: &str) -> BootState {
-        let mut state = BootState::new(Phase::Host);
-        state.set_root(waits[0].0.to_owned());
-        waits.iter().zip(1..).for_each(|((name, after), id)| {
-            let activity = if *name == running {
-                activating(Duration::ZERO)
-            } else {
-                Activity::default()
-            };
-            state.track_unit(facts(name, after), activity);
-            state.queue_job(id, name, JobKind::BringsUp, Duration::ZERO);
-        });
-        state
+    fn chain_state(waits: &[(&str, &[&str])], running_unit: &str) -> BootState {
+        queued_boot(
+            Phase::Host,
+            Duration::ZERO,
+            waits.iter().map(|(name, after)| {
+                if *name == running_unit {
+                    running(name, after, Duration::ZERO)
+                } else {
+                    waiting(name, after)
+                }
+            }),
+        )
     }
 
     fn folded_outline(state: &BootState) -> Vec<String> {
-        fold_chains(fit_to_height(state.tree_rows(Duration::MAX), 0))
-            .into_iter()
-            .map(|row| {
-                let chain = once(row.label.as_str())
-                    .chain(row.chain.iter().map(String::as_str))
-                    .collect::<Vec<_>>()
-                    .join(" > ");
-                format!("{}{chain}", "  ".repeat(row.depth))
-            })
-            .collect()
+        tree_outline(&fold_chains(fit_to_height(
+            state.tree_rows(Duration::MAX),
+            0,
+        )))
     }
 
     #[test]
@@ -1224,12 +1154,14 @@ mod tests {
 
     #[test]
     fn with_nothing_running_only_the_root_target_stays_in_view() {
-        let mut state = BootState::new(Phase::Host);
-        state.set_root("demo.target".to_owned());
-        state.track_unit(facts("demo.target", &["idle.service"]), Activity::default());
-        state.track_unit(facts("idle.service", &[]), Activity::default());
-        state.queue_job(1, "demo.target", JobKind::BringsUp, Duration::ZERO);
-        state.queue_job(2, "idle.service", JobKind::BringsUp, Duration::ZERO);
+        let state = queued_boot(
+            Phase::Host,
+            Duration::ZERO,
+            [
+                waiting("demo.target", &["idle.service"]),
+                waiting("idle.service", &[]),
+            ],
+        );
         let rows = fit_to_height(state.tree_rows(Duration::MAX), 0);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].label, "demo.target");
@@ -1283,8 +1215,7 @@ mod tests {
     #[test]
     fn display_manager_activation_hands_the_console_over() {
         let mut state = sample();
-        state.track_unit(facts(HANDOFF_UNIT, &[]), Activity::default());
-        state.queue_job(20, HANDOFF_UNIT, JobKind::BringsUp, 500 * MS);
+        queue_unit(&mut state, 20, waiting(HANDOFF_UNIT, &[]), 500 * MS);
         assert!(!state.is_complete());
         state.update_activity(HANDOFF_UNIT, activating(6000 * MS));
         assert!(state.is_complete());
@@ -1293,8 +1224,7 @@ mod tests {
     #[test]
     fn display_manager_started_in_one_step_hands_the_console_over() {
         let mut state = sample();
-        state.track_unit(facts(HANDOFF_UNIT, &[]), Activity::default());
-        state.queue_job(20, HANDOFF_UNIT, JobKind::BringsUp, 500 * MS);
+        queue_unit(&mut state, 20, waiting(HANDOFF_UNIT, &[]), 500 * MS);
         state.finish_job(20, JobResult::Done, 6000 * MS);
         assert!(!state.is_complete());
         state.update_activity(
@@ -1311,12 +1241,11 @@ mod tests {
 
     #[test]
     fn switching_root_freezes_the_initrd_summary() {
-        let mut state = BootState::new(Phase::Initrd);
-        state.set_root("initrd.target".to_owned());
-        state.track_unit(facts("initrd.target", &[]), Activity::default());
-        state.track_unit(facts("sysroot.mount", &[]), Activity::default());
-        state.queue_job(1, "initrd.target", JobKind::BringsUp, Duration::ZERO);
-        state.queue_job(2, "sysroot.mount", JobKind::BringsUp, Duration::ZERO);
+        let mut state = queued_boot(
+            Phase::Initrd,
+            Duration::ZERO,
+            [waiting("initrd.target", &[]), waiting("sysroot.mount", &[])],
+        );
         state.finish_job(2, JobResult::Done, 1000 * MS);
         state.finish_job(1, JobResult::Done, 1500 * MS);
         assert!(!state.is_complete());
@@ -1339,17 +1268,11 @@ mod tests {
 
     #[test]
     fn devices_show_their_description() {
-        let mut state = BootState::new(Phase::Host);
-        state.track_unit(
-            UnitFacts {
-                name: "dev-nvme1n1.device".to_owned(),
-                description: "Lexar SSD NM790 2TB".to_owned(),
-                after: Vec::new(),
-                before: Vec::new(),
-            },
-            Activity::default(),
+        let state = queued_boot(
+            Phase::Host,
+            Duration::ZERO,
+            [waiting("dev-nvme1n1.device", &[]).described("Lexar SSD NM790 2TB")],
         );
-        state.queue_job(1, "dev-nvme1n1.device", JobKind::BringsUp, Duration::ZERO);
         assert_eq!(
             state.tree_rows(Duration::MAX)[0].label,
             "Lexar SSD NM790 2TB"
@@ -1358,76 +1281,39 @@ mod tests {
 
     #[test]
     fn units_nest_under_the_deepest_pending_waiter() {
-        let mut state = BootState::new(Phase::Host);
-        state.set_root("demo.target".to_owned());
-        [
-            facts(
-                "demo.target",
-                &["report.service", "web.service", "db.service"],
-            ),
-            facts("report.service", &["web.service"]),
-            facts("web.service", &["db.service"]),
-            facts("db.service", &[]),
-        ]
-        .into_iter()
-        .zip(1..)
-        .for_each(|(unit, id)| {
-            let name = unit.name.clone();
-            state.track_unit(unit, Activity::default());
-            state.queue_job(id, &name, JobKind::BringsUp, Duration::ZERO);
-        });
-        let outline: Vec<String> = state
-            .tree_rows(Duration::MAX)
-            .into_iter()
-            .map(|row| format!("{}{}", "  ".repeat(row.depth), row.label))
-            .collect();
-        assert_eq!(outline, ["demo.target", "  report", "    web", "      db"]);
-    }
-
-    fn ordered(name: &str, after: &[&str], before: &[&str]) -> UnitFacts {
-        UnitFacts {
-            before: before.iter().map(ToString::to_string).collect(),
-            ..facts(name, after)
-        }
-    }
-
-    fn outline(state: &BootState) -> Vec<String> {
-        state
-            .tree_rows(Duration::MAX)
-            .into_iter()
-            .map(|row| format!("{}{}", "  ".repeat(row.depth), row.label))
-            .collect()
+        let state = queued_boot(
+            Phase::Host,
+            Duration::ZERO,
+            [
+                waiting(
+                    "demo.target",
+                    &["report.service", "web.service", "db.service"],
+                ),
+                waiting("report.service", &["web.service"]),
+                waiting("web.service", &["db.service"]),
+                waiting("db.service", &[]),
+            ],
+        );
+        assert_eq!(
+            outline(&state),
+            ["demo.target", "  report", "    web", "      db"]
+        );
     }
 
     #[test]
     fn stopping_units_wait_on_what_was_ordered_after_them() {
-        let mut state = BootState::new(Phase::Shutdown);
-        state.set_root("poweroff.target".to_owned());
-        [
-            (
-                ordered("poweroff.target", &["shutdown.target"], &[]),
-                JobKind::BringsUp,
-            ),
-            (
-                ordered("shutdown.target", &[], &["poweroff.target"]),
-                JobKind::BringsUp,
-            ),
-            (
-                ordered("network.target", &[], &["web.service"]),
-                JobKind::TakesDown,
-            ),
-            (
-                ordered("web.service", &["network.target"], &[]),
-                JobKind::TakesDown,
-            ),
-        ]
-        .into_iter()
-        .zip(1..)
-        .for_each(|((unit, kind), id)| {
-            let name = unit.name.clone();
-            state.track_unit(unit, Activity::default());
-            state.queue_job(id, &name, kind, Duration::ZERO);
-        });
+        let state = queued_boot(
+            Phase::Shutdown,
+            Duration::ZERO,
+            [
+                waiting("poweroff.target", &["shutdown.target"]),
+                waiting("shutdown.target", &[]).ordered_before(&["poweroff.target"]),
+                waiting("network.target", &[])
+                    .ordered_before(&["web.service"])
+                    .stopping(),
+                waiting("web.service", &["network.target"]).stopping(),
+            ],
+        );
         assert_eq!(
             outline(&state),
             [
@@ -1441,25 +1327,14 @@ mod tests {
 
     #[test]
     fn starting_units_wait_on_stops_in_either_direction() {
-        let mut state = BootState::new(Phase::Shutdown);
-        state.set_root("shutdown.target".to_owned());
-        [
-            (
-                ordered("shutdown.target", &[], &["db.service"]),
-                JobKind::BringsUp,
-            ),
-            (
-                ordered("db.service", &["shutdown.target"], &[]),
-                JobKind::TakesDown,
-            ),
-        ]
-        .into_iter()
-        .zip(1..)
-        .for_each(|((unit, kind), id)| {
-            let name = unit.name.clone();
-            state.track_unit(unit, Activity::default());
-            state.queue_job(id, &name, kind, Duration::ZERO);
-        });
+        let state = queued_boot(
+            Phase::Shutdown,
+            Duration::ZERO,
+            [
+                waiting("shutdown.target", &[]).ordered_before(&["db.service"]),
+                waiting("db.service", &["shutdown.target"]).stopping(),
+            ],
+        );
         assert_eq!(outline(&state), ["shutdown.target", "  db"]);
     }
 
@@ -1498,14 +1373,15 @@ mod tests {
 
     #[test]
     fn shutdown_counts_toward_its_own_milestones_and_never_completes() {
-        let mut state = BootState::new(Phase::Shutdown);
-        state.set_root("poweroff.target".to_owned());
-        ["poweroff.target", "shutdown.target", "db.service"]
-            .into_iter()
-            .for_each(|name| state.track_unit(facts(name, &[]), Activity::default()));
-        state.queue_job(1, "poweroff.target", JobKind::BringsUp, Duration::ZERO);
-        state.queue_job(2, "shutdown.target", JobKind::BringsUp, Duration::ZERO);
-        state.queue_job(3, "db.service", JobKind::TakesDown, Duration::ZERO);
+        let mut state = queued_boot(
+            Phase::Shutdown,
+            Duration::ZERO,
+            [
+                waiting("poweroff.target", &[]),
+                waiting("shutdown.target", &[]),
+                waiting("db.service", &[]).stopping(),
+            ],
+        );
         state.finish_job(3, JobResult::Done, 500 * MS);
         state.finish_job(2, JobResult::Done, 600 * MS);
         state.finish_job(1, JobResult::Done, 700 * MS);
@@ -1517,11 +1393,14 @@ mod tests {
 
     #[test]
     fn ordering_cycles_do_not_repeat_units() {
-        let mut state = BootState::new(Phase::Host);
-        state.track_unit(facts("a.service", &["b.service"]), Activity::default());
-        state.track_unit(facts("b.service", &["a.service"]), Activity::default());
-        state.queue_job(1, "a.service", JobKind::BringsUp, Duration::ZERO);
-        state.queue_job(2, "b.service", JobKind::BringsUp, Duration::ZERO);
+        let state = queued_boot(
+            Phase::Host,
+            Duration::ZERO,
+            [
+                waiting("a.service", &["b.service"]),
+                waiting("b.service", &["a.service"]),
+            ],
+        );
         assert_eq!(state.tree_rows(Duration::MAX).len(), 2);
     }
 }

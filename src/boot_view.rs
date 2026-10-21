@@ -236,18 +236,10 @@ mod tests {
     use ratatui::{Terminal, backend::TestBackend};
 
     use super::*;
-    use crate::boot_model::{ActiveState, Activity, JobKind, JobResult, Phase, UnitFacts};
-
-    const MS: Duration = Duration::from_millis(1);
-
-    fn facts(name: &str, after: &[&str]) -> UnitFacts {
-        UnitFacts {
-            name: name.to_owned(),
-            description: String::new(),
-            after: after.iter().map(ToString::to_string).collect(),
-            before: Vec::new(),
-        }
-    }
+    use crate::{
+        boot_model::{JobResult, Phase},
+        boot_test_fixtures::{MS, queue_unit, queued_boot, running, waiting},
+    };
 
     fn render(state: &BootState, now: Duration, width: u16, height: u16) -> Vec<String> {
         screen_lines(&render_prompted(state, now, width, height, None))
@@ -298,47 +290,24 @@ mod tests {
             .collect()
     }
 
-    fn running_since(since: Duration) -> Activity {
-        Activity {
-            state: Some(ActiveState::Activating),
-            inactive_exit: Some(since),
-            active_enter: None,
-            active_exit: None,
-        }
-    }
-
     fn boot_in_progress() -> BootState {
-        let mut state = BootState::new(Phase::Host);
-        state.set_root("graphical.target".to_owned());
-        [
-            (
-                facts("graphical.target", &["multi-user.target"]),
-                Activity::default(),
-            ),
-            (
-                facts(
+        let mut state = queued_boot(
+            Phase::Host,
+            1000 * MS,
+            [
+                waiting("graphical.target", &["multi-user.target"]),
+                waiting(
                     "multi-user.target",
                     &["docker.service", "systemd-rfkill.service", "web.service"],
                 ),
-                Activity::default(),
-            ),
-            (facts("docker.service", &[]), running_since(9000 * MS)),
-            (
-                facts("systemd-rfkill.service", &[]),
-                running_since(6000 * MS),
-            ),
-            (facts("web.service", &[]), Activity::default()),
-            (facts("sysinit.target", &[]), Activity::default()),
-            (facts("nvidia-powerd.service", &[]), Activity::default()),
-            (facts("udev-settle.service", &[]), running_since(2000 * MS)),
-        ]
-        .into_iter()
-        .zip(1..)
-        .for_each(|((unit, activity), id)| {
-            let name = unit.name.clone();
-            state.track_unit(unit, activity);
-            state.queue_job(id, &name, JobKind::BringsUp, 1000 * MS);
-        });
+                running("docker.service", &[], 9000 * MS),
+                running("systemd-rfkill.service", &[], 6000 * MS),
+                waiting("web.service", &[]),
+                waiting("sysinit.target", &[]),
+                waiting("nvidia-powerd.service", &[]),
+                running("udev-settle.service", &[], 2000 * MS),
+            ],
+        );
         state.finish_job(6, JobResult::Done, 4000 * MS);
         state.finish_job(7, JobResult::Failed, 5000 * MS);
         state.finish_job(8, JobResult::Done, 3500 * MS);
@@ -403,22 +372,17 @@ mod tests {
 
     #[test]
     fn failures_stay_in_the_stage_that_wanted_them() {
-        let mut state = BootState::new(Phase::Host);
-        state.set_root("multi-user.target".to_owned());
-        [
-            facts("multi-user.target", &["basic.target", "web.service"]),
-            facts("basic.target", &["flaky.service", "quick.service"]),
-            facts("flaky.service", &[]),
-            facts("quick.service", &[]),
-            facts("web.service", &[]),
-        ]
-        .into_iter()
-        .zip(1..)
-        .for_each(|(unit, id)| {
-            let name = unit.name.clone();
-            state.track_unit(unit, Activity::default());
-            state.queue_job(id, &name, JobKind::BringsUp, Duration::ZERO);
-        });
+        let mut state = queued_boot(
+            Phase::Host,
+            Duration::ZERO,
+            [
+                waiting("multi-user.target", &["basic.target", "web.service"]),
+                waiting("basic.target", &["flaky.service", "quick.service"]),
+                waiting("flaky.service", &[]),
+                waiting("quick.service", &[]),
+                waiting("web.service", &[]),
+            ],
+        );
         state.finish_job(3, JobResult::Failed, 1000 * MS);
         state.finish_job(4, JobResult::Done, 1000 * MS);
         state.finish_job(2, JobResult::Done, 1500 * MS);
@@ -436,25 +400,15 @@ mod tests {
 
     #[test]
     fn finished_units_linger_in_place_before_leaving() {
-        let mut state = BootState::new(Phase::Host);
-        state.set_root("multi-user.target".to_owned());
-        [
-            facts("multi-user.target", &["early.service", "late.service"]),
-            facts("early.service", &[]),
-            facts("late.service", &[]),
-        ]
-        .into_iter()
-        .zip(1..)
-        .for_each(|(unit, id)| {
-            let name = unit.name.clone();
-            let activity = if name.ends_with(".service") {
-                running_since(Duration::ZERO)
-            } else {
-                Activity::default()
-            };
-            state.track_unit(unit, activity);
-            state.queue_job(id, &name, JobKind::BringsUp, Duration::ZERO);
-        });
+        let mut state = queued_boot(
+            Phase::Host,
+            Duration::ZERO,
+            [
+                waiting("multi-user.target", &["early.service", "late.service"]),
+                running("early.service", &[], Duration::ZERO),
+                running("late.service", &[], Duration::ZERO),
+            ],
+        );
         state.finish_job(2, JobResult::Done, 3000 * MS);
         let lingering = render(&state, 4000 * MS, 110, 24);
         let screen = lingering.join("\n");
@@ -571,8 +525,12 @@ mod tests {
     #[test]
     fn sub_second_runs_stay_off_the_timeline() {
         let mut state = boot_in_progress();
-        state.track_unit(facts("blink.service", &[]), running_since(4000 * MS));
-        state.queue_job(20, "blink.service", JobKind::BringsUp, 4000 * MS);
+        queue_unit(
+            &mut state,
+            20,
+            running("blink.service", &[], 4000 * MS),
+            4000 * MS,
+        );
         state.finish_job(20, JobResult::Done, 4400 * MS);
         let lines = render(&state, 12_400 * MS, 110, 24);
         assert!(
@@ -583,29 +541,18 @@ mod tests {
     }
 
     fn chain_boot() -> BootState {
-        let mut state = BootState::new(Phase::Host);
-        state.set_root("graphical.target".to_owned());
-        [
-            ("graphical.target", "network-wait.service"),
-            ("network-wait.service", "network.target"),
-            ("network.target", "network-manager.service"),
-            ("network-manager.service", "dbus.service"),
-            ("dbus.service", "udev-settle.service"),
-            ("udev-settle.service", ""),
-        ]
-        .into_iter()
-        .zip(1..)
-        .for_each(|((name, waits_on), id)| {
-            let after: Vec<&str> = [waits_on].into_iter().filter(|w| !w.is_empty()).collect();
-            let activity = if name == "udev-settle.service" {
-                running_since(1000 * MS)
-            } else {
-                Activity::default()
-            };
-            state.track_unit(facts(name, &after), activity);
-            state.queue_job(id, name, JobKind::BringsUp, Duration::ZERO);
-        });
-        state
+        queued_boot(
+            Phase::Host,
+            Duration::ZERO,
+            [
+                waiting("graphical.target", &["network-wait.service"]),
+                waiting("network-wait.service", &["network.target"]),
+                waiting("network.target", &["network-manager.service"]),
+                waiting("network-manager.service", &["dbus.service"]),
+                waiting("dbus.service", &["udev-settle.service"]),
+                running("udev-settle.service", &[], 1000 * MS),
+            ],
+        )
     }
 
     #[test]
@@ -649,34 +596,22 @@ mod tests {
     }
 
     fn described_boot() -> BootState {
-        let mut state = BootState::new(Phase::Host);
-        state.set_root("multi-user.target".to_owned());
-        [
-            (
-                "multi-user.target",
-                "Multi-User System",
-                &["docker.service", "systemd-rfkill.service"][..],
-            ),
-            ("docker.service", "Docker Application Container Engine", &[]),
-            (
-                "systemd-rfkill.service",
-                "Load/Save RF Kill Switch Status",
-                &[],
-            ),
-        ]
-        .into_iter()
-        .zip(1..)
-        .for_each(|((name, description, after), id)| {
-            state.track_unit(
-                UnitFacts {
-                    description: description.to_owned(),
-                    ..facts(name, after)
-                },
-                running_since(1000 * MS),
-            );
-            state.queue_job(id, name, JobKind::BringsUp, Duration::ZERO);
-        });
-        state
+        queued_boot(
+            Phase::Host,
+            Duration::ZERO,
+            [
+                running(
+                    "multi-user.target",
+                    &["docker.service", "systemd-rfkill.service"],
+                    1000 * MS,
+                )
+                .described("Multi-User System"),
+                running("docker.service", &[], 1000 * MS)
+                    .described("Docker Application Container Engine"),
+                running("systemd-rfkill.service", &[], 1000 * MS)
+                    .described("Load/Save RF Kill Switch Status"),
+            ],
+        )
     }
 
     #[test]
@@ -704,14 +639,12 @@ mod tests {
     #[test]
     fn non_service_units_carry_their_kind() {
         let mut state = described_boot();
-        state.track_unit(
-            UnitFacts {
-                description: "Docker Socket for the API".to_owned(),
-                ..facts("docker.socket", &[])
-            },
-            running_since(1000 * MS),
+        queue_unit(
+            &mut state,
+            9,
+            running("docker.socket", &[], 1000 * MS).described("Docker Socket for the API"),
+            Duration::ZERO,
         );
-        state.queue_job(9, "docker.socket", JobKind::BringsUp, Duration::ZERO);
         let lines = render(&state, 3000 * MS, 110, 24);
         let screen = lines.join("\n");
         let socket_row = lines
@@ -739,14 +672,13 @@ mod tests {
     #[test]
     fn long_timeline_labels_end_in_an_ellipsis() {
         let mut state = boot_in_progress();
-        state.track_unit(
-            UnitFacts {
-                description: "Kernel Configuration File System".to_owned(),
-                ..facts("sys-kernel-config.mount", &[])
-            },
-            running_since(2000 * MS),
+        queue_unit(
+            &mut state,
+            30,
+            running("sys-kernel-config.mount", &[], 2000 * MS)
+                .described("Kernel Configuration File System"),
+            2000 * MS,
         );
-        state.queue_job(30, "sys-kernel-config.mount", JobKind::BringsUp, 2000 * MS);
         state.finish_job(30, JobResult::Done, 4000 * MS);
         let lines = render(&state, 12_400 * MS, 110, 24);
         assert!(
@@ -771,15 +703,15 @@ mod tests {
 
     #[test]
     fn finished_stages_collapse_into_a_summary_rule() {
-        let mut state = BootState::new(Phase::Initrd);
-        state.set_root("initrd.target".to_owned());
-        state.track_unit(facts("initrd.target", &[]), Activity::default());
-        state.queue_job(1, "initrd.target", JobKind::BringsUp, Duration::ZERO);
+        let mut state = queued_boot(
+            Phase::Initrd,
+            Duration::ZERO,
+            [waiting("initrd.target", &[])],
+        );
         state.finish_job(1, JobResult::Done, 6000 * MS);
         state.switch_root(7200 * MS);
         state.set_root("graphical.target".to_owned());
-        state.track_unit(facts("graphical.target", &[]), Activity::default());
-        state.queue_job(2, "graphical.target", JobKind::BringsUp, 7300 * MS);
+        queue_unit(&mut state, 2, waiting("graphical.target", &[]), 7300 * MS);
         let lines = render(&state, 17_300 * MS, 110, 24);
         let screen = lines.join("\n");
         assert!(lines[0].ends_with("17.3s"), "{screen}");
@@ -800,10 +732,11 @@ mod tests {
 
     #[test]
     fn completion_announces_the_handover() {
-        let mut state = BootState::new(Phase::Host);
-        state.set_root("graphical.target".to_owned());
-        state.track_unit(facts("graphical.target", &[]), Activity::default());
-        state.queue_job(1, "graphical.target", JobKind::BringsUp, Duration::ZERO);
+        let mut state = queued_boot(
+            Phase::Host,
+            Duration::ZERO,
+            [waiting("graphical.target", &[])],
+        );
         state.finish_job(1, JobResult::Done, 9000 * MS);
         let lines = render(&state, 9500 * MS, 110, 24);
         assert!(
@@ -817,11 +750,12 @@ mod tests {
 
     #[test]
     fn shutdown_in_progress_names_its_stage() {
-        let mut state = BootState::new(Phase::Shutdown);
+        let mut state = queued_boot(
+            Phase::Shutdown,
+            20_000 * MS,
+            [waiting("poweroff.target", &[])],
+        );
         state.origin = 20_000 * MS;
-        state.set_root("poweroff.target".to_owned());
-        state.track_unit(facts("poweroff.target", &[]), Activity::default());
-        state.queue_job(1, "poweroff.target", JobKind::BringsUp, 20_000 * MS);
         let lines = render(&state, 21_500 * MS, 110, 24);
         assert!(
             lines[1].starts_with("└─ Shutdown 1.5s") && lines[1].ends_with("Running"),
@@ -858,22 +792,28 @@ mod tests {
 
     #[test]
     fn the_timeline_keeps_only_the_slowest_finished_runs() {
-        let mut state = BootState::new(Phase::Host);
-        state.set_root("multi-user.target".to_owned());
         let quick_units: Vec<String> = (0..10).map(|n| format!("run{n:02}.service")).collect();
         let after: Vec<&str> = quick_units
             .iter()
             .map(String::as_str)
             .chain(["slow.service"])
             .collect();
-        state.track_unit(facts("multi-user.target", &after), Activity::default());
-        state.queue_job(100, "multi-user.target", JobKind::BringsUp, Duration::ZERO);
-        state.track_unit(facts("slow.service", &[]), running_since(Duration::ZERO));
-        state.queue_job(101, "slow.service", JobKind::BringsUp, Duration::ZERO);
-        quick_units.iter().zip(0..).for_each(|(name, id)| {
-            state.track_unit(facts(name, &[]), running_since(Duration::ZERO));
-            state.queue_job(id, name, JobKind::BringsUp, Duration::ZERO);
-            state.finish_job(id, JobResult::Done, (1000 + 1000 * id) * MS);
+        let mut state = queued_boot(
+            Phase::Host,
+            Duration::ZERO,
+            [
+                waiting("multi-user.target", &after),
+                running("slow.service", &[], Duration::ZERO),
+            ],
+        );
+        quick_units.iter().zip(10..).for_each(|(name, id)| {
+            queue_unit(
+                &mut state,
+                id,
+                running(name, &[], Duration::ZERO),
+                Duration::ZERO,
+            );
+            state.finish_job(id, JobResult::Done, (1000 * id - 9000) * MS);
         });
         let lines = render(&state, 20_000 * MS, 110, 40);
         let screen = lines.join("\n");
@@ -897,12 +837,12 @@ mod tests {
 
     #[test]
     fn overflowing_trees_are_cut_with_a_count() {
-        let mut state = BootState::new(Phase::Host);
-        (0..30).for_each(|id| {
-            let name = format!("unit{id:02}.service");
-            state.track_unit(facts(&name, &[]), Activity::default());
-            state.queue_job(id, &name, JobKind::BringsUp, Duration::ZERO);
-        });
+        let names: Vec<String> = (0..30).map(|id| format!("unit{id:02}.service")).collect();
+        let state = queued_boot(
+            Phase::Host,
+            Duration::ZERO,
+            names.iter().map(|name| waiting(name, &[])),
+        );
         let lines = render(&state, 1000 * MS, 110, 20);
         assert!(
             lines.iter().any(|line| line.starts_with("   … ")),
