@@ -22,7 +22,8 @@ in
       a live dependency tree of systemd jobs on the boot console. With a
       systemd initrd it starts there and survives the switch to the real root;
       otherwise it starts in stage 2. It hands the console back once the
-      display manager starts or the default target is reached, and comes back
+      display manager switches to its terminal or the default target is
+      reached, and comes back
       for shutdown until systemd hands over to systemd-shutdown
     '';
 

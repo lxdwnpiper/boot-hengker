@@ -19,7 +19,6 @@ pub struct Console {
     quiet_kernel: Option<QuietKernelConsole>,
     foreground: Option<ForegroundVt>,
     for_system: bool,
-    handing_over: bool,
     pub glyphs: Glyphs,
     pub bold_is_brightness: bool,
 }
@@ -38,7 +37,6 @@ impl Console {
                 ForegroundVt::take()
             },
             for_system,
-            handing_over: false,
             glyphs: font_glyphs(),
             bold_is_brightness: own_vt().is_some(),
         }
@@ -65,8 +63,7 @@ impl Console {
             .quiet_kernel
             .as_mut()
             .is_some_and(QuietKernelConsole::keep_quiet);
-        let terminal_was_taken =
-            !self.handing_over && self.foreground.as_ref().is_some_and(ForegroundVt::insist);
+        let terminal_was_taken = self.foreground.as_ref().is_some_and(ForegroundVt::insist);
         let glyphs = font_glyphs();
         let font_changed = glyphs != self.glyphs;
         self.glyphs = glyphs;
@@ -74,7 +71,7 @@ impl Console {
     }
 
     pub fn begin_handover(&mut self) {
-        self.handing_over = true;
+        self.set_grip(TerminalGrip::Yielding);
     }
 
     #[must_use]
@@ -85,8 +82,12 @@ impl Console {
     }
 
     pub fn leave_console(&mut self) {
+        self.set_grip(TerminalGrip::Surrendered);
+    }
+
+    fn set_grip(&mut self, grip: TerminalGrip) {
         if let Some(foreground) = &mut self.foreground {
-            foreground.leave = true;
+            foreground.grip = grip;
         }
     }
 }
@@ -179,10 +180,17 @@ struct VtState {
     _state: u16,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TerminalGrip {
+    Insisting,
+    Yielding,
+    Surrendered,
+}
+
 struct ForegroundVt {
     own: u16,
     previous: u16,
-    leave: bool,
+    grip: TerminalGrip,
 }
 
 fn active_vt() -> Option<u16> {
@@ -210,12 +218,12 @@ impl ForegroundVt {
         Some(Self {
             own,
             previous,
-            leave: false,
+            grip: TerminalGrip::Insisting,
         })
     }
 
     fn insist(&self) -> bool {
-        active_vt().is_some_and(|active| active != self.own) && activate(self.own).is_ok()
+        self.grip == TerminalGrip::Insisting && self.taken_away() && activate(self.own).is_ok()
     }
 
     fn taken_away(&self) -> bool {
@@ -229,7 +237,7 @@ impl Drop for ForegroundVt {
             eprintln!("bootvine: leaving a password prompt to the console agent on this terminal");
             return;
         }
-        if self.leave {
+        if self.grip == TerminalGrip::Surrendered {
             return;
         }
         let _ = activate(self.previous);

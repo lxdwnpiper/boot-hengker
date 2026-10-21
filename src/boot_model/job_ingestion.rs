@@ -227,6 +227,15 @@ impl BootState {
     }
 
     #[must_use]
+    pub fn display_manager_started(&self) -> bool {
+        self.handoff_unit
+            .as_deref()
+            .and_then(|unit| self.units.get(unit))
+            .and_then(|handoff| handoff.activity.state)
+            .is_some_and(|state| state != ActiveState::Inactive)
+    }
+
+    #[must_use]
     pub fn tally(&self) -> Tally {
         let carried = Tally {
             done: self
@@ -287,8 +296,10 @@ mod tests {
     fn display_manager_activation_does_not_hand_the_console_over() {
         let mut state = sample();
         queue_unit(&mut state, 20, waiting(HANDOFF_UNIT, &[]), 500 * MS);
+        assert!(!state.display_manager_started());
         state.update_activity(HANDOFF_UNIT, activating(6000 * MS));
         assert!(!state.is_complete());
+        assert!(state.display_manager_started());
     }
 
     #[test]

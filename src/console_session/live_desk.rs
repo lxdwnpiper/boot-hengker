@@ -80,17 +80,25 @@ impl ConsoleDesk for LiveDesk {
         ControlFlow::Continue(())
     }
 
-    fn begin_handover(&mut self, now: Duration, hold_for: Duration) {
+    fn begin_handover(&mut self, reached: &str, deadline: Duration) {
+        if self.handover_deadline.is_some() {
+            return;
+        }
+        eprintln!("bootvine: {reached} reached, handing the console over");
         self.console.begin_handover();
-        self.handover_deadline = Some(now + hold_for);
+        self.handover_deadline = Some(deadline);
     }
 
     fn frame_passed(&mut self, _state: &mut BootState, now: Duration) -> ControlFlow<WatchEnding> {
         let Some(deadline) = self.handover_deadline else {
             return ControlFlow::Continue(());
         };
-        if self.console.console_was_taken() || now >= deadline {
+        if self.console.console_was_taken() {
+            eprintln!("bootvine: another program took the console, leaving it there");
             self.console.leave_console();
+            ControlFlow::Break(WatchEnding::BootCompleted)
+        } else if now >= deadline {
+            eprintln!("bootvine: nothing took the console, switching back");
             ControlFlow::Break(WatchEnding::BootCompleted)
         } else {
             ControlFlow::Continue(())

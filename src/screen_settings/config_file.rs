@@ -23,6 +23,8 @@ pub struct Timing {
     pub hide_runs_shorter_than: Duration,
     #[serde(with = "friendly_duration")]
     pub keep_final_frame_for: Duration,
+    #[serde(with = "friendly_duration")]
+    pub wait_for_display_manager: Duration,
 }
 
 impl Default for Timing {
@@ -31,6 +33,7 @@ impl Default for Timing {
             keep_finished_units_for: Duration::from_secs(2),
             hide_runs_shorter_than: Duration::from_secs(1),
             keep_final_frame_for: Duration::from_secs(1),
+            wait_for_display_manager: Duration::from_secs(10),
         }
     }
 }

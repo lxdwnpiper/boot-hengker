@@ -60,7 +60,7 @@ pub trait ConsoleDesk {
         None
     }
 
-    fn begin_handover(&mut self, _now: Duration, _hold_for: Duration) {}
+    fn begin_handover(&mut self, _reached: &str, _deadline: Duration) {}
 }
 
 struct CachedProjection {
@@ -73,7 +73,6 @@ pub struct WatchScreen<Desk> {
     pub desk: Desk,
     origin: BootOrigin,
     full_repaint_due: bool,
-    handover_begun: bool,
     colors: Colors,
     timing: Timing,
     epoch: Duration,
@@ -94,7 +93,6 @@ impl<Desk: ConsoleDesk> WatchScreen<Desk> {
             desk,
             origin,
             full_repaint_due: false,
-            handover_begun: false,
             colors,
             timing,
             epoch,
@@ -152,15 +150,13 @@ impl<Desk: ConsoleDesk> WatchScreen<Desk> {
         if !self.state.is_complete() {
             return ControlFlow::Continue(());
         }
-        if !self.handover_begun {
-            self.handover_begun = true;
-            eprintln!(
-                "bootvine: {} reached, handing the console over",
-                self.state.root.unit().unwrap_or("boot")
-            );
-            self.desk
-                .begin_handover(now, self.timing.keep_final_frame_for);
-        }
+        let hold_for = if self.state.display_manager_started() {
+            self.timing.wait_for_display_manager
+        } else {
+            self.timing.keep_final_frame_for
+        };
+        self.desk
+            .begin_handover(self.state.root.unit().unwrap_or("boot"), now + hold_for);
         ControlFlow::Continue(())
     }
 

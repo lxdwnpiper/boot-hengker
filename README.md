@@ -178,7 +178,10 @@ NixOS, or the `vt.default_red`, `_grn` and `_blu` kernel parameters elsewhere.
 `keep-finished-units-for` is how long a finished unit stays in the tree, faded,
 before it leaves. Runs shorter than `hide-runs-shorter-than` get no timer and no
 timeline bar. `keep-final-frame-for` is how long the last frame stays before the
-console is handed back; `--hold` overrides it.
+console is handed back; `--hold` overrides it. When a display manager is
+starting, bootvine instead waits for it to switch to its own terminal, up to
+`wait-for-display-manager`, so the console's status lines never show in
+between.
 
 `bootvine check /etc/bootvine.toml` reports unknown keys and bad values; at
 boot, bootvine ignores an invalid file and uses the defaults. The initrd hooks
