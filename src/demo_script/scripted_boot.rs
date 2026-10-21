@@ -28,6 +28,7 @@ use crate::{
 const FINAL_FRAME: Duration = Duration::from_secs(3);
 
 pub const DEMO_PASSPHRASE: &str = "demo";
+const DEMO_PASSPHRASE_HINT: &str = "This demo unlocks with the passphrase \"demo\"";
 
 pub struct Step {
     unit: &'static str,
@@ -211,11 +212,18 @@ impl Script {
         self.answer.is_some_and(|answer| now < answer.checked_at)
     }
 
+    fn was_rejected(&self, now: Duration) -> bool {
+        self.answer
+            .is_some_and(|answer| !answer.unlocks && now >= answer.checked_at)
+    }
+
     fn prompt(&self, typed: &str, now: Duration) -> Option<PasswordPrompt<'static>> {
         Some(PasswordPrompt {
             message: self.asking()?.asks?,
+            hint: Some(DEMO_PASSPHRASE_HINT),
             input: passphrase_input::masked(typed),
             sent: self.is_checking(now),
+            rejected: self.was_rejected(now),
         })
     }
 
@@ -391,4 +399,59 @@ pub fn play(terminal: &mut DefaultTerminal, scenario: &Scenario) -> io::Result<(
         .enable_time()
         .build()?
         .block_on(play_scenario(terminal, scenario))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const KEY_DERIVATION: Duration = Duration::from_millis(500);
+    const UNLOCK_ONLY: &[Step] = &[unlocking(
+        "systemd-cryptsetup@root.service",
+        &[],
+        "Please enter passphrase for disk root:",
+        KEY_DERIVATION,
+    )];
+
+    struct AskingDemo {
+        script: Script,
+        state: BootState,
+    }
+
+    fn asking_demo() -> AskingDemo {
+        let mut state = BootState::new(Phase::Initrd);
+        let mut script = Script::begin(UNLOCK_ONLY, |_| "", 1, &mut state, Duration::ZERO);
+        script.advance(&mut state, Duration::ZERO);
+        AskingDemo { script, state }
+    }
+
+    #[test]
+    fn the_hint_names_the_demo_passphrase() {
+        assert!(DEMO_PASSPHRASE_HINT.contains(&format!("\"{DEMO_PASSPHRASE}\"")));
+    }
+
+    #[test]
+    fn a_wrong_answer_is_checked_then_called_out() {
+        let AskingDemo { mut script, .. } = asking_demo();
+        let asked = script.prompt("", Duration::ZERO).expect("asking");
+        assert_eq!(asked.hint, Some(DEMO_PASSPHRASE_HINT));
+        assert!(!asked.rejected);
+        script.answer("wrong", Duration::ZERO);
+        let checking = script.prompt("", KEY_DERIVATION / 2).expect("asking");
+        assert!(checking.sent && !checking.rejected);
+        let rejected = script.prompt("", KEY_DERIVATION).expect("asking again");
+        assert!(rejected.rejected && !rejected.sent);
+    }
+
+    #[test]
+    fn the_right_answer_unlocks_and_closes_the_prompt() {
+        let AskingDemo {
+            mut script,
+            mut state,
+        } = asking_demo();
+        script.answer(DEMO_PASSPHRASE, Duration::ZERO);
+        script.advance(&mut state, KEY_DERIVATION);
+        assert!(script.is_done());
+        assert!(script.prompt("", KEY_DERIVATION).is_none());
+    }
 }

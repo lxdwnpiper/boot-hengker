@@ -78,8 +78,10 @@ fn password_prompt_floats_over_a_dimmed_view() {
         24,
         Some(PasswordPrompt {
             message: CRYPTSETUP_MESSAGE,
+            hint: None,
             input: "***".to_owned(),
             sent: false,
+            rejected: false,
         }),
     );
     let lines = screen_lines(&buffer);
@@ -121,8 +123,10 @@ fn answered_password_prompt_shows_it_is_checking() {
         24,
         Some(PasswordPrompt {
             message: CRYPTSETUP_MESSAGE,
+            hint: None,
             input: String::new(),
             sent: true,
+            rejected: false,
         }),
     ));
     assert!(
@@ -141,8 +145,10 @@ fn long_password_messages_wrap_inside_narrow_screens() {
         24,
         Some(PasswordPrompt {
             message: CRYPTSETUP_MESSAGE,
+            hint: None,
             input: String::new(),
             sent: false,
+            rejected: false,
         }),
     ));
     let screen = lines.join("\n");
@@ -151,6 +157,44 @@ fn long_password_messages_wrap_inside_narrow_screens() {
         "{screen}"
     );
     assert!(lines.iter().any(|line| line.contains("> _")), "{screen}");
+}
+
+#[test]
+fn a_rejected_passphrase_is_called_out_under_the_hint() {
+    let buffer = render_prompted(
+        &boot_in_progress(),
+        12_400 * MS,
+        110,
+        24,
+        Some(PasswordPrompt {
+            message: CRYPTSETUP_MESSAGE,
+            hint: Some("This demo unlocks with the passphrase \"demo\""),
+            input: String::new(),
+            sent: false,
+            rejected: true,
+        }),
+    );
+    let lines = screen_lines(&buffer);
+    let screen = lines.join("\n");
+    let message_row = lines
+        .iter()
+        .position(|line| line.contains(CRYPTSETUP_MESSAGE))
+        .unwrap_or_else(|| panic!("{screen}"));
+    assert!(
+        lines[message_row + 1].contains("│  This demo unlocks with the passphrase \"demo\""),
+        "{screen}"
+    );
+    assert!(
+        lines[message_row + 3].contains("│  Wrong passphrase, try again"),
+        "{screen}"
+    );
+    assert!(lines[message_row + 4].contains("│  > _"), "{screen}");
+    let rejection_row = u16::try_from(message_row + 3).expect("row fits the screen");
+    let warning = (0..buffer.area.width)
+        .map(|column| &buffer[(column, rejection_row)])
+        .find(|cell| cell.symbol() == "W")
+        .unwrap_or_else(|| panic!("{screen}"));
+    assert_eq!(warning.fg, Colors::default().password.rejected, "{screen}");
 }
 
 #[test]

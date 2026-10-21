@@ -211,8 +211,10 @@ impl PasswordEntry {
         };
         PasswordPrompt {
             message: &self.request.message,
+            hint: None,
             input,
             sent: self.sent,
+            rejected: false,
         }
     }
 

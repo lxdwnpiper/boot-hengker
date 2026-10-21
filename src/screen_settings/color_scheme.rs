@@ -153,6 +153,7 @@ pub struct PasswordColors {
     pub message: Color,
     pub hint: Color,
     pub checking: Color,
+    pub rejected: Color,
     pub backdrop: Color,
 }
 
@@ -163,6 +164,7 @@ impl Default for PasswordColors {
             message: Color::White,
             hint: Color::DarkGray,
             checking: Color::Gray,
+            rejected: Color::LightRed,
             backdrop: Color::DarkGray,
         }
     }

@@ -19,6 +19,7 @@ use crate::{
 
 pub const FOOTER_HEIGHT: u16 = 2;
 const SEPARATOR: &str = " · ";
+const REJECTED_PASSPHRASE: &str = "Wrong passphrase, try again";
 
 pub struct Header<'a> {
     pub origin: &'a BootOrigin,
@@ -94,8 +95,10 @@ impl Widget for Footer<'_> {
 
 pub struct PasswordPrompt<'a> {
     pub message: &'a str,
+    pub hint: Option<&'a str>,
     pub input: String,
     pub sent: bool,
+    pub rejected: bool,
 }
 
 pub struct PasswordPopup<'a> {
@@ -119,13 +122,20 @@ impl PasswordPopup<'_> {
     }
 
     fn paragraph(&self) -> Paragraph<'_> {
-        Paragraph::new(vec![
-            Line::from(self.asking.message.fg(self.colors.message).bold()),
-            Line::default(),
-            self.input(),
-        ])
-        .wrap(Wrap { trim: false })
-        .block(
+        let message = Line::from(self.asking.message.fg(self.colors.message).bold());
+        let hint = self
+            .asking
+            .hint
+            .map(|hint| Line::from(hint.fg(self.colors.hint)));
+        let rejection = (self.asking.rejected && !self.asking.sent)
+            .then(|| Line::from(REJECTED_PASSPHRASE.fg(self.colors.rejected).bold()));
+        let lines: Vec<Line> = once(message)
+            .chain(hint)
+            .chain(once(Line::default()))
+            .chain(rejection)
+            .chain(once(self.input()))
+            .collect();
+        Paragraph::new(lines).wrap(Wrap { trim: false }).block(
             Block::bordered()
                 .border_style(self.colors.frame)
                 .padding(Padding::horizontal(2))
