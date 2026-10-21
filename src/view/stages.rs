@@ -9,7 +9,7 @@ use ratatui::{
 };
 
 use super::{BRANCH, ELAPSED, LAST_BRANCH, unit_count};
-use crate::{glyphs::Glyphs, model::BootState, palette::Palette};
+use crate::{colors::StageColors, glyphs::Glyphs, model::BootState};
 
 const SHUTDOWN_SUCCESSOR: &str = "systemd-shutdown";
 const PHASE_WIDTH: usize = 9;
@@ -17,7 +17,7 @@ const PHASE_WIDTH: usize = 9;
 pub struct Stages<'a> {
     pub state: &'a BootState,
     pub now: Duration,
-    pub palette: &'a Palette,
+    pub colors: &'a StageColors,
     pub glyphs: &'a Glyphs,
 }
 
@@ -55,8 +55,8 @@ impl Stages<'_> {
     fn finished_phases(&self) -> impl Iterator<Item = Line<'static>> + '_ {
         self.state.finished_stages.iter().map(|stage| {
             Line::from(vec![
-                BRANCH.fg(self.palette.muted),
-                format!("{:PHASE_WIDTH$}", stage.label).fg(self.palette.waiting),
+                BRANCH.fg(self.colors.branches),
+                format!("{:PHASE_WIDTH$}", stage.label).fg(self.colors.finished_label),
                 format!(
                     "{} done in {}",
                     self.glyphs.bead,
@@ -64,11 +64,11 @@ impl Stages<'_> {
                         &stage.reached_at.saturating_sub(stage.started_at)
                     )
                 )
-                .fg(self.palette.done),
-                format!(" · {}", unit_count(stage.finished_units)).fg(self.palette.waiting),
+                .fg(self.colors.finished_time),
+                format!(" · {}", unit_count(stage.finished_units)).fg(self.colors.unit_count),
                 if stage.failed_units > 0 {
                     format!(" · {} {} failed", self.glyphs.failed, stage.failed_units)
-                        .fg(self.palette.failed)
+                        .fg(self.colors.failed_count)
                         .bold()
                 } else {
                     Span::default()
@@ -79,16 +79,16 @@ impl Stages<'_> {
 
     fn concluded_phase(&self, conclusion: &Conclusion) -> Line<'static> {
         Line::from(vec![
-            LAST_BRANCH.fg(self.palette.muted),
+            LAST_BRANCH.fg(self.colors.branches),
             format!(
                 "{} {} finished in {}",
                 self.glyphs.bead,
                 conclusion.finished,
                 ELAPSED.unsigned_duration_to_string(&conclusion.took)
             )
-            .fg(self.palette.done)
+            .fg(self.colors.finished_time)
             .bold(),
-            format!(" · handing over to {}", conclusion.handed_to).fg(self.palette.text),
+            format!(" · handing over to {}", conclusion.handed_to).fg(self.colors.current),
         ])
     }
 
@@ -103,11 +103,11 @@ impl Stages<'_> {
             .map_or(self.state.origin, |stage| stage.reached_at);
         let elapsed = ELAPSED.unsigned_duration_to_string(&self.now.saturating_sub(started_at));
         Line::from(vec![
-            LAST_BRANCH.fg(self.palette.muted),
+            LAST_BRANCH.fg(self.colors.branches),
             format!("{:PHASE_WIDTH$}", self.state.phase.label())
-                .fg(self.palette.text)
+                .fg(self.colors.current)
                 .bold(),
-            elapsed.fg(self.palette.text),
+            elapsed.fg(self.colors.current),
         ])
     }
 }

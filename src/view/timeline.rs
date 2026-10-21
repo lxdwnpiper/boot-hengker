@@ -15,9 +15,9 @@ use ratatui::{
 
 use super::{fit_width, rule, unit_count};
 use crate::{
+    colors::TimelineColors,
     glyphs::Glyphs,
     model::{FinishedRun, MilestoneRow},
-    palette::Palette,
 };
 
 pub const LABEL_WIDTH: u16 = 28;
@@ -51,7 +51,7 @@ pub struct Timeline<'a> {
     pub milestones: Vec<MilestoneRow>,
     pub finished: Vec<&'a FinishedRun>,
     pub running: Vec<RunningRun<'a>>,
-    pub palette: &'a Palette,
+    pub colors: &'a TimelineColors,
     pub glyphs: &'a Glyphs,
 }
 
@@ -91,13 +91,13 @@ impl Timeline<'_> {
                     row.label,
                     unit_count(row.finished_units)
                 ),
-                self.palette.done,
+                self.colors.milestone,
             ),
             segments: vec![Segment {
                 from: row.started_at,
                 to: row.reached_at,
                 symbol: self.glyphs.bead,
-                color: self.palette.done,
+                color: self.colors.milestone,
             }],
             still_going: false,
         }
@@ -110,14 +110,14 @@ impl Timeline<'_> {
             self.glyphs.done
         };
         let outcome = if run.failed {
-            self.palette.failed
+            self.colors.failed
         } else {
-            self.palette.done
+            self.colors.finished
         };
         TimelineEntry {
             label: Line::from(vec![
                 Span::styled(format!("{mark} "), outcome),
-                self.fitted(&run.label).fg(self.palette.waiting),
+                self.fitted(&run.label).fg(self.colors.finished_label),
             ]),
             segments: vec![Segment {
                 from: run.started_at,
@@ -142,18 +142,18 @@ impl Timeline<'_> {
             from: run.queued_at,
             to: run.since,
             symbol: self.glyphs.waiting_bead,
-            color: self.palette.waiting,
+            color: self.colors.queued_bar,
         });
         let ran = Segment {
             from: run.since,
             to: self.now,
             symbol: self.glyphs.bead,
-            color: self.palette.running,
+            color: self.colors.running,
         };
         TimelineEntry {
             label: Line::from(vec![
-                format!("{} ", self.glyphs.running_mark).fg(self.palette.running),
-                self.fitted(run.label).fg(self.palette.text),
+                format!("{} ", self.glyphs.running_mark).fg(self.colors.running),
+                self.fitted(run.label).fg(self.colors.running_label),
             ]),
             segments: waited.into_iter().chain(once(ran)).collect(),
             still_going: true,
@@ -164,8 +164,8 @@ impl Timeline<'_> {
 impl Widget for Timeline<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let block = rule(
-            self.palette,
-            Line::from(" Timeline ".fg(self.palette.waiting)),
+            self.colors.rule,
+            Line::from(" Timeline ".fg(self.colors.title)),
         );
         let inner = block.inner(area);
         block.render(area, buf);
@@ -192,7 +192,7 @@ impl Widget for Timeline<'_> {
         .render(label_area, buf);
         let axis = TimeAxis::new(self.origin, self.now, bar_area.width);
         let label_row = f64::from(bar_area.height.saturating_sub(1).max(1));
-        let muted = self.palette.muted;
+        let axis_color = self.colors.axis;
         Canvas::default()
             .x_bounds(axis.bounds())
             .y_bounds([0.0, label_row])
@@ -211,20 +211,20 @@ impl Widget for Timeline<'_> {
                     });
                     if entry.still_going {
                         ctx.marker(Marker::Custom(self.glyphs.still_going));
-                        ctx.draw(&Points::new(&[(self.now.as_secs_f64(), y)], muted));
+                        ctx.draw(&Points::new(&[(self.now.as_secs_f64(), y)], axis_color));
                     }
                 });
                 ctx.marker(Marker::Custom(self.glyphs.root_switch_mark));
                 self.root_switches.iter().for_each(|at| {
                     let x = at.as_secs_f64();
-                    ctx.draw(&Stroke::new(x, 0.0, x, label_row - 1.0, muted));
+                    ctx.draw(&Stroke::new(x, 0.0, x, label_row - 1.0, axis_color));
                 });
                 axis.tick_offsets().for_each(|offset| {
                     let label = axis.label(offset);
                     let x = (axis.origin + offset)
                         .as_secs_f64()
                         .min(axis.bounds()[1] - axis.columns_to_seconds(label.len() - 1));
-                    ctx.print(x, label_row, label.fg(muted));
+                    ctx.print(x, label_row, label.fg(axis_color));
                 });
             })
             .render(bar_area, buf);

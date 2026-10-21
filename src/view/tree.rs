@@ -11,9 +11,9 @@ use unicode_width::UnicodeWidthStr;
 
 use super::{BRANCH, DURATION_WIDTH, ELAPSED, ENDED_TRUNK, LAST_BRANCH, PASSING_TRUNK, fit_width};
 use crate::{
+    colors::TreeColors,
     glyphs::Glyphs,
     model::{RowStatus, TreeRow, UnitKind},
-    palette::Palette,
 };
 
 const SPINNER: [char; 4] = ['|', '/', '-', '\\'];
@@ -29,7 +29,7 @@ pub struct UnitTree<'a> {
     pub now: Duration,
     pub hide_runs_shorter_than: Duration,
     pub frame: u64,
-    pub palette: &'a Palette,
+    pub colors: &'a TreeColors,
     pub glyphs: &'a Glyphs,
 }
 
@@ -74,7 +74,7 @@ impl UnitTree<'_> {
         if !self.phase_fits_its_column(columns) {
             return Row::default().height(HEADER_ROWS);
         }
-        let name = |text: &'static str| Line::from(text).fg(self.palette.muted);
+        let name = |text: &'static str| Line::from(text).fg(self.colors.columns);
         Row::new(columns.shown([
             self.phase.clone(),
             name("Kind"),
@@ -102,36 +102,44 @@ impl UnitTree<'_> {
     }
 
     fn label_style(&self, row: &TreeRow, stage: Stage) -> Style {
-        match (stage, row.kind, row.status) {
-            (Stage::Current, ..) => Style::from(self.palette.running).bold(),
-            (Stage::Reached, ..) => self.palette.done.into(),
-            (_, _, RowStatus::Failed) => Style::from(self.palette.failed).bold(),
-            (_, UnitKind::Target, _) => self.palette.target.into(),
-            (_, _, RowStatus::Running { .. }) => self.palette.text.into(),
-            (_, _, RowStatus::Waiting) => self.palette.waiting.into(),
-            (_, _, RowStatus::Done) => self.palette.muted.into(),
+        match stage {
+            Stage::Current => Style::from(self.colors.current_stage).bold(),
+            Stage::Reached => self.colors.reached_stage.into(),
+            Stage::Upcoming | Stage::Inside => self.unit_label_style(row),
+        }
+    }
+
+    fn unit_label_style(&self, row: &TreeRow) -> Style {
+        match row.status {
+            RowStatus::Failed => Style::from(self.colors.failed_unit).bold(),
+            _ if row.kind == UnitKind::Target => self.colors.target.into(),
+            RowStatus::Running { .. } => self.colors.running_unit.into(),
+            RowStatus::Waiting => self.colors.waiting_unit.into(),
+            RowStatus::Done => self.colors.finished_unit.into(),
         }
     }
 
     fn status_marker(&self, row: &TreeRow, stage: Stage) -> Span<'static> {
-        match (stage, row.kind, row.status) {
-            (Stage::Current, ..) => {
-                format!("{} ", self.glyphs.stage_current).fg(self.palette.running)
+        match stage {
+            Stage::Current => {
+                format!("{} ", self.glyphs.stage_current).fg(self.colors.current_stage)
             }
-            (Stage::Upcoming, ..) => {
-                format!("{} ", self.glyphs.stage_upcoming).fg(self.palette.target)
-            }
-            (Stage::Reached, ..) => format!("{} ", self.glyphs.done).fg(self.palette.done),
-            (_, _, RowStatus::Failed) => {
-                format!("[{}] ", self.glyphs.failed).fg(self.palette.failed)
-            }
-            (_, UnitKind::Target, _) => Span::default(),
-            (_, _, RowStatus::Running { .. }) => {
+            Stage::Upcoming => format!("{} ", self.glyphs.stage_upcoming).fg(self.colors.target),
+            Stage::Reached => format!("{} ", self.glyphs.done).fg(self.colors.reached_stage),
+            Stage::Inside => self.unit_marker(row),
+        }
+    }
+
+    fn unit_marker(&self, row: &TreeRow) -> Span<'static> {
+        match row.status {
+            RowStatus::Failed => format!("[{}] ", self.glyphs.failed).fg(self.colors.failed_unit),
+            _ if row.kind == UnitKind::Target => Span::default(),
+            RowStatus::Running { .. } => {
                 let spinner = SPINNER[usize::try_from(self.frame % 4).unwrap_or_default()];
-                format!("[{spinner}] ").fg(self.palette.running)
+                format!("[{spinner}] ").fg(self.colors.running_marker)
             }
-            (_, _, RowStatus::Waiting) => "[ ] ".fg(self.palette.waiting),
-            (_, _, RowStatus::Done) => format!("[{}] ", self.glyphs.done).fg(self.palette.done),
+            RowStatus::Waiting => "[ ] ".fg(self.colors.waiting_unit),
+            RowStatus::Done => format!("[{}] ", self.glyphs.done).fg(self.colors.finished_marker),
         }
     }
 
@@ -203,12 +211,12 @@ impl UnitTree<'_> {
         let style = self.label_style(row, stage);
         Row::new(columns.shown([
             Line::from(vec![
-                prefix.fg(self.palette.muted),
+                prefix.fg(self.colors.branches),
                 marker,
                 Span::styled(self.chained_label(row, room), style),
             ]),
-            Line::from(annotation(row.kind.tag(), columns.tag)).fg(self.palette.muted),
-            Line::from(annotation(&row.description, columns.description)).fg(self.palette.muted),
+            Line::from(annotation(row.kind.tag(), columns.tag)).fg(self.colors.columns),
+            Line::from(annotation(&row.description, columns.description)).fg(self.colors.columns),
             Line::from(timer).style(style).right_aligned(),
         ]))
     }
@@ -241,7 +249,7 @@ impl Widget for UnitTree<'_> {
         let overflow = (hidden > 0).then(|| {
             Row::new([
                 format!("{ENDED_TRUNK}{} {hidden} more", self.glyphs.ellipsis)
-                    .fg(self.palette.waiting),
+                    .fg(self.colors.overflow),
             ])
         });
         let columns = self.columns(area.width);

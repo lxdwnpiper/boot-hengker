@@ -140,36 +140,41 @@ dracut module as above, or on mkinitcpio install
 
 ## Configure
 
-`/etc/bootvine.toml`, or `services.bootvine.palette` and
-`services.bootvine.timing` on NixOS. Every key is optional; these are the
-defaults:
+`/etc/bootvine.toml`. Every key is optional; `bootvine defaults` prints them
+all with their defaults, and `bootvine defaults --format nix` prints the same as
+a Nix attribute set. A file that changes two of them:
 
 ```toml
-[palette]
-text = "white"
-muted = "dark-gray"
-waiting = "gray"
-running = "yellow"
-done = "green"
-failed = "light-red"
-target = "cyan"
+[colors.tree]
+running-marker = "light-yellow"
 
 [timing]
-keep_finished_units_for = "2s"
-hide_runs_shorter_than = "1s"
-keep_final_frame_for = "1s"
+keep-final-frame-for = "500ms"
 ```
 
-Palette values are the 16 console colour names. To change how those look, set
-the console palette: `console.colors` on NixOS, or the `vt.default_red`, `_grn`
-and `_blu` kernel parameters elsewhere.
+Each `[colors.*]` table covers one part of the screen: `header`, the finished
+`stages`, the unit `tree`, the `timeline`, the `footer` tallies and the
+`password` popup. Values are the 16 console colour names. To change how those look, set the console palette: `console.colors` on
+NixOS, or the `vt.default_red`, `_grn` and `_blu` kernel parameters elsewhere.
 
-`keep_finished_units_for` is how long a finished unit stays in the tree, faded,
-before it leaves. Runs shorter than `hide_runs_shorter_than` get no timer and no
-timeline bar. `keep_final_frame_for` is how long the last frame stays before the
+`keep-finished-units-for` is how long a finished unit stays in the tree, faded,
+before it leaves. Runs shorter than `hide-runs-shorter-than` get no timer and no
+timeline bar. `keep-final-frame-for` is how long the last frame stays before the
 console is handed back; `--hold` overrides it.
 
-The initrd hooks copy the file into the initramfs, so rebuild it after editing.
+`bootvine check /etc/bootvine.toml` reports unknown keys and bad values; at
+boot, bootvine ignores an invalid file and uses the defaults. The initrd hooks
+copy the file into the initramfs, so rebuild it after editing.
+
+On NixOS, set the same tables under `services.bootvine.settings`; the rebuild
+fails if `bootvine check` rejects them:
+
+```nix
+services.bootvine.settings = {
+  colors.tree.running-marker = "light-yellow";
+  timing.keep-final-frame-for = "500ms";
+};
+```
 
 ## License
 

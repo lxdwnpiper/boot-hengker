@@ -11,10 +11,10 @@ use std::{
 };
 
 use bootvine::{
+    colors::Colors,
     config::Timing,
     model::{BootState, Phase},
     origin::BootOrigin,
-    palette::Palette,
     view::BootView,
 };
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
@@ -50,7 +50,7 @@ pub struct Settings {
     pub shutdown: bool,
     pub target: RootRequest,
     pub timing: Timing,
-    pub palette: Palette,
+    pub colors: Colors,
 }
 
 pub fn run(settings: &Settings) -> Result<(), Error> {
@@ -176,7 +176,7 @@ fn watch(
             canvas.render_widget(
                 BootView {
                     state,
-                    palette: &settings.palette,
+                    colors: &settings.colors,
                     timing: &settings.timing,
                     glyphs: &console.glyphs,
                     now: monotonic_now(),

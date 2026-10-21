@@ -9,6 +9,7 @@ use jiff::fmt::friendly::{Designator, FractionalUnit, Spacing, SpanPrinter};
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Layout, Rect},
+    style::Color,
     text::Line,
     widgets::{Block, Borders, Widget},
 };
@@ -23,11 +24,11 @@ use self::{
     tree::UnitTree,
 };
 use crate::{
+    colors::Colors,
     config::Timing,
     glyphs::Glyphs,
     model::{BootState, RowStatus, TreeRow, UnitKind, fit_to_height, fold_chains},
     origin::BootOrigin,
-    palette::Palette,
 };
 
 const DURATION_WIDTH: u16 = 8;
@@ -48,7 +49,7 @@ const ELAPSED: SpanPrinter = SpanPrinter::new()
 
 pub struct BootView<'a> {
     pub state: &'a BootState,
-    pub palette: &'a Palette,
+    pub colors: &'a Colors,
     pub timing: &'a Timing,
     pub glyphs: &'a Glyphs,
     pub now: Duration,
@@ -92,7 +93,7 @@ impl BootView<'_> {
                 })
                 .collect(),
             running,
-            palette: self.palette,
+            colors: &self.colors.timeline,
             glyphs: self.glyphs,
         }
     }
@@ -108,18 +109,18 @@ impl Widget for BootView<'_> {
             origin: self.origin,
             total: (!self.state.finished_stages.is_empty())
                 .then(|| self.now.saturating_sub(self.state.origin)),
-            palette: self.palette,
+            colors: &self.colors.header,
         };
         let stages = Stages {
             state: self.state,
             now: self.now,
-            palette: self.palette,
+            colors: &self.colors.stages,
             glyphs: self.glyphs,
         };
         let timeline = self.timeline(&all_rows);
         let footer = Footer {
             tally: self.state.tally(),
-            palette: self.palette,
+            colors: &self.colors.footer,
             glyphs: self.glyphs,
         };
         let fits_timeline = area.width >= timeline::LABEL_WIDTH + 1 + MIN_BAR_WIDTH
@@ -144,7 +145,7 @@ impl Widget for BootView<'_> {
             now: self.now,
             hide_runs_shorter_than: self.timing.hide_runs_shorter_than,
             frame: self.frame,
-            palette: self.palette,
+            colors: &self.colors.tree,
             glyphs: self.glyphs,
         };
         let tree_height = tree.height().min(heights.tree);
@@ -176,7 +177,7 @@ impl Widget for BootView<'_> {
         if let Some(asking) = &self.password_prompt {
             PasswordPopup {
                 asking,
-                palette: self.palette,
+                colors: &self.colors.password,
                 glyphs: self.glyphs,
             }
             .render(area, buf);
@@ -204,10 +205,10 @@ impl Heights {
     }
 }
 
-fn rule(palette: &Palette, left: Line<'static>) -> Block<'static> {
+fn rule(color: Color, left: Line<'static>) -> Block<'static> {
     Block::new()
         .borders(Borders::TOP)
-        .border_style(palette.muted)
+        .border_style(color)
         .title(left)
 }
 
@@ -265,7 +266,7 @@ mod tests {
                 frame.render_widget(
                     BootView {
                         state,
-                        palette: &Palette::default(),
+                        colors: &Colors::default(),
                         timing: &Timing::default(),
                         glyphs: &Glyphs::default(),
                         now,
@@ -513,13 +514,17 @@ mod tests {
             lines[23].starts_with("√ 2 done   2 running   3 waiting   × 1 failed"),
             "{screen}"
         );
-        assert_eq!(buffer[(0, 0)].fg, Palette::default().muted, "{screen}");
+        assert_eq!(
+            buffer[(0, 0)].fg,
+            Colors::default().password.backdrop,
+            "{screen}"
+        );
         let corner = buffer
             .content
             .iter()
             .find(|cell| cell.symbol() == "┌")
             .unwrap_or_else(|| panic!("{screen}"));
-        assert_eq!(corner.fg, Palette::default().running, "{screen}");
+        assert_eq!(corner.fg, Colors::default().password.frame, "{screen}");
     }
 
     #[test]

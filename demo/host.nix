@@ -44,7 +44,13 @@ in
 
   services.bootvine = {
     enable = true;
-    palette.running = "light-yellow";
+    settings.colors = {
+      tree.current-stage = "light-yellow";
+      tree.running-marker = "light-yellow";
+      timeline.running = "light-yellow";
+      footer.running = "light-yellow";
+      password.frame = "light-yellow";
+    };
   };
 
   console = {

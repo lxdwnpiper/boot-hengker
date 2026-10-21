@@ -7,35 +7,14 @@
 }:
 let
   cfg = config.services.bootvine;
-  chosen = lib.filterAttrs (_: value: value != null);
-  settings = lib.filterAttrs (_: table: table != { }) {
-    palette = chosen cfg.palette;
-    timing = chosen cfg.timing;
-  };
-  configFile = (pkgs.formats.toml { }).generate "bootvine.toml" settings;
-  durationOption =
-    purpose: default:
-    lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
-      default = null;
-      example = "500ms";
-      description = ''
-        ${purpose}; unset keeps `${default}`. A duration such as `2s`,
-        `500ms` or `1m 30s`.
-      '';
-    };
-  colorOption =
-    role: default:
-    lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
-      default = null;
-      example = "light-yellow";
-      description = ''
-        Colour for ${role}; unset keeps `${default}`. One of the 16 console
-        colour names (`red`, `light-red`, `dark-gray`, …). What each name
-        looks like comes from the console palette, {option}`console.colors`.
-      '';
-    };
+  settingsFormat = pkgs.formats.toml { };
+  uncheckedConfigFile = settingsFormat.generate "bootvine-unchecked.toml" cfg.settings;
+  canRunPackage = pkgs.stdenv.buildPlatform.canExecute pkgs.stdenv.hostPlatform;
+  configFile = pkgs.runCommand "bootvine.toml" { } ''
+    ${lib.optionalString canRunPackage "${lib.getExe cfg.package} check ${uncheckedConfigFile}"}
+    cp ${uncheckedConfigFile} $out
+  '';
+  hasSettings = cfg.settings != { };
 in
 {
   options.services.bootvine = {
@@ -54,27 +33,25 @@ in
       description = "The bootvine package, which ships the systemd unit.";
     };
 
-    palette = {
-      text = colorOption "running units and headings" "white";
-      muted = colorOption "rules, tree lines and the time axis" "dark-gray";
-      waiting = colorOption "queued units and finished-unit labels" "gray";
-      running = colorOption "running units and their bars" "yellow";
-      done = colorOption "finished units, stages and milestones" "green";
-      failed = colorOption "failed units" "light-red";
-      target = colorOption "targets in the tree" "cyan";
-    };
-
-    timing = {
-      keep_finished_units_for = durationOption "How long a finished unit stays in the tree, faded, before it leaves" "2s";
-      hide_runs_shorter_than = durationOption "Runs shorter than this get no timer in the tree and no bar on the timeline" "1s";
-      keep_final_frame_for = durationOption "How long the last frame stays on screen before the console is handed back" "1s";
+    settings = lib.mkOption {
+      inherit (settingsFormat) type;
+      default = { };
+      example = {
+        colors.tree.running-marker = "light-yellow";
+        timing.keep-final-frame-for = "500ms";
+      };
+      description = ''
+        Written to {file}`/etc/bootvine.toml`, in the real root and the
+        initrd. `bootvine defaults --format nix` prints every key with its
+        default; the build fails if `bootvine check` rejects the result.
+      '';
     };
   };
 
   config = lib.mkIf cfg.enable {
     environment = {
       systemPackages = [ cfg.package ];
-      etc."bootvine.toml" = lib.mkIf (settings != { }) { source = configFile; };
+      etc."bootvine.toml" = lib.mkIf hasSettings { source = configFile; };
     };
 
     systemd = {
@@ -87,7 +64,7 @@ in
       packages = [ cfg.package ];
       storePaths = [ (lib.getExe cfg.package) ];
       services.bootvine.wantedBy = [ "sysinit.target" ];
-      contents."/etc/bootvine.toml" = lib.mkIf (settings != { }) { source = configFile; };
+      contents."/etc/bootvine.toml" = lib.mkIf hasSettings { source = configFile; };
     };
   };
 }

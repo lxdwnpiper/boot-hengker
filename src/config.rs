@@ -1,24 +1,27 @@
-use std::time::Duration;
+use std::{error, fmt, fs, io, path::Path, time::Duration};
 
-use serde::Deserialize;
+use heck::ToKebabCase;
+use jiff::fmt::serde::unsigned_duration::friendly::compact::required as friendly_duration;
+use serde::{Deserialize, Serialize};
+use toml::{Table, Value, de::Error as ParseError, ser::Error as SerializeError};
 
-use crate::palette::Palette;
+use crate::colors::Colors;
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
-#[serde(default, deny_unknown_fields)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Config {
-    pub palette: Palette,
+    pub colors: Colors,
     pub timing: Timing,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
-#[serde(default, deny_unknown_fields)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Timing {
-    #[serde(with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required")]
+    #[serde(with = "friendly_duration")]
     pub keep_finished_units_for: Duration,
-    #[serde(with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required")]
+    #[serde(with = "friendly_duration")]
     pub hide_runs_shorter_than: Duration,
-    #[serde(with = "jiff::fmt::serde::unsigned_duration::friendly::compact::required")]
+    #[serde(with = "friendly_duration")]
     pub keep_final_frame_for: Duration,
 }
 
@@ -32,13 +35,60 @@ impl Default for Timing {
     }
 }
 
+#[derive(Debug)]
+pub enum ConfigError {
+    Unreadable(io::Error),
+    Invalid(ParseError),
+}
+
+impl fmt::Display for ConfigError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unreadable(error) => write!(formatter, "cannot read: {error}"),
+            Self::Invalid(error) => write!(formatter, "invalid: {error}"),
+        }
+    }
+}
+
+impl error::Error for ConfigError {}
+
+pub fn read_config_file(path: &Path) -> Result<Config, ConfigError> {
+    let text = fs::read_to_string(path).map_err(ConfigError::Unreadable)?;
+    toml::from_str(&text).map_err(ConfigError::Invalid)
+}
+
+pub fn default_config_table() -> Result<Table, SerializeError> {
+    Table::try_from(Config::default()).map(kebab_color_names)
+}
+
+fn kebab_color_names(table: Table) -> Table {
+    table
+        .into_iter()
+        .map(|(key, value)| {
+            let value = match value {
+                Value::Table(nested) => Value::Table(kebab_color_names(nested)),
+                Value::String(name) if name.starts_with(char::is_alphabetic) => {
+                    Value::String(name.to_kebab_case())
+                }
+                other => other,
+            };
+            (key, value)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn printed_defaults() -> String {
+        toml::to_string_pretty(&default_config_table().expect("serializable defaults"))
+            .expect("printable defaults")
+    }
+
     #[test]
     fn timing_reads_friendly_durations_and_keeps_unset_defaults() {
-        let config: Config = toml::from_str("[timing]\nkeep_finished_units_for = \"500ms\"\n")
+        let config: Config = toml::from_str("[timing]\nkeep-finished-units-for = \"500ms\"\n")
             .expect("valid config");
         assert_eq!(
             config.timing.keep_finished_units_for,
@@ -52,6 +102,21 @@ mod tests {
 
     #[test]
     fn nonsense_durations_are_rejected() {
-        assert!(toml::from_str::<Config>("[timing]\nkeep_final_frame_for = \"soon\"\n").is_err());
+        assert!(toml::from_str::<Config>("[timing]\nkeep-final-frame-for = \"soon\"\n").is_err());
+    }
+
+    #[test]
+    fn unknown_color_keys_are_rejected() {
+        assert!(toml::from_str::<Config>("[colors.tree]\nbogus = \"red\"\n").is_err());
+    }
+
+    #[test]
+    fn printed_defaults_read_back_unchanged() {
+        let printed = printed_defaults();
+        assert!(printed.contains("failed-unit = \"light-red\""), "{printed}");
+        assert_eq!(
+            toml::from_str::<Config>(&printed).expect("valid defaults"),
+            Config::default()
+        );
     }
 }

@@ -9,7 +9,12 @@ use ratatui::{
 };
 
 use super::{DURATION_WIDTH, ELAPSED};
-use crate::{glyphs::Glyphs, model::Tally, origin::BootOrigin, palette::Palette};
+use crate::{
+    colors::{FooterColors, HeaderColors, PasswordColors},
+    glyphs::Glyphs,
+    model::Tally,
+    origin::BootOrigin,
+};
 
 pub const FOOTER_HEIGHT: u16 = 2;
 const SEPARATOR: &str = " · ";
@@ -17,7 +22,7 @@ const SEPARATOR: &str = " · ";
 pub struct Header<'a> {
     pub origin: &'a BootOrigin,
     pub total: Option<Duration>,
-    pub palette: &'a Palette,
+    pub colors: &'a HeaderColors,
 }
 
 impl Header<'_> {
@@ -28,8 +33,8 @@ impl Header<'_> {
                 .into_iter()
                 .enumerate()
                 .flat_map(|(index, part)| {
-                    let separator = (index > 0).then(|| SEPARATOR.fg(self.palette.muted));
-                    let part = Span::from(part).fg(self.palette.text);
+                    let separator = (index > 0).then(|| SEPARATOR.fg(self.colors.separators));
+                    let part = Span::from(part).fg(self.colors.origin);
                     let part = if index == 0 { part.bold() } else { part };
                     separator.into_iter().chain(once(part))
                 })
@@ -49,7 +54,7 @@ impl Widget for Header<'_> {
         );
         if let Some(total) = self.total {
             Line::from(ELAPSED.unsigned_duration_to_string(&total))
-                .fg(self.palette.text)
+                .fg(self.colors.total_time)
                 .bold()
                 .right_aligned()
                 .render(area, buf);
@@ -59,7 +64,7 @@ impl Widget for Header<'_> {
 
 pub struct Footer<'a> {
     pub tally: Tally,
-    pub palette: &'a Palette,
+    pub colors: &'a FooterColors,
     pub glyphs: &'a Glyphs,
 }
 
@@ -67,19 +72,19 @@ impl Widget for Footer<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let failed = format!("   {} {} failed", self.glyphs.failed, self.tally.failed);
         let failed = if self.tally.failed > 0 {
-            failed.fg(self.palette.failed).bold()
+            failed.fg(self.colors.failed).bold()
         } else {
-            failed.fg(self.palette.waiting)
+            failed.fg(self.colors.no_failures)
         };
         let block = Block::new()
             .borders(Borders::TOP)
-            .border_style(self.palette.muted);
+            .border_style(self.colors.rule);
         let inner = block.inner(area);
         block.render(area, buf);
         Line::from(vec![
-            format!("{} {} done", self.glyphs.done, self.tally.done).fg(self.palette.done),
-            format!("   {} running", self.tally.running).fg(self.palette.running),
-            format!("   {} waiting", self.tally.waiting).fg(self.palette.waiting),
+            format!("{} {} done", self.glyphs.done, self.tally.done).fg(self.colors.done),
+            format!("   {} running", self.tally.running).fg(self.colors.running),
+            format!("   {} waiting", self.tally.waiting).fg(self.colors.waiting),
             failed,
         ])
         .render(inner, buf);
@@ -94,7 +99,7 @@ pub struct PasswordPrompt<'a> {
 
 pub struct PasswordPopup<'a> {
     pub asking: &'a PasswordPrompt<'a>,
-    pub palette: &'a Palette,
+    pub colors: &'a PasswordColors,
     pub glyphs: &'a Glyphs,
 }
 
@@ -103,29 +108,29 @@ impl PasswordPopup<'_> {
 
     fn input(&self) -> Line<'static> {
         if self.asking.sent {
-            Line::from(format!("Checking{}", self.glyphs.ellipsis).fg(self.palette.waiting))
+            Line::from(format!("Checking{}", self.glyphs.ellipsis).fg(self.colors.checking))
         } else {
             Line::from(vec![
-                "> ".fg(self.palette.running),
-                format!("{}_", self.asking.input).fg(self.palette.text),
+                "> ".fg(self.colors.frame),
+                format!("{}_", self.asking.input).fg(self.colors.message),
             ])
         }
     }
 
     fn paragraph(&self) -> Paragraph<'_> {
         Paragraph::new(vec![
-            Line::from(self.asking.message.fg(self.palette.text).bold()),
+            Line::from(self.asking.message.fg(self.colors.message).bold()),
             Line::default(),
             self.input(),
         ])
         .wrap(Wrap { trim: false })
         .block(
             Block::bordered()
-                .border_style(self.palette.running)
+                .border_style(self.colors.frame)
                 .padding(Padding::horizontal(2))
-                .title(" Password ".fg(self.palette.running).bold())
+                .title(" Password ".fg(self.colors.frame).bold())
                 .title_bottom(
-                    Line::from(" Enter unlock · Ctrl+U clear ".fg(self.palette.muted))
+                    Line::from(" Enter unlock · Ctrl+U clear ".fg(self.colors.hint))
                         .right_aligned(),
                 ),
         )
@@ -134,7 +139,7 @@ impl PasswordPopup<'_> {
 
 impl Widget for PasswordPopup<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        buf.set_style(area, Style::new().fg(self.palette.muted));
+        buf.set_style(area, Style::new().fg(self.colors.backdrop));
         let paragraph = self.paragraph();
         let width = u16::try_from(paragraph.line_width())
             .unwrap_or(u16::MAX)

@@ -10,11 +10,11 @@ use ratatui::{
 };
 
 use crate::{
+    colors::Colors,
     config::Timing,
     glyphs::Glyphs,
     model::{ActiveState, Activity, BootState, JobKind, JobResult, Phase, UnitFacts},
     origin::BootOrigin,
-    palette::Palette,
     passphrase,
     view::{BootView, PasswordPrompt},
 };
@@ -329,7 +329,7 @@ pub fn play(terminal: &mut DefaultTerminal, scenario: &Scenario) -> io::Result<(
             canvas.render_widget(
                 BootView {
                     state: &state,
-                    palette: &Palette::default(),
+                    colors: &Colors::default(),
                     timing: &Timing::default(),
                     glyphs: &Glyphs::default(),
                     now: now(),
