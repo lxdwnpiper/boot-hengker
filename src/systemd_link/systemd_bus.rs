@@ -11,7 +11,7 @@ use dbus::{
 };
 
 use crate::{
-    boot_model::{ActiveState, Activity, JobKind, JobResult, UnitFacts},
+    boot_model::{Activity, JobKind, JobResult, UnitFacts},
     systemd_link::link_error::Error,
 };
 
@@ -26,7 +26,6 @@ const BUS_DESTINATION: &str = "org.freedesktop.DBus";
 const BUS_PATH: &str = "/org/freedesktop/DBus";
 const PRIVATE_SOCKET: &str = "unix:path=/run/systemd/private";
 const SIGNAL_RULE: &str = "type='signal',path_namespace='/org/freedesktop/systemd1'";
-const STOP_JOB: &str = "stop";
 const CALL_TIMEOUT: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,16 +69,8 @@ impl From<ListedJob> for JobListing {
         Self {
             id,
             unit,
-            kind: job_kind(&kind),
+            kind: serde_plain::from_str(&kind).unwrap_or(JobKind::Unknown),
         }
-    }
-}
-
-fn job_kind(raw: &str) -> JobKind {
-    if raw == STOP_JOB {
-        JobKind::TakesDown
-    } else {
-        JobKind::BringsUp
     }
 }
 
@@ -194,7 +185,7 @@ impl Session {
             (JOB_INTERFACE, "JobType"),
         )?;
         let kind: Variant<String> = reply.read1()?;
-        Ok(job_kind(&kind.0))
+        Ok(serde_plain::from_str(&kind.0).unwrap_or(JobKind::Unknown))
     }
 
     pub fn fetch_unit(&self, name: &str) -> Result<FetchedUnit, Error> {
@@ -298,7 +289,7 @@ fn parse_job_signal(message: &Message, member: &str) -> Option<Signal> {
                 message.read4().ok()?;
             Some(Signal::JobRemoved {
                 id,
-                result: job_result_from_bus(&result),
+                result: serde_plain::from_str(&result).unwrap_or(JobResult::Failed),
             })
         }
         _ => None,
@@ -329,31 +320,9 @@ fn activity_from(properties: &PropMap) -> Activity {
         state: properties
             .get("ActiveState")
             .and_then(|value| value.0.as_str())
-            .map(active_state_from_bus),
+            .and_then(|raw| serde_plain::from_str(raw).ok()),
         inactive_exit: monotonic("InactiveExitTimestampMonotonic"),
         active_enter: monotonic("ActiveEnterTimestampMonotonic"),
         active_exit: monotonic("ActiveExitTimestampMonotonic"),
-    }
-}
-
-fn active_state_from_bus(raw: &str) -> ActiveState {
-    match raw {
-        "activating" => ActiveState::Activating,
-        "active" => ActiveState::Active,
-        "deactivating" => ActiveState::Deactivating,
-        "reloading" => ActiveState::Reloading,
-        "failed" => ActiveState::Failed,
-        _ => ActiveState::Inactive,
-    }
-}
-
-fn job_result_from_bus(raw: &str) -> JobResult {
-    match raw {
-        "done" => JobResult::Done,
-        "skipped" => JobResult::Skipped,
-        "canceled" => JobResult::Canceled,
-        "timeout" => JobResult::Timeout,
-        "dependency" => JobResult::Dependency,
-        _ => JobResult::Failed,
     }
 }

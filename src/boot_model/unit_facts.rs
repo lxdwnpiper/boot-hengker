@@ -1,23 +1,29 @@
 use std::time::Duration;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+use serde::Deserialize;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ActiveState {
-    Inactive,
     Activating,
     Active,
     Deactivating,
     Reloading,
     Failed,
+    #[serde(other)]
+    Inactive,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum JobResult {
     Done,
     Skipped,
     Canceled,
-    Failed,
     Timeout,
     Dependency,
+    #[serde(other)]
+    Failed,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -47,14 +53,18 @@ impl Activity {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 pub enum JobKind {
-    BringsUp,
+    #[serde(rename = "stop")]
     TakesDown,
+    #[serde(skip)]
     Unknown,
+    #[serde(other)]
+    BringsUp,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum UnitKind {
     Service,
     Target,
@@ -67,26 +77,16 @@ pub enum UnitKind {
     Timer,
     Slice,
     Scope,
+    #[serde(other)]
     Other,
 }
 
 impl UnitKind {
     #[must_use]
     pub fn of(name: &str) -> Self {
-        match name.rsplit_once('.').map(|(_, suffix)| suffix) {
-            Some("service") => Self::Service,
-            Some("target") => Self::Target,
-            Some("socket") => Self::Socket,
-            Some("mount") => Self::Mount,
-            Some("automount") => Self::Automount,
-            Some("device") => Self::Device,
-            Some("swap") => Self::Swap,
-            Some("path") => Self::Path,
-            Some("timer") => Self::Timer,
-            Some("slice") => Self::Slice,
-            Some("scope") => Self::Scope,
-            _ => Self::Other,
-        }
+        name.rsplit_once('.')
+            .and_then(|(_, suffix)| serde_plain::from_str(suffix).ok())
+            .unwrap_or(Self::Other)
     }
 
     #[must_use]
@@ -143,8 +143,26 @@ pub(super) fn summary(facts: &UnitFacts) -> String {
 
 #[cfg(test)]
 mod tests {
+    use serde_plain::from_str;
+
     use super::*;
     use crate::demo_script::boot_test_fixtures::{facts, waiting};
+
+    #[test]
+    fn unknown_systemd_strings_fall_back_instead_of_failing() {
+        assert_eq!(
+            from_str("deactivating").ok(),
+            Some(ActiveState::Deactivating)
+        );
+        assert_eq!(from_str("maintenance").ok(), Some(ActiveState::Inactive));
+        assert_eq!(from_str("dependency").ok(), Some(JobResult::Dependency));
+        assert_eq!(from_str("frozen").ok(), Some(JobResult::Failed));
+        assert_eq!(from_str("stop").ok(), Some(JobKind::TakesDown));
+        assert_eq!(from_str("restart").ok(), Some(JobKind::BringsUp));
+        assert_eq!(UnitKind::of("dev-sda.swap"), UnitKind::Swap);
+        assert_eq!(UnitKind::of("init.scope.d"), UnitKind::Other);
+        assert_eq!(UnitKind::of("no-suffix"), UnitKind::Other);
+    }
 
     #[test]
     fn kinds_with_a_tag_drop_their_suffix() {
