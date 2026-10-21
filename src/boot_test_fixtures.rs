@@ -1,6 +1,8 @@
 use std::{iter::once, time::Duration};
 
-use crate::boot_model::{ActiveState, Activity, BootState, JobKind, Phase, TreeRow, UnitFacts};
+use crate::boot_model::{
+    ActiveState, Activity, BootState, JobKind, Phase, TreeRow, UnitFacts, flatten_forest,
+};
 
 pub const MS: Duration = Duration::from_millis(1);
 
@@ -99,6 +101,10 @@ pub fn queue_unit(state: &mut BootState, id: u32, unit: QueuedUnit, queued_at: D
     let name = unit.facts.name.clone();
     state.track_unit(unit.facts, unit.activity);
     state.queue_job(id, &name, unit.kind, queued_at);
+}
+
+pub fn waiting_rows(state: &BootState) -> Vec<TreeRow> {
+    flatten_forest(state.waiting_forest(Duration::MAX))
 }
 
 pub fn tree_outline(rows: &[TreeRow]) -> Vec<String> {
