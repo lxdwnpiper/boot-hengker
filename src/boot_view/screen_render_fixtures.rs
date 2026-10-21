@@ -36,7 +36,6 @@ pub fn render_prompted(
                         generation: "2771".to_owned(),
                         kernel: "Linux 7.2.9".to_owned(),
                     },
-                    frame: 1,
                     password_prompt,
                 },
                 frame.area(),

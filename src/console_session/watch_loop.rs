@@ -137,7 +137,6 @@ fn watch(
 ) -> Result<(), Error> {
     let mut origin = BootOrigin::read();
     let mut origin_phase = state.phase;
-    let mut frame: u64 = 0;
     let mut painted_connections = feed.connections;
     let mut last_full_repaint = Instant::now();
     let mut next_frame = Instant::now();
@@ -171,7 +170,6 @@ fn watch(
                     glyphs: &console.glyphs,
                     now: monotonic_now(),
                     origin: &origin,
-                    frame,
                     password_prompt: password_entry.as_ref().map(PasswordEntry::prompt),
                 },
                 canvas.area(),
@@ -208,7 +206,6 @@ fn watch(
             next_frame.saturating_duration_since(Instant::now()),
         )?;
         if Instant::now() >= next_frame {
-            frame += 1;
             next_frame = Instant::now() + FRAME_INTERVAL;
         }
         while event::poll(Duration::ZERO)? {

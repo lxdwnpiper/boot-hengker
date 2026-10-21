@@ -51,7 +51,7 @@ fn finished_units_linger_in_place_before_leaving() {
     let lingering = render(&state, 4000 * MS, 110, 24);
     let screen = lingering.join("\n");
     assert!(lingering[3].starts_with("      ├─ [√] early"), "{screen}");
-    assert!(lingering[4].starts_with("      └─ [/] late"), "{screen}");
+    assert!(lingering[4].starts_with("      └─ [|] late"), "{screen}");
     let gone = render(&state, 5500 * MS, 110, 24);
     let tree: Vec<&String> = gone
         .iter()
@@ -86,7 +86,7 @@ fn chains_stay_unfolded_while_they_fit() {
         "{screen}"
     );
     assert!(
-        lines[7].starts_with("                  └─ [/] udev-settle"),
+        lines[7].starts_with("                  └─ [-] udev-settle"),
         "{screen}"
     );
 }
@@ -100,7 +100,7 @@ fn chains_fold_when_short_and_shorten_to_their_ends_when_narrow() {
         short.join("\n")
     );
     assert!(
-        short[4].starts_with("         └─ [/] udev-settle"),
+        short[4].starts_with("         └─ [-] udev-settle"),
         "{}",
         short.join("\n")
     );
@@ -149,7 +149,7 @@ fn non_service_units_carry_their_kind() {
         .iter()
         .find(|line| line.contains("Docker Socket"))
         .unwrap_or_else(|| panic!("{screen}"));
-    assert!(socket_row.contains("[/] docker "), "{screen}");
+    assert!(socket_row.contains("[-] docker "), "{screen}");
     assert!(socket_row.contains(" Socket "), "{screen}");
     assert!(
         render(&described_boot(), 3000 * MS, 110, 24)

@@ -61,7 +61,6 @@ pub struct BootView<'a> {
     pub glyphs: &'a Glyphs,
     pub now: Duration,
     pub origin: &'a BootOrigin,
-    pub frame: u64,
     pub password_prompt: Option<PasswordPrompt<'a>>,
 }
 
@@ -149,7 +148,6 @@ impl Widget for BootView<'_> {
             hidden: pending_count - shown_units(&rows),
             now: self.now,
             hide_runs_shorter_than: self.timing.hide_runs_shorter_than,
-            frame: self.frame,
             colors: &self.colors.tree,
             glyphs: self.glyphs,
         };

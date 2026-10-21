@@ -303,7 +303,6 @@ pub fn play(terminal: &mut DefaultTerminal, scenario: &Scenario) -> io::Result<(
     let mut script = Script::begin(scenario.steps, scenario.describe, 1, &mut state, now());
     let mut switched_root = scenario.after_switch_root.is_empty();
     let mut settled_at = None;
-    let mut frame = 0;
     let mut typed = passphrase_input::empty();
     loop {
         script.advance(&mut state, now());
@@ -327,7 +326,6 @@ pub fn play(terminal: &mut DefaultTerminal, scenario: &Scenario) -> io::Result<(
                     glyphs: &Glyphs::default(),
                     now: now(),
                     origin: &origin,
-                    frame,
                     password_prompt: script.prompt(&typed, now()),
                 },
                 canvas.area(),
@@ -349,6 +347,5 @@ pub fn play(terminal: &mut DefaultTerminal, scenario: &Scenario) -> io::Result<(
                 script.answer(&submitted, now());
             }
         }
-        frame += 1;
     }
 }

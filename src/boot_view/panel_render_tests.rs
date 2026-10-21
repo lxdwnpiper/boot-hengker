@@ -28,10 +28,10 @@ fn tree_on_top_timeline_below() {
         "{screen}"
     );
     assert!(
-        lines[3].starts_with("   │  ├─ [/] systemd-rfkill"),
+        lines[3].starts_with("   │  ├─ [|] systemd-rfkill"),
         "{screen}"
     );
-    assert!(lines[4].starts_with("   │  ├─ [/] docker"), "{screen}");
+    assert!(lines[4].starts_with("   │  ├─ [|] docker"), "{screen}");
     assert!(lines[5].starts_with("   │  └─ [ ] web"), "{screen}");
     assert!(lines[6].starts_with("   ├─ ◇ graphical.target"), "{screen}");
     assert!(lines[7].starts_with("   └─ [×] nvidia-powerd"), "{screen}");

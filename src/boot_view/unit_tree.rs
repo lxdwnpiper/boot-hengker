@@ -16,6 +16,7 @@ use crate::{
 };
 
 const SPINNER: [char; 4] = ['|', '/', '-', '\\'];
+const SPINNER_STEP: Duration = Duration::from_millis(100);
 const MIN_DESCRIPTION_WIDTH: u16 = 12;
 const MIN_TAG_WIDTH: u16 = 6;
 const MIN_LABEL_WIDTH: u16 = 24;
@@ -27,7 +28,6 @@ pub struct UnitTree<'a> {
     pub hidden: usize,
     pub now: Duration,
     pub hide_runs_shorter_than: Duration,
-    pub frame: u64,
     pub colors: &'a TreeColors,
     pub glyphs: &'a Glyphs,
 }
@@ -48,6 +48,11 @@ enum Stage {
 
 fn opens_a_stage(row: &TreeRow) -> bool {
     row.depth == 0 && row.kind == UnitKind::Target
+}
+
+fn spinner_at(now: Duration) -> char {
+    let steps = now.as_millis() / SPINNER_STEP.as_millis();
+    SPINNER[usize::try_from(steps % 4).unwrap_or_default()]
 }
 
 fn width_of(text: &str) -> u16 {
@@ -134,8 +139,7 @@ impl UnitTree<'_> {
             RowStatus::Failed => format!("[{}] ", self.glyphs.failed).fg(self.colors.failed_unit),
             _ if row.kind == UnitKind::Target => Span::default(),
             RowStatus::Running { .. } => {
-                let spinner = SPINNER[usize::try_from(self.frame % 4).unwrap_or_default()];
-                format!("[{spinner}] ").fg(self.colors.running_marker)
+                format!("[{}] ", spinner_at(self.now)).fg(self.colors.running_marker)
             }
             RowStatus::Waiting => "[ ] ".fg(self.colors.waiting_unit),
             RowStatus::Done => format!("[{}] ", self.glyphs.done).fg(self.colors.finished_marker),
@@ -302,6 +306,18 @@ fn tree_prefixes(rows: &[TreeRow]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_spinner_turns_once_per_step_whatever_the_frame_rate() {
+        let turned: String = (0..5)
+            .map(|step| spinner_at(SPINNER_STEP * step + Duration::from_millis(16)))
+            .collect();
+        assert_eq!(turned, "|/-\\|");
+        assert_eq!(
+            spinner_at(Duration::from_millis(99)),
+            spinner_at(Duration::ZERO)
+        );
+    }
 
     fn at_depth(depth: usize) -> TreeRow {
         TreeRow {
