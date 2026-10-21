@@ -58,14 +58,16 @@ impl Console {
         self.foreground.is_some()
     }
 
-    pub fn keep_up(&mut self) {
-        if let Some(quiet_kernel) = &mut self.quiet_kernel {
-            quiet_kernel.keep_quiet();
-        }
-        if let Some(foreground) = &self.foreground {
-            foreground.insist();
-        }
-        self.glyphs = font_glyphs();
+    pub fn keep_up(&mut self) -> bool {
+        let kernel_got_loud = self
+            .quiet_kernel
+            .as_mut()
+            .is_some_and(QuietKernelConsole::keep_quiet);
+        let terminal_was_taken = self.foreground.as_ref().is_some_and(ForegroundVt::insist);
+        let glyphs = font_glyphs();
+        let font_changed = glyphs != self.glyphs;
+        self.glyphs = glyphs;
+        kernel_got_loud || terminal_was_taken || font_changed
     }
 }
 
@@ -85,13 +87,15 @@ impl QuietKernelConsole {
         Some(Self { previous_level })
     }
 
-    fn keep_quiet(&mut self) {
+    fn keep_quiet(&mut self) -> bool {
         let Some(level) = console_level() else {
-            return;
+            return false;
         };
-        if level != ALERTS_ONLY && fs::write(KERNEL_PRINTK, ALERTS_ONLY).is_ok() {
-            self.previous_level = level;
+        if level == ALERTS_ONLY || fs::write(KERNEL_PRINTK, ALERTS_ONLY).is_err() {
+            return false;
         }
+        self.previous_level = level;
+        true
     }
 }
 
@@ -185,10 +189,8 @@ impl ForegroundVt {
         Some(Self { own, previous })
     }
 
-    fn insist(&self) {
-        if active_vt().is_some_and(|active| active != self.own) {
-            let _ = activate(self.own);
-        }
+    fn insist(&self) -> bool {
+        active_vt().is_some_and(|active| active != self.own) && activate(self.own).is_ok()
     }
 }
 

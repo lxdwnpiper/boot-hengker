@@ -16,7 +16,8 @@ use crate::{
     screen_settings::font_glyphs::Glyphs,
 };
 
-const FULL_REPAINT_INTERVAL: Duration = Duration::from_secs(1);
+const CONSOLE_UPKEEP_INTERVAL: Duration = Duration::from_secs(1);
+const FULL_REPAINT_INTERVAL: Duration = Duration::from_secs(5);
 
 pub struct LiveDesk {
     console: Console,
@@ -83,8 +84,8 @@ impl ConsoleDesk for LiveDesk {
         self.follow_requests(true);
     }
 
-    fn keep_console_up(&mut self) {
-        self.console.keep_up();
+    fn keep_console_up(&mut self) -> bool {
+        self.console.keep_up()
     }
 
     fn take_clear_request(&mut self) -> bool {
@@ -94,6 +95,10 @@ impl ConsoleDesk for LiveDesk {
     fn refreshed_origin(&self) -> Option<BootOrigin> {
         Some(BootOrigin::read())
     }
+}
+
+pub fn console_upkeep_inputs() -> impl Stream<Item = ScreenInput> {
+    periodic_inputs(CONSOLE_UPKEEP_INTERVAL, || ScreenInput::ConsoleUpkeep)
 }
 
 pub fn full_repaint_inputs() -> impl Stream<Item = ScreenInput> {

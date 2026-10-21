@@ -21,9 +21,9 @@ const PROJECTION_REFRESH: Duration = Duration::from_millis(100);
 
 pub enum ScreenInput {
     Boot(Vec<BootChange>),
-    Reconnected,
     Key(Event),
     Frame,
+    ConsoleUpkeep,
     FullRepaint,
     PasswordRequests,
     Terminate,
@@ -45,7 +45,9 @@ pub trait ConsoleDesk {
 
     fn password_requests_changed(&mut self) {}
 
-    fn keep_console_up(&mut self) {}
+    fn keep_console_up(&mut self) -> bool {
+        false
+    }
 
     fn take_clear_request(&mut self) -> bool {
         false
@@ -102,14 +104,13 @@ impl<Desk: ConsoleDesk> WatchScreen<Desk> {
         let now = self.now();
         match input {
             ScreenInput::Boot(changes) => self.apply_boot_changes(changes),
-            ScreenInput::Reconnected => {
-                self.full_repaint_due = true;
-                ControlFlow::Continue(())
-            }
             ScreenInput::Key(event) => self.desk.press_key(&event, now),
             ScreenInput::Frame => self.desk.frame_passed(&mut self.state, now),
+            ScreenInput::ConsoleUpkeep => {
+                self.full_repaint_due |= self.desk.keep_console_up();
+                ControlFlow::Continue(())
+            }
             ScreenInput::FullRepaint => {
-                self.desk.keep_console_up();
                 self.full_repaint_due = true;
                 ControlFlow::Continue(())
             }

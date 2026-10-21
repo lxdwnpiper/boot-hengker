@@ -8,7 +8,9 @@ use crate::{
     console_session::{
         ask_password::RequestWatch,
         console_takeover::Console,
-        live_desk::{LiveDesk, full_repaint_inputs, password_request_inputs},
+        live_desk::{
+            LiveDesk, console_upkeep_inputs, full_repaint_inputs, password_request_inputs,
+        },
         stream_sources::{frame_inputs, key_inputs, termination_inputs},
         watch_screen::{WatchEnding, WatchScreen, watch_until_ending},
     },
@@ -88,7 +90,10 @@ async fn watch_live_boot(settings: &Settings, phase: Phase) -> Result<(), Error>
             key_inputs()?,
         ),
         stream::select(
-            stream::select(frame_inputs(), full_repaint_inputs()),
+            stream::select(
+                frame_inputs(),
+                stream::select(console_upkeep_inputs(), full_repaint_inputs()),
+            ),
             stream::select(
                 termination_inputs()?,
                 stream::iter(password_inputs).flatten(),

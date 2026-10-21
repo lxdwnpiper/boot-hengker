@@ -133,7 +133,7 @@ impl BusFeed {
         match self.open_watched().await {
             Ok(watched) => {
                 self.link = Link::Connected(watched.connection);
-                vec![ScreenInput::Boot(watched.changes), ScreenInput::Reconnected]
+                vec![ScreenInput::Boot(watched.changes), ScreenInput::FullRepaint]
             }
             Err(_) if Instant::now() < deadline => {
                 sleep(FRAME_INTERVAL).await;
