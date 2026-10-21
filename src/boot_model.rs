@@ -5,6 +5,16 @@ use std::{
     vec::IntoIter,
 };
 
+use petgraph::{
+    Direction::Incoming,
+    algo::{DfsSpace, has_path_connecting},
+    graphmap::DiGraphMap,
+    visit::Visitable,
+};
+
+type WaitingGraph<'a> = DiGraphMap<&'a str, ()>;
+type WaitingSearch<'a> = DfsSpace<&'a str, <WaitingGraph<'a> as Visitable>::Map>;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Phase {
     Initrd,
@@ -612,8 +622,8 @@ impl BootState {
 
     #[must_use]
     pub fn tree_rows(&self, finished_since: Duration) -> Vec<TreeRow> {
-        let pending: HashSet<&str> = self
-            .units
+        let mut graph = WaitingGraph::new();
+        self.units
             .iter()
             .filter(|(name, record)| match record.progress {
                 Progress::Pending(_) | Progress::Finished(Outcome::Failed) => true,
@@ -623,32 +633,40 @@ impl BootState {
                 Progress::Finished(Outcome::Abandoned) => self.is_milestone(name),
                 Progress::Untouched => false,
             })
-            .map(|(name, _)| name.as_str())
+            .for_each(|(name, _)| {
+                graph.add_node(name.as_str());
+            });
+        let edges: Vec<(&str, &str)> = graph
+            .nodes()
+            .flat_map(|waiter| {
+                self.waits_for(waiter, &graph)
+                    .into_iter()
+                    .map(move |dependency| (waiter, dependency))
+            })
             .collect();
-        let root = self.root.unit().filter(|root| pending.contains(root));
+        graph.extend(edges);
+        let root = self.root.unit().filter(|root| graph.contains_node(root));
         let stages: Vec<&str> = self
             .milestone_targets
             .iter()
             .map(String::as_str)
-            .filter(|target| pending.contains(target))
+            .filter(|target| graph.contains_node(target))
             .chain(root.filter(|root| !self.is_milestone(root)))
             .collect();
-        let blocked_by_pending: HashSet<&str> = pending
-            .iter()
-            .flat_map(|name| self.waits_for(name, &pending))
-            .collect();
-        let mut unblocked: Vec<&str> = pending
-            .iter()
-            .copied()
-            .filter(|name| !blocked_by_pending.contains(name) && !stages.contains(name))
+        let mut unblocked: Vec<&str> = graph
+            .nodes()
+            .filter(|name| {
+                graph.neighbors_directed(name, Incoming).next().is_none() && !stages.contains(name)
+            })
             .collect();
         self.sort_siblings(&mut unblocked);
-        let mut leftovers: Vec<&str> = pending.iter().copied().collect();
+        let mut leftovers: Vec<&str> = graph.nodes().collect();
         self.sort_siblings(&mut leftovers);
         if self.phase == Phase::User {
             unblocked.clear();
             leftovers.clear();
         }
+        let mut space = DfsSpace::new(&graph);
         let mut visited = HashSet::new();
         let mut rows = Vec::new();
         stages
@@ -660,7 +678,7 @@ impl BootState {
                 if visited.contains(top) {
                     return;
                 }
-                let stage = self.grow(top, &pending, &mut visited);
+                let stage = self.grow(top, &graph, &mut space, &mut visited);
                 if stage.row.status != RowStatus::Done || !stage.children.is_empty() {
                     stage.flatten_into(0, &mut rows);
                 }
@@ -671,7 +689,8 @@ impl BootState {
     fn grow<'a>(
         &'a self,
         unit: &'a str,
-        pending: &HashSet<&'a str>,
+        graph: &WaitingGraph<'a>,
+        space: &mut WaitingSearch<'a>,
         visited: &mut HashSet<&'a str>,
     ) -> TreeNode {
         visited.insert(unit);
@@ -684,24 +703,22 @@ impl BootState {
             status: record.row_status(),
             chain: Vec::new(),
         };
-        let candidates: Vec<&str> = self
-            .waits_for(unit, pending)
-            .into_iter()
+        let candidates: Vec<&str> = graph
+            .neighbors(unit)
             .filter(|dependency| !visited.contains(dependency) && !self.is_milestone(dependency))
             .collect();
+        let mut waits_on =
+            |waiter, dependency| has_path_connecting(graph, waiter, dependency, Some(&mut *space));
         let mut children: Vec<&str> = candidates
             .iter()
             .copied()
             .filter(|child| {
                 !candidates.iter().any(|sibling| {
-                    sibling != child
-                        && self.waits_on(sibling, child, pending)
-                        && !self.waits_on(child, sibling, pending)
+                    sibling != child && waits_on(*sibling, *child) && !waits_on(*child, *sibling)
                 })
             })
             .collect();
         self.sort_siblings(&mut children);
-        children.dedup();
         visited.extend(children.iter().copied());
         TreeNode {
             row,
@@ -709,7 +726,7 @@ impl BootState {
                 .into_iter()
                 .map(|child| {
                     visited.remove(child);
-                    self.grow(child, pending, visited)
+                    self.grow(child, graph, space, visited)
                 })
                 .collect(),
         }
@@ -719,27 +736,11 @@ impl BootState {
         self.milestone_targets.iter().any(|target| target == unit)
     }
 
-    fn waits_on(&self, waiter: &str, dependency: &str, pending: &HashSet<&str>) -> bool {
-        let mut seen = HashSet::new();
-        let mut frontier = vec![waiter];
-        while let Some(unit) = frontier.pop() {
-            if !seen.insert(unit) {
-                continue;
-            }
-            let next = self.waits_for(unit, pending);
-            if next.contains(&dependency) {
-                return true;
-            }
-            frontier.extend(next);
-        }
-        false
-    }
-
-    fn waits_for<'a>(&'a self, waiter: &str, pending: &HashSet<&str>) -> Vec<&'a str> {
+    fn waits_for<'a>(&'a self, waiter: &str, graph: &WaitingGraph) -> Vec<&'a str> {
         let Some(record) = self.units.get(waiter) else {
             return Vec::new();
         };
-        let pending_job = |dependency: &&'a str| pending.contains(dependency);
+        let pending_job = |dependency: &&'a str| graph.contains_node(dependency);
         let taking_down = |dependency: &&'a str| self.units[*dependency].takes_down();
         let after = record.facts.after.iter().map(String::as_str);
         let before = record.facts.before.iter().map(String::as_str);
