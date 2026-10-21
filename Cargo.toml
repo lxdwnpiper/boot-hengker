@@ -9,13 +9,19 @@ readme = "README.md"
 keywords = ["systemd", "boot", "initrd", "tui", "console"]
 categories = ["command-line-utilities", "os::linux-apis"]
 rust-version = "1.91"
-include = ["/src", "/examples", "/packaging", "/README.md", "/LICENSE"]
+include = ["/src", "/examples", "/system-files", "/README.md", "/LICENSE"]
 
-[lints.clippy]
+[workspace]
+members = [".", "xtask"]
+
+[workspace.lints.clippy]
 absolute_paths = "warn"
 pedantic = { priority = -1, level = "warn" }
 needless_for_each = "allow"
 missing_errors_doc = "allow"
+
+[lints]
+workspace = true
 
 [dependencies]
 clap = { version = "4.6.7", features = ["derive"] }

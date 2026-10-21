@@ -1,10 +1,8 @@
 {
-  demoUnits,
+  sampleUnits,
   lib,
   coreutils,
-  linkFarm,
-  nushell,
-  writeShellApplication,
+  runCommand,
   writeText,
 }:
 let
@@ -30,30 +28,27 @@ let
       };
     });
 
-  serviceNames = map (name: "${name}.service") (lib.attrNames demoUnits.services);
+  serviceNames = map (name: "${name}.service") (lib.attrNames sampleUnits.services);
 
-  targetFile = writeText "${demoUnits.target}.target" (toUnitFile {
+  targetFile = writeText "${sampleUnits.target}.target" (toUnitFile {
     Unit = {
       Description = "bootvine demo services";
       Wants = serviceNames;
       After = serviceNames;
     };
   });
-
-  units = linkFarm "bootvine-demo-units" (
+  unitFiles =
     lib.mapAttrsToList (name: spec: {
       name = "${name}.service";
       path = serviceFile name spec;
-    }) demoUnits.services
+    }) sampleUnits.services
     ++ [
       {
-        name = "${demoUnits.target}.target";
+        name = "${sampleUnits.target}.target";
         path = targetFile;
       }
-    ]
-  );
+    ];
 in
-writeShellApplication {
-  name = "bootvine-demo-units";
-  text = ''exec ${lib.getExe nushell} ${./demo-units.nu} "$@" --units ${units} --target ${demoUnits.target}.target'';
-}
+runCommand "bootvine-sample-unit-files" { } (
+  lib.concatMapStringsSep "\n" (unit: "install -Dm644 ${unit.path} $out/${unit.name}") unitFiles
+)

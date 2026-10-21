@@ -3,7 +3,7 @@ let
   passphrase = "quietly unlocked";
 in
 {
-  name = "bootvine-luks";
+  name = "bootvine-luks-passphrase";
   nodes.machine =
     { lib, pkgs, ... }:
     let

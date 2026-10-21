@@ -1,11 +1,11 @@
 {
-  demoUnits,
+  sampleUnits,
   lib,
   pkgs,
   ...
 }:
 let
-  demoService = spec: {
+  sampleService = spec: {
     inherit (spec) description;
     after = map (dependency: "${dependency}.service") (spec.after or [ ]);
     wantedBy = [ "multi-user.target" ];
@@ -37,7 +37,7 @@ in
       unitConfig.DefaultDependencies = false;
       serviceConfig = {
         Type = "oneshot";
-        ExecStart = "/bin/sleep ${demoUnits.initrdProbeSeconds}";
+        ExecStart = "/bin/sleep ${sampleUnits.initrdProbeSeconds}";
       };
     };
   };
@@ -76,7 +76,7 @@ in
     font = "${pkgs.terminus_font}/share/consolefonts/ter-v20n.psf.gz";
   };
 
-  systemd.services = lib.mapAttrs (_: demoService) demoUnits.services // {
+  systemd.services = lib.mapAttrs (_: sampleService) sampleUnits.services // {
     greetd.after = [ "multi-user.target" ];
   };
 

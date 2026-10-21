@@ -24,8 +24,7 @@
         f:
         lib.genAttrs [ "x86_64-linux" "aarch64-linux" ] (
           system:
-          f rec {
-            inherit system;
+          let
             pkgs = import nixpkgs {
               inherit system;
               overlays = [ (import rust-overlay) ];
@@ -33,120 +32,64 @@
             craneLib = (crane.mkLib pkgs).overrideToolchain (
               p: p.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml
             );
+          in
+          f {
+            inherit system pkgs craneLib;
+            builds = import ./crane-builds.nix { inherit lib pkgs craneLib; };
           }
         );
 
-      buildInputsFor = pkgs: {
-        nativeBuildInputs = [ pkgs.pkg-config ];
-        buildInputs = [ pkgs.dbus ];
+      sampleMachine = import ./tests/sample-machine {
+        inherit lib;
+        bootvineModule = self.nixosModules.bootvine;
       };
-
-      demoUnits = import ./demo/units.nix;
-
-      demoHost = {
-        imports = [
-          self.nixosModules.default
-          ./demo/host.nix
-        ];
-        _module.args = { inherit demoUnits; };
-      };
-
-      demoSystem =
-        system:
-        lib.nixosSystem {
-          inherit system;
-          modules = [
-            demoHost
-            ./demo/interactive.nix
-          ];
-        };
     in
     {
       packages = forEachSystem (
-        { pkgs, craneLib, ... }:
-        let
-          commonArgs = {
-            inherit (buildInputsFor pkgs) nativeBuildInputs buildInputs;
-            src = lib.fileset.toSource {
-              root = ./.;
-              fileset = lib.fileset.unions [
-                (craneLib.fileset.commonCargoSources ./.)
-                ./packaging
-              ];
-            };
-            strictDeps = true;
-          };
-        in
+        { pkgs, builds, ... }:
         {
-          examples = craneLib.buildPackage (
-            commonArgs
-            // {
-              pname = "bootvine-examples";
-              cargoExtraArgs = "--examples";
-              doCheck = false;
-              installPhaseCommand = ''
-                for example in boot shutdown; do
-                  install -Dm755 target/release/examples/$example $out/bin/bootvine-$example-example
-                done
-              '';
-            }
-          );
-          default = craneLib.buildPackage (
-            commonArgs
-            // {
-              postInstall = ''
-                for unit in bootvine.service bootvine-shutdown.service; do
-                  install -Dm644 packaging/systemd/$unit $out/lib/systemd/system/$unit
-                  substituteInPlace $out/lib/systemd/system/$unit \
-                    --replace-fail /usr/bin/bootvine $out/bin/bootvine
-                done
-                install -Dm755 packaging/dracut/90bootvine/module-setup.sh \
-                  $out/lib/dracut/modules.d/90bootvine/module-setup.sh
-                install -Dm644 packaging/mkinitcpio/install/sd-bootvine \
-                  $out/lib/initcpio/install/sd-bootvine
-              '';
-              meta.mainProgram = "bootvine";
-              meta.platforms = lib.platforms.linux;
-              meta.license = lib.getLicenseFromSpdxId (lib.importTOML ./Cargo.toml).package.license;
-            }
-          );
-          demo-units = pkgs.callPackage ./demo/user-units.nix { inherit demoUnits; };
+          default = builds.bootvine;
+          inherit (builds) bootvine scripted-boot-examples repo-tasks;
+          sample-unit-files = pkgs.callPackage ./tests/sample-machine/sample-unit-files.nix {
+            inherit (sampleMachine) sampleUnits;
+          };
         }
       );
 
-      nixosModules.default = import ./nixos-module.nix { inherit self; };
+      nixosModules = {
+        default = self.nixosModules.bootvine;
+        bootvine = import ./nixos-module.nix { inherit self; };
+      };
 
-      nixosConfigurations.demo = demoSystem "x86_64-linux";
+      nixosConfigurations.sample-machine = sampleMachine.nixosSystemFor "x86_64-linux";
 
       apps = forEachSystem (
-        { pkgs, system, ... }:
         {
-          vm = {
+          pkgs,
+          system,
+          builds,
+          ...
+        }:
+        {
+          sample-machine-vm = {
             type = "app";
-            program = lib.getExe (demoSystem system).config.system.build.vm;
+            meta.description = "Boot a sample machine with bootvine and slow sample units in QEMU";
+            program = lib.getExe (sampleMachine.nixosSystemFor system).config.system.build.vm;
           };
-          demo-units = {
+          record-screencasts = {
             type = "app";
-            program = lib.getExe self.packages.${system}.demo-units;
-          };
-          docs = {
-            type = "app";
+            meta.description = "Re-record the README screencasts and passphrase screenshot into recordings/";
             program = lib.getExe (
               pkgs.writeShellApplication {
-                name = "bootvine-docs";
+                name = "record-screencasts";
                 runtimeInputs = [
                   pkgs.vhs
-                  self.packages.${system}.examples
+                  builds.scripted-boot-examples
+                  builds.repo-tasks
                 ];
-                text = ''
-                  if [ ! -d docs ]; then
-                    echo "no docs directory here; run from the repository root" >&2
-                    exit 1
-                  fi
-                  vhs ${./docs/boot.tape}
-                  vhs ${./docs/shutdown.tape}
-                  install -m644 -t docs ${self.checks.${system}.luks}/passphrase.png
-                '';
+                text = "exec xtask record-screencasts --passphrase-png ${
+                  self.checks.${system}.vm-luks-passphrase
+                }/passphrase.png";
               }
             );
           };
@@ -154,22 +97,23 @@
       );
 
       checks = forEachSystem (
-        { pkgs, system, ... }:
+        { pkgs, builds, ... }:
         {
-          package = self.packages.${system}.default;
-          boot = pkgs.testers.runNixOSTest (import ./tests/boot.nix { inherit demoHost; });
-          luks = pkgs.testers.runNixOSTest (
-            import ./tests/luks.nix { bootvineModule = self.nixosModules.default; }
+          bootvine-build = builds.bootvine;
+          repo-tasks-build = builds.repo-tasks;
+          vm-boot-and-shutdown = pkgs.testers.runNixOSTest (
+            import ./tests/vm-checks/boot.nix { sampleMachine = sampleMachine.machine; }
+          );
+          vm-luks-passphrase = pkgs.testers.runNixOSTest (
+            import ./tests/vm-checks/luks.nix { bootvineModule = self.nixosModules.bootvine; }
           );
         }
       );
 
       devShells = forEachSystem (
-        { pkgs, craneLib, ... }:
+        { craneLib, builds, ... }:
         {
-          default = craneLib.devShell {
-            packages = with buildInputsFor pkgs; nativeBuildInputs ++ buildInputs;
-          };
+          default = craneLib.devShell { inputsFrom = [ builds.bootvine ]; };
         }
       );
     };

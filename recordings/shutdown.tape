@@ -1,6 +1,6 @@
-Output docs/boot.gif
+Output recordings/shutdown.gif
 
-Require bootvine-boot-example
+Require bootvine-shutdown-example
 
 Set Shell bash
 Set FontSize 22
@@ -12,7 +12,7 @@ Set TypingSpeed 0
 Set Framerate 10
 
 Hide
-Type "clear && bootvine-boot-example"
+Type "clear && bootvine-shutdown-example"
 Enter
 Show
 
