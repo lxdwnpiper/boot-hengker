@@ -298,7 +298,7 @@ fn parse_job_signal(message: &Message, member: &str) -> Option<Signal> {
                 message.read4().ok()?;
             Some(Signal::JobRemoved {
                 id,
-                result: JobResult::parse(&result),
+                result: job_result_from_bus(&result),
             })
         }
         _ => None,
@@ -329,9 +329,31 @@ fn activity_from(properties: &PropMap) -> Activity {
         state: properties
             .get("ActiveState")
             .and_then(|value| value.0.as_str())
-            .map(ActiveState::parse),
+            .map(active_state_from_bus),
         inactive_exit: monotonic("InactiveExitTimestampMonotonic"),
         active_enter: monotonic("ActiveEnterTimestampMonotonic"),
         active_exit: monotonic("ActiveExitTimestampMonotonic"),
+    }
+}
+
+fn active_state_from_bus(raw: &str) -> ActiveState {
+    match raw {
+        "activating" => ActiveState::Activating,
+        "active" => ActiveState::Active,
+        "deactivating" => ActiveState::Deactivating,
+        "reloading" => ActiveState::Reloading,
+        "failed" => ActiveState::Failed,
+        _ => ActiveState::Inactive,
+    }
+}
+
+fn job_result_from_bus(raw: &str) -> JobResult {
+    match raw {
+        "done" => JobResult::Done,
+        "skipped" => JobResult::Skipped,
+        "canceled" => JobResult::Canceled,
+        "timeout" => JobResult::Timeout,
+        "dependency" => JobResult::Dependency,
+        _ => JobResult::Failed,
     }
 }

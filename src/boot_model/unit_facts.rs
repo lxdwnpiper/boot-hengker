@@ -10,20 +10,6 @@ pub enum ActiveState {
     Failed,
 }
 
-impl ActiveState {
-    #[must_use]
-    pub fn parse(raw: &str) -> Self {
-        match raw {
-            "activating" => Self::Activating,
-            "active" => Self::Active,
-            "deactivating" => Self::Deactivating,
-            "reloading" => Self::Reloading,
-            "failed" => Self::Failed,
-            _ => Self::Inactive,
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum JobResult {
     Done,
@@ -32,20 +18,6 @@ pub enum JobResult {
     Failed,
     Timeout,
     Dependency,
-}
-
-impl JobResult {
-    #[must_use]
-    pub fn parse(raw: &str) -> Self {
-        match raw {
-            "done" => Self::Done,
-            "skipped" => Self::Skipped,
-            "canceled" => Self::Canceled,
-            "timeout" => Self::Timeout,
-            "dependency" => Self::Dependency,
-            _ => Self::Failed,
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
