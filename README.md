@@ -170,3 +170,7 @@ timeline bar. `keep_final_frame_for` is how long the last frame stays before the
 console is handed back; `--hold` overrides it.
 
 The initrd hooks copy the file into the initramfs, so rebuild it after editing.
+
+## License
+
+See [LICENSE](LICENSE).

@@ -2,6 +2,8 @@
 edition = "2024"
 name = "bootvine"
 version = "0.1.0"
+license = "GPL-3.0-or-later"
+repository = "https://codeberg.org/wvhulle/bootvine"
 
 [lints.clippy]
 absolute_paths = "warn"

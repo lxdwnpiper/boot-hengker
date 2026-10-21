@@ -107,6 +107,7 @@
               '';
               meta.mainProgram = "bootvine";
               meta.platforms = lib.platforms.linux;
+              meta.license = lib.getLicenseFromSpdxId (lib.importTOML ./Cargo.toml).package.license;
             }
           );
           demo-units = pkgs.callPackage ./demo/user-units.nix { inherit demoUnits; };
