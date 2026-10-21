@@ -1,50 +1,81 @@
 [package]
-edition = "2024"
-name = "bootvine"
-version = "0.1.0"
-license = "GPL-3.0-or-later"
-repository = "https://codeberg.org/wvhulle/bootvine"
-description = "Boot and shutdown progress for systemd on the console, with each job nested under the units waiting on it"
-readme = "README.md"
-keywords = ["systemd", "boot", "initrd", "tui", "console"]
 categories = ["command-line-utilities", "os::linux-apis"]
-rust-version = "1.91"
+description = "Boot and shutdown progress for systemd on the console, with each job nested under the units waiting on it"
+edition = "2024"
 include = ["/src", "/examples", "/system-files", "/README.md", "/LICENSE"]
+keywords = ["systemd", "boot", "initrd", "tui", "console"]
+license = "GPL-3.0-or-later"
+name = "bootvine"
+readme = "README.md"
+repository = "https://codeberg.org/wvhulle/bootvine"
+rust-version = "1.91"
+version = "0.0.1"
 
 [workspace]
 members = [".", "xtask"]
 
 [workspace.lints.clippy]
 absolute_paths = "warn"
-pedantic = { priority = -1, level = "warn" }
-needless_for_each = "allow"
 missing_errors_doc = "allow"
+needless_for_each = "allow"
+pedantic = { priority = -1, level = "warn" }
 
 [lints]
 workspace = true
 
 [dependencies]
-clap = { version = "4.6.7", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }
+clap = { version = "4.6.7", default-features = false, features = [
+  "std",
+  "derive",
+  "help",
+  "usage",
+  "error-context",
+] }
 crossterm = "0.29.0"
 dbus = "0.9.12"
-futures = { version = "0.3.34", default-features = false, features = ["std", "async-await"] }
+futures = { version = "0.3.34", default-features = false, features = [
+  "std",
+  "async-await",
+] }
 heck = "0.5.0"
-jiff = { version = "0.2.38", default-features = false, features = ["serde", "std"] }
-petgraph = { version = "0.8.3", default-features = false, features = ["std", "graphmap"] }
-ratatui = { version = "0.30.2", features = ["serde", "unstable-rendered-line-info"] }
-rustix = { version = "1.1.5", features = ["event", "fs", "process", "stdio", "system", "termios", "time"] }
+jiff = { version = "0.2.38", default-features = false, features = [
+  "serde",
+  "std",
+] }
+petgraph = { version = "0.8.3", default-features = false, features = [
+  "std",
+  "graphmap",
+] }
+ratatui = { version = "0.30.2", features = [
+  "serde",
+  "unstable-rendered-line-info",
+] }
+rustix = { version = "1.1.5", features = [
+  "event",
+  "fs",
+  "process",
+  "stdio",
+  "system",
+  "termios",
+  "time",
+] }
 ser_nix = "0.2.4"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_plain = "1.0.2"
 thiserror = "2.0.12"
-tokio = { version = "1.54.0", default-features = false, features = ["rt", "time", "net", "signal"] }
+tokio = { version = "1.54.0", default-features = false, features = [
+  "rt",
+  "time",
+  "net",
+  "signal",
+] }
 toml = { version = "1.1.8", features = ["preserve_order"] }
 unicode-truncate = "2.0.1"
 unicode-width = "0.2.2"
 zeroize = "1.9.1"
 
 [profile.release]
-lto = "fat"
 codegen-units = 1
+lto = "fat"
 opt-level = "z"
 strip = true

@@ -18,6 +18,7 @@ use jiff::fmt::friendly::SpanParser;
 
 #[derive(Parser)]
 #[command(
+    version,
     about = "Live dependency tree of systemd jobs while the system boots",
     args_conflicts_with_subcommands = true
 )]
