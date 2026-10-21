@@ -64,6 +64,17 @@ pub struct Activity {
     pub active_exit: Option<Duration>,
 }
 
+impl Activity {
+    pub(super) fn merge(self, newer: Self) -> Self {
+        Self {
+            state: newer.state.or(self.state),
+            inactive_exit: newer.inactive_exit.or(self.inactive_exit),
+            active_enter: newer.active_enter.or(self.active_enter),
+            active_exit: newer.active_exit.or(self.active_exit),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum JobKind {
     BringsUp,

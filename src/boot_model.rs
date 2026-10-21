@@ -55,10 +55,7 @@ enum Progress {
 #[derive(Clone, Debug)]
 struct UnitRecord {
     facts: UnitFacts,
-    state: ActiveState,
-    inactive_exit: Option<Duration>,
-    active_enter: Option<Duration>,
-    active_exit: Option<Duration>,
+    activity: Activity,
     progress: Progress,
 }
 

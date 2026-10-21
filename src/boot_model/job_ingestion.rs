@@ -7,25 +7,10 @@ use super::{
 };
 
 impl UnitRecord {
-    fn apply(&mut self, activity: Activity) {
-        if let Some(state) = activity.state {
-            self.state = state;
-        }
-        if activity.inactive_exit.is_some() {
-            self.inactive_exit = activity.inactive_exit;
-        }
-        if activity.active_enter.is_some() {
-            self.active_enter = activity.active_enter;
-        }
-        if activity.active_exit.is_some() {
-            self.active_exit = activity.active_exit;
-        }
-    }
-
     fn transition_started(&self, kind: JobKind) -> Option<Duration> {
         match kind {
-            JobKind::TakesDown => self.active_exit,
-            JobKind::BringsUp | JobKind::Unknown => self.inactive_exit,
+            JobKind::TakesDown => self.activity.active_exit,
+            JobKind::BringsUp | JobKind::Unknown => self.activity.inactive_exit,
         }
     }
 
@@ -34,8 +19,8 @@ impl UnitRecord {
             return None;
         };
         let transitioning = matches!(
-            self.state,
-            ActiveState::Activating | ActiveState::Deactivating | ActiveState::Reloading
+            self.activity.state,
+            Some(ActiveState::Activating | ActiveState::Deactivating | ActiveState::Reloading)
         );
         transitioning.then(|| self.transition_started(job.kind).unwrap_or(job.queued_at))
     }
@@ -113,19 +98,16 @@ impl BootState {
             .entry(facts.name.clone())
             .or_insert_with(|| UnitRecord {
                 facts: facts.clone(),
-                state: ActiveState::Inactive,
-                inactive_exit: None,
-                active_enter: None,
-                active_exit: None,
+                activity: Activity::default(),
                 progress: Progress::Untouched,
             });
         record.facts = facts;
-        record.apply(activity);
+        record.activity = record.activity.merge(activity);
     }
 
     pub fn update_activity(&mut self, unit: &str, activity: Activity) {
         if let Some(record) = self.units.get_mut(unit) {
-            record.apply(activity);
+            record.activity = record.activity.merge(activity);
         }
     }
 
@@ -234,7 +216,8 @@ impl BootState {
             .handoff_unit
             .as_deref()
             .and_then(|unit| self.units.get(unit))
-            .is_some_and(|handoff| handoff.state != ActiveState::Inactive)
+            .and_then(|handoff| handoff.activity.state)
+            .is_some_and(|state| state != ActiveState::Inactive)
         {
             return true;
         }

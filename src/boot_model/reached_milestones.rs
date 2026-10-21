@@ -41,9 +41,9 @@ impl BootState {
         let record = self.units.get(target)?;
         match record.progress {
             Progress::Finished(Outcome::Succeeded { at }) => Some(at),
-            Progress::Untouched => record
-                .active_enter
-                .filter(|entered| record.state == ActiveState::Active && *entered >= self.origin),
+            Progress::Untouched => record.activity.active_enter.filter(|entered| {
+                record.activity.state == Some(ActiveState::Active) && *entered >= self.origin
+            }),
             Progress::Pending(_) | Progress::Finished(Outcome::Failed | Outcome::Abandoned) => None,
         }
     }

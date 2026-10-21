@@ -226,7 +226,7 @@ impl BootState {
                     .running_since()
                     .map_or(SiblingRank::Waiting, SiblingRank::RunningSince),
                 Progress::Finished(Outcome::Succeeded { at }) => {
-                    SiblingRank::RunningSince(record.inactive_exit.unwrap_or(at))
+                    SiblingRank::RunningSince(record.activity.inactive_exit.unwrap_or(at))
                 }
                 Progress::Finished(Outcome::Failed) => SiblingRank::Failed,
                 Progress::Finished(Outcome::Abandoned) | Progress::Untouched => {
