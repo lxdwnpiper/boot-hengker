@@ -15,6 +15,25 @@ cargo fmt --all
 Clippy runs with the pedantic lints and forbids absolute paths; formatting
 needs the nightly toolchain the dev shell provides.
 
+Commit messages follow [Conventional Commits](https://www.conventionalcommits.org).
+jj does not run git hooks, so check the commits you are about to push with:
+
+```sh
+nix run .#check-conventional-commits -- origin/main..HEAD
+```
+
+Git users can install the same commit-message check and a formatting check as
+hooks with `prek install` (from the dev shell) or `pre-commit install`.
+
+## Continuous integration
+
+`.woodpecker/rust-and-flake-checks.yaml` runs on Codeberg for every push and
+pull request: the bootvine build with its tests, the xtask build, clippy,
+rustfmt, an evaluation of every flake output, and the commit-message check on
+pull requests. Builds on `main` are pushed to the `wvhulle` Cachix cache, which
+`nixConfig` in `flake.nix` offers as a substituter. The two VM checks need KVM,
+which Codeberg's runners lack, so they only run locally.
+
 ## Testing
 
 | What | Command |

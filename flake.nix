@@ -1,6 +1,13 @@
 {
   description = "bootvine — live dependency tree of systemd jobs on the boot console";
 
+  nixConfig = {
+    extra-substituters = [ "https://wvhulle.cachix.org" ];
+    extra-trusted-public-keys = [
+      "wvhulle.cachix.org-1:heXx8DZMiRsKUx6l1TxNoF+Nmtmz66QEdsonQzc1ir0="
+    ];
+  };
+
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     crane.url = "github:ipetkov/crane";
@@ -93,12 +100,38 @@
               }
             );
           };
+          build-and-push-to-cachix = {
+            type = "app";
+            meta.description = "Build flake outputs and push everything built to the wvhulle Cachix cache";
+            program = lib.getExe (
+              pkgs.writeShellApplication {
+                name = "build-and-push-to-cachix";
+                runtimeInputs = [ pkgs.cachix ];
+                text = ''exec cachix watch-exec wvhulle -- nix build --print-build-logs "$@"'';
+              }
+            );
+          };
+          check-conventional-commits = {
+            type = "app";
+            meta.description = "Check that the commit messages in a git revision range are conventional commits";
+            program = lib.getExe (
+              pkgs.writeShellApplication {
+                name = "check-conventional-commits";
+                runtimeInputs = [
+                  pkgs.convco
+                  pkgs.gitMinimal
+                ];
+                text = ''exec convco check "$@"'';
+              }
+            );
+          };
         }
       );
 
       checks = forEachSystem (
         { pkgs, builds, ... }:
         {
+          inherit (builds) rustfmt-formatting clippy-lints;
           bootvine-build = builds.bootvine;
           repo-tasks-build = builds.repo-tasks;
           vm-boot-and-shutdown = pkgs.testers.runNixOSTest (
@@ -111,9 +144,20 @@
       );
 
       devShells = forEachSystem (
-        { craneLib, builds, ... }:
         {
-          default = craneLib.devShell { inputsFrom = [ builds.bootvine ]; };
+          pkgs,
+          craneLib,
+          builds,
+          ...
+        }:
+        {
+          default = craneLib.devShell {
+            inputsFrom = [ builds.bootvine ];
+            packages = [
+              pkgs.prek
+              pkgs.convco
+            ];
+          };
         }
       );
     };

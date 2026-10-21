@@ -10,6 +10,7 @@ let
       fileset = lib.fileset.unions [
         (craneLib.fileset.commonCargoSources ./.)
         ./system-files
+        ./.rustfmt.toml
       ];
     };
     strictDeps = true;
@@ -23,6 +24,19 @@ let
     args: craneLib.buildPackage (commonArgs // { inherit cargoArtifacts; } // args);
 in
 {
+  rustfmt-formatting = craneLib.cargoFmt {
+    inherit (commonArgs) src;
+    cargoExtraArgs = "--all";
+  };
+
+  clippy-lints = craneLib.cargoClippy (
+    commonArgs
+    // {
+      inherit cargoArtifacts;
+      cargoClippyExtraArgs = "--workspace --all-targets -- --deny warnings";
+    }
+  );
+
   bootvine = buildWorkspaceMember {
     cargoExtraArgs = "-p bootvine";
     postInstall = ''
