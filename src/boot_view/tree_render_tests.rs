@@ -69,7 +69,7 @@ fn only_running_units_carry_a_timer() {
     let lines = render(&boot_in_progress(), 12_400 * MS, 110, 24);
     let screen = lines.join("\n");
     assert!(lines[2].ends_with("multi-user.target"), "{screen}");
-    assert!(lines[3].ends_with("6.4s"), "{screen}");
+    assert!(lines[3].ends_with("6.40s"), "{screen}");
     assert!(lines[5].ends_with("web"), "{screen}");
 }
 
@@ -104,7 +104,7 @@ fn chains_fold_when_short_and_shorten_to_their_ends_when_narrow() {
         "{}",
         short.join("\n")
     );
-    let narrow = render(&chain_boot(), 5000 * MS, 45, 8);
+    let narrow = render(&chain_boot(), 5000 * MS, 46, 8);
     assert!(
         narrow[3].starts_with("      └─ [ ] network-wait ─ … ─ dbus"),
         "{}",

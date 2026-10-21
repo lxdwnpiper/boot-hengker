@@ -10,6 +10,7 @@ use crate::{
         console_takeover::Console,
         live_desk::{
             LiveDesk, console_upkeep_inputs, full_repaint_inputs, password_request_inputs,
+            prompt_check_inputs,
         },
         stream_sources::{frame_inputs, key_inputs, termination_inputs},
         watch_screen::{WatchEnding, WatchScreen, watch_until_ending},
@@ -84,22 +85,21 @@ async fn watch_live_boot(settings: &Settings, phase: Phase) -> Result<(), Error>
         requests.is_some(),
     );
     let password_inputs = requests.map(password_request_inputs).transpose()?;
-    let inputs = stream::select(
+    let event_inputs = stream::select(
         stream::select(
             bus_inputs(phase, settings.scope, settings.target.clone()),
             key_inputs()?,
         ),
         stream::select(
-            stream::select(
-                frame_inputs(),
-                stream::select(console_upkeep_inputs(), full_repaint_inputs()),
-            ),
-            stream::select(
-                termination_inputs()?,
-                stream::iter(password_inputs).flatten(),
-            ),
+            termination_inputs()?,
+            stream::iter(password_inputs).flatten(),
         ),
     );
+    let timer_inputs = stream::select(
+        stream::select(frame_inputs(), prompt_check_inputs()),
+        stream::select(console_upkeep_inputs(), full_repaint_inputs()),
+    );
+    let inputs = stream::select(event_inputs, timer_inputs);
     let mut screen = WatchScreen::new(
         BootState::new(phase),
         desk,

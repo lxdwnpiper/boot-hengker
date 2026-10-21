@@ -9,7 +9,9 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
-use super::{BRANCH, DURATION_WIDTH, ELAPSED, ENDED_TRUNK, LAST_BRANCH, PASSING_TRUNK, fit_width};
+use super::{
+    BRANCH, DURATION_WIDTH, ENDED_TRUNK, LAST_BRANCH, PASSING_TRUNK, RUNNING_ELAPSED, fit_width,
+};
 use crate::{
     boot_model::{RowStatus, TreeRow, UnitKind},
     screen_settings::{color_scheme::TreeColors, font_glyphs::Glyphs},
@@ -207,7 +209,7 @@ impl UnitTree<'_> {
             RowStatus::Running { since, .. }
                 if self.now.saturating_sub(since) >= self.hide_runs_shorter_than =>
             {
-                ELAPSED.unsigned_duration_to_string(&self.now.saturating_sub(since))
+                RUNNING_ELAPSED.unsigned_duration_to_string(&self.now.saturating_sub(since))
             }
             _ => String::new(),
         };

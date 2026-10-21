@@ -5,6 +5,7 @@ pub struct Glyphs {
     pub bead: char,
     pub waiting_bead: char,
     pub still_going: char,
+    pub growing_tip: Option<[char; 8]>,
     pub running_mark: char,
     pub root_switch_mark: char,
     pub stage_current: char,
@@ -18,6 +19,7 @@ const FAILED: [char; 2] = ['×', 'x'];
 const BEAD: [char; 2] = ['■', '#'];
 const WAITING_BEAD: [char; 2] = ['·', '.'];
 const STILL_GOING: [char; 2] = ['▶', '>'];
+const GROWING_TIP: [char; 8] = ['▏', '▎', '▍', '▌', '▋', '▊', '▉', '█'];
 const RUNNING_MARK: [char; 3] = ['►', '▶', '>'];
 const ROOT_SWITCH_MARK: [char; 2] = ['│', '|'];
 const STAGE_MARKS: [&str; 3] = ["◆◇", "●○", "*o"];
@@ -53,6 +55,10 @@ impl Glyphs {
             bead: symbol(&BEAD),
             waiting_bead: symbol(&WAITING_BEAD),
             still_going: symbol(&STILL_GOING),
+            growing_tip: GROWING_TIP
+                .iter()
+                .all(|eighth| covers(*eighth))
+                .then_some(GROWING_TIP),
             running_mark: symbol(&RUNNING_MARK),
             root_switch_mark: symbol(&ROOT_SWITCH_MARK),
             stage_current: stage_marks[0],
@@ -92,11 +98,13 @@ mod tests {
         assert_eq!(glyphs.ellipsis, "...");
         assert_eq!(glyphs.chain_link, "─");
         assert_eq!((glyphs.stage_current, glyphs.stage_upcoming), ('*', 'o'));
+        assert_eq!(glyphs.growing_tip, None);
     }
 
     #[test]
     fn full_unicode_keeps_every_preferred_glyph() {
         let glyphs = Glyphs::default();
         assert_eq!((glyphs.done, glyphs.running_mark), ('√', '►'));
+        assert_eq!(glyphs.growing_tip, Some(GROWING_TIP));
     }
 }

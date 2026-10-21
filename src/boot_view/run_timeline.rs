@@ -209,8 +209,19 @@ impl Widget for Timeline<'_> {
                         ));
                     });
                     if entry.still_going {
-                        ctx.marker(Marker::Custom(self.glyphs.still_going));
-                        ctx.draw(&Points::new(&[(self.now.as_secs_f64(), y)], axis_color));
+                        let tip = self
+                            .glyphs
+                            .growing_tip
+                            .map_or(self.glyphs.still_going, |tips| {
+                                tips[axis.eighths_into_column(self.now)]
+                            });
+                        let tip_color = if self.glyphs.growing_tip.is_some() {
+                            self.colors.running
+                        } else {
+                            axis_color
+                        };
+                        ctx.marker(Marker::Custom(tip));
+                        ctx.draw(&Points::new(&[(self.now.as_secs_f64(), y)], tip_color));
                     }
                 });
                 ctx.marker(Marker::Custom(self.glyphs.root_switch_mark));
@@ -274,6 +285,13 @@ impl TimeAxis {
         ]
     }
 
+    fn eighths_into_column(&self, at: Duration) -> usize {
+        let last_column = u128::from(self.width.saturating_sub(1).max(1));
+        let span = self.span.as_nanos().max(1);
+        let scaled = at.saturating_sub(self.origin).as_nanos() * last_column;
+        usize::try_from(scaled % span * 8 / span).unwrap_or_default()
+    }
+
     fn columns_to_seconds(&self, columns: usize) -> f64 {
         let last_column = self.width.saturating_sub(1).max(1);
         let columns = u16::try_from(columns).unwrap_or(last_column);
@@ -292,5 +310,26 @@ impl TimeAxis {
         } else {
             AXIS_LABEL.unsigned_duration_to_string(&offset)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_tip_fills_its_column_in_eighths() {
+        let axis = TimeAxis {
+            origin: Duration::ZERO,
+            span: Duration::from_secs(10),
+            step: Duration::from_secs(1),
+            width: 11,
+        };
+        let eighths = |millis: u64| axis.eighths_into_column(Duration::from_millis(millis));
+        assert_eq!(eighths(2000), 0);
+        assert_eq!(eighths(2125), 1);
+        assert_eq!(eighths(2500), 4);
+        assert_eq!(eighths(2999), 7);
+        assert_eq!(eighths(3000), 0);
     }
 }

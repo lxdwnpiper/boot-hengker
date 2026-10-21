@@ -23,6 +23,7 @@ pub enum ScreenInput {
     Boot(Vec<BootChange>),
     Key(Event),
     Frame,
+    PromptCheck,
     ConsoleUpkeep,
     FullRepaint,
     PasswordRequests,
@@ -44,6 +45,8 @@ pub trait ConsoleDesk {
     fn frame_passed(&mut self, state: &mut BootState, now: Duration) -> ControlFlow<WatchEnding>;
 
     fn password_requests_changed(&mut self) {}
+
+    fn check_prompts(&mut self) {}
 
     fn keep_console_up(&mut self) -> bool {
         false
@@ -106,6 +109,10 @@ impl<Desk: ConsoleDesk> WatchScreen<Desk> {
             ScreenInput::Boot(changes) => self.apply_boot_changes(changes),
             ScreenInput::Key(event) => self.desk.press_key(&event, now),
             ScreenInput::Frame => self.desk.frame_passed(&mut self.state, now),
+            ScreenInput::PromptCheck => {
+                self.desk.check_prompts();
+                ControlFlow::Continue(())
+            }
             ScreenInput::ConsoleUpkeep => {
                 self.full_repaint_due |= self.desk.keep_console_up();
                 ControlFlow::Continue(())

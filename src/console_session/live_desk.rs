@@ -10,7 +10,10 @@ use crate::{
         ask_password::{PasswordEntry, RequestWatch},
         console_takeover::Console,
         passphrase_input::asks_to_quit,
-        stream_sources::{CarriedItem, periodic_inputs, readable_source, unfold_carrying},
+        stream_sources::{
+            BACKGROUND_CHECK_INTERVAL, CarriedItem, periodic_inputs, readable_source,
+            unfold_carrying,
+        },
         watch_screen::{ConsoleDesk, ScreenInput, WatchEnding},
     },
     screen_settings::font_glyphs::Glyphs,
@@ -76,12 +79,15 @@ impl ConsoleDesk for LiveDesk {
     }
 
     fn frame_passed(&mut self, _state: &mut BootState, _now: Duration) -> ControlFlow<WatchEnding> {
-        self.follow_requests(!self.requests_watched);
         ControlFlow::Continue(())
     }
 
     fn password_requests_changed(&mut self) {
         self.follow_requests(true);
+    }
+
+    fn check_prompts(&mut self) {
+        self.follow_requests(!self.requests_watched);
     }
 
     fn keep_console_up(&mut self) -> bool {
@@ -95,6 +101,10 @@ impl ConsoleDesk for LiveDesk {
     fn refreshed_origin(&self) -> Option<BootOrigin> {
         Some(BootOrigin::read())
     }
+}
+
+pub fn prompt_check_inputs() -> impl Stream<Item = ScreenInput> {
+    periodic_inputs(BACKGROUND_CHECK_INTERVAL, || ScreenInput::PromptCheck)
 }
 
 pub fn console_upkeep_inputs() -> impl Stream<Item = ScreenInput> {

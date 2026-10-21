@@ -12,7 +12,7 @@ use tokio::time::sleep;
 use crate::{
     boot_model::{BootChange, BootState, HANDOFF_UNIT, JobKind, Phase},
     console_session::{
-        stream_sources::{CarriedItem, FRAME_INTERVAL, unfold_carrying},
+        stream_sources::{BACKGROUND_CHECK_INTERVAL, CarriedItem, unfold_carrying},
         watch_screen::ScreenInput,
     },
     systemd_link::{
@@ -136,7 +136,7 @@ impl BusFeed {
                 vec![ScreenInput::Boot(watched.changes), ScreenInput::FullRepaint]
             }
             Err(_) if Instant::now() < deadline => {
-                sleep(FRAME_INTERVAL).await;
+                sleep(BACKGROUND_CHECK_INTERVAL).await;
                 self.link = Link::Connecting { deadline };
                 Vec::new()
             }
@@ -145,7 +145,7 @@ impl BusFeed {
     }
 
     async fn receive(&mut self, mut connection: BusConnection) -> Vec<ScreenInput> {
-        let Ok(signals) = connection.receive_signals(FRAME_INTERVAL).await else {
+        let Ok(signals) = connection.receive_signals(BACKGROUND_CHECK_INTERVAL).await else {
             return self.lose_connection();
         };
         let progress = stream::iter(signals)

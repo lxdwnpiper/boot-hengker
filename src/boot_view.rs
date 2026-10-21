@@ -41,7 +41,7 @@ use crate::{
     screen_settings::{color_scheme::Colors, config_file::Timing, font_glyphs::Glyphs},
 };
 
-const DURATION_WIDTH: u16 = 8;
+const DURATION_WIDTH: u16 = 9;
 const MIN_BAR_WIDTH: u16 = 12;
 const MIN_HEIGHT_FOR_TIMELINE: u16 = 12;
 const MIN_TIMELINE_HEIGHT: u16 = run_timeline::CHROME_HEIGHT + 4;
@@ -56,6 +56,8 @@ const ELAPSED: SpanPrinter = SpanPrinter::new()
     .spacing(Spacing::None)
     .fractional(Some(FractionalUnit::Second))
     .precision(Some(1));
+
+const RUNNING_ELAPSED: SpanPrinter = ELAPSED.precision(Some(2));
 
 pub struct BootView<'a> {
     pub state: &'a BootState,

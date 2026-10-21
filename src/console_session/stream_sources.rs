@@ -10,7 +10,8 @@ use tokio::{
 
 use crate::console_session::watch_screen::ScreenInput;
 
-pub const FRAME_INTERVAL: Duration = Duration::from_millis(100);
+pub const FRAME_INTERVAL: Duration = Duration::from_millis(16);
+pub const BACKGROUND_CHECK_INTERVAL: Duration = Duration::from_millis(100);
 
 pub struct CarriedItem<Item, State> {
     pub item: Item,
