@@ -1,4 +1,6 @@
 #[cfg(test)]
+mod frame_cost_bench;
+#[cfg(test)]
 mod panel_render_tests;
 mod run_timeline;
 mod screen_chrome;

@@ -30,12 +30,7 @@ pub fn render_prompted(
                     timing: &Timing::default(),
                     glyphs: &Glyphs::default(),
                     now,
-                    origin: &BootOrigin {
-                        host: "ryzen".to_owned(),
-                        system: "NixOS 26.11".to_owned(),
-                        generation: "2771".to_owned(),
-                        kernel: "Linux 7.2.9".to_owned(),
-                    },
+                    origin: &ryzen_origin(),
                     password_prompt,
                 },
                 frame.area(),
@@ -43,6 +38,15 @@ pub fn render_prompted(
         })
         .expect("draw");
     terminal.backend().buffer().clone()
+}
+
+pub fn ryzen_origin() -> BootOrigin {
+    BootOrigin {
+        host: "ryzen".to_owned(),
+        system: "NixOS 26.11".to_owned(),
+        generation: "2771".to_owned(),
+        kernel: "Linux 7.2.9".to_owned(),
+    }
 }
 
 pub fn screen_lines(buffer: &Buffer) -> Vec<String> {
