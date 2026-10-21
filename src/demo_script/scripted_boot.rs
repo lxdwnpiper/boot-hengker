@@ -10,13 +10,13 @@ use ratatui::{
 };
 
 use crate::{
-    boot_model::{ActiveState, Activity, BootState, JobKind, JobResult, Phase, UnitFacts},
-    boot_origin::BootOrigin,
+    boot_model::{
+        ActiveState, Activity, BootState, JobKind, JobResult, Phase, UnitFacts,
+        boot_origin::BootOrigin,
+    },
     boot_view::{BootView, PasswordPrompt},
-    color_scheme::Colors,
-    config_file::Timing,
-    font_glyphs::Glyphs,
-    passphrase_input,
+    console_session::passphrase_input,
+    screen_settings::{color_scheme::Colors, config_file::Timing, font_glyphs::Glyphs},
 };
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(100);

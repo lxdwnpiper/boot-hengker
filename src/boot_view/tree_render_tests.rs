@@ -5,7 +5,7 @@ use unicode_width::UnicodeWidthStr;
 use super::screen_render_fixtures::{boot_in_progress, chain_boot, described_boot, render};
 use crate::{
     boot_model::{JobResult, Phase},
-    boot_test_fixtures::{MS, queue_unit, queued_boot, running, waiting},
+    demo_script::boot_test_fixtures::{MS, queue_unit, queued_boot, running, waiting},
 };
 
 #[test]

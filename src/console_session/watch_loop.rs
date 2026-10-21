@@ -10,14 +10,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use bootvine::{
-    boot_model::{BootState, Phase},
-    boot_origin::BootOrigin,
-    boot_view::BootView,
-    color_scheme::Colors,
-    config_file::Timing,
-    passphrase_input::asks_to_quit,
-};
 use crossterm::event;
 use ratatui::{
     DefaultTerminal,
@@ -34,13 +26,21 @@ use rustix::{
 use signal_hook::{consts::SIGTERM, flag};
 
 use crate::{
-    ask_password::{PasswordEntry, RequestWatch},
-    boot_feed::{Feed, RootRequest},
-    console_takeover::Console,
-    monotonic_clock::monotonic_now,
-    switch_root::INITRD_RELEASE,
-    systemd_bus::{Scope, Session},
-    watch_error::Error,
+    boot_model::{BootState, Phase, boot_origin::BootOrigin},
+    boot_view::BootView,
+    console_session::{
+        ask_password::{PasswordEntry, RequestWatch},
+        console_takeover::Console,
+        passphrase_input::asks_to_quit,
+    },
+    screen_settings::{color_scheme::Colors, config_file::Timing},
+    systemd_link::{
+        boot_feed::{Feed, RootRequest},
+        link_error::Error,
+        monotonic_clock::monotonic_now,
+        switch_root::INITRD_RELEASE,
+        systemd_bus::{Scope, Session},
+    },
 };
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(100);

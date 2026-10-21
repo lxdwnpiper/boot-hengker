@@ -241,7 +241,7 @@ impl BootState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::boot_test_fixtures::{
+    use crate::demo_script::boot_test_fixtures::{
         nested_boot_sample, queued_boot, tree_outline, waiting, waiting_rows,
     };
 

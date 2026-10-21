@@ -6,8 +6,8 @@ use super::{
 };
 use crate::{
     boot_model::{BootState, JobResult, Phase},
-    boot_test_fixtures::{MS, queue_unit, queued_boot, running, waiting},
-    color_scheme::Colors,
+    demo_script::boot_test_fixtures::{MS, queue_unit, queued_boot, running, waiting},
+    screen_settings::color_scheme::Colors,
 };
 
 const CRYPTSETUP_MESSAGE: &str =

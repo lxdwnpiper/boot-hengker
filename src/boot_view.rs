@@ -32,11 +32,10 @@ use self::{
     unit_tree::UnitTree,
 };
 use crate::{
-    boot_model::{BootState, RowStatus, TreeRow, UnitKind, flatten_forest},
-    boot_origin::BootOrigin,
-    color_scheme::Colors,
-    config_file::Timing,
-    font_glyphs::Glyphs,
+    boot_model::{
+        BootState, RowStatus, TreeRow, UnitKind, boot_origin::BootOrigin, flatten_forest,
+    },
+    screen_settings::{color_scheme::Colors, config_file::Timing, font_glyphs::Glyphs},
 };
 
 const DURATION_WIDTH: u16 = 8;

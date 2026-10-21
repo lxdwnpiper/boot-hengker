@@ -6,14 +6,16 @@ use std::{
     time::{Duration, Instant},
 };
 
-use bootvine::boot_model::{BootState, HANDOFF_UNIT, JobKind, Phase};
 use dbus::Path;
 
 use crate::{
-    monotonic_clock::monotonic_now,
-    switch_root::Sysroot,
-    systemd_bus::{Scope, Session, Signal},
-    watch_error::Error,
+    boot_model::{BootState, HANDOFF_UNIT, JobKind, Phase},
+    systemd_link::{
+        link_error::Error,
+        monotonic_clock::monotonic_now,
+        switch_root::Sysroot,
+        systemd_bus::{Scope, Session, Signal},
+    },
 };
 
 const RECONNECT_PATIENCE: Duration = Duration::from_secs(60);
@@ -65,6 +67,7 @@ pub struct Feed {
 }
 
 impl Feed {
+    #[must_use]
     pub fn new(phase: Phase, scope: Scope, target: RootRequest) -> Self {
         Self {
             connections: 0,
@@ -81,6 +84,7 @@ impl Feed {
         }
     }
 
+    #[must_use]
     pub fn session_fd(&self) -> Option<BorrowedFd<'_>> {
         match &self.link {
             Link::Connected(session) => Some(session.as_fd()),

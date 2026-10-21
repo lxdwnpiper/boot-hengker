@@ -172,7 +172,7 @@ pub(super) fn summary(facts: &UnitFacts) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::boot_test_fixtures::{facts, waiting};
+    use crate::demo_script::boot_test_fixtures::{facts, waiting};
 
     #[test]
     fn kinds_with_a_tag_drop_their_suffix() {

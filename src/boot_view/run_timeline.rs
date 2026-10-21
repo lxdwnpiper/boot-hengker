@@ -16,8 +16,7 @@ use ratatui::{
 use super::{fit_width, rule, unit_count};
 use crate::{
     boot_model::{FinishedRun, MilestoneRow},
-    color_scheme::TimelineColors,
-    font_glyphs::Glyphs,
+    screen_settings::{color_scheme::TimelineColors, font_glyphs::Glyphs},
 };
 
 pub const LABEL_WIDTH: u16 = 28;

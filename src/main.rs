@@ -1,12 +1,3 @@
-mod ask_password;
-mod boot_feed;
-mod console_takeover;
-mod monotonic_clock;
-mod switch_root;
-mod systemd_bus;
-mod watch_error;
-mod watch_loop;
-
 use std::{
     error::Error,
     io::ErrorKind,
@@ -15,15 +6,15 @@ use std::{
     time::Duration,
 };
 
-use bootvine::config_file::{Config, ConfigError, Timing, default_config_table, read_config_file};
+use bootvine::{
+    console_session::watch_loop::{Settings, run},
+    screen_settings::config_file::{
+        Config, ConfigError, Timing, default_config_table, read_config_file,
+    },
+    systemd_link::{boot_feed::RootRequest, systemd_bus::Scope},
+};
 use clap::{Parser, Subcommand, ValueEnum};
 use jiff::fmt::friendly::SpanParser;
-
-use crate::{
-    boot_feed::RootRequest,
-    systemd_bus::Scope,
-    watch_loop::{Settings, run},
-};
 
 #[derive(Parser)]
 #[command(

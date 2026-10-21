@@ -258,7 +258,7 @@ mod tests {
     use super::*;
     use crate::{
         boot_model::RowStatus,
-        boot_test_fixtures::{
+        demo_script::boot_test_fixtures::{
             MS, activating, facts, nested_boot_sample as sample, queue_unit, queued_boot, waiting,
             waiting_rows,
         },

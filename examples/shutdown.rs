@@ -2,7 +2,7 @@ use std::{io, time::Duration};
 
 use bootvine::{
     boot_model::Phase,
-    scripted_boot::{Scenario, Step, play, step, stopping},
+    demo_script::scripted_boot::{Scenario, Step, play, step, stopping},
 };
 
 const SHUTDOWN: &[Step] = &[

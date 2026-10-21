@@ -1,3 +1,4 @@
+pub mod boot_origin;
 mod job_ingestion;
 mod reached_milestones;
 mod unit_facts;

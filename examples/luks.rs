@@ -2,7 +2,7 @@ use std::{io, time::Duration};
 
 use bootvine::{
     boot_model::Phase,
-    scripted_boot::{Scenario, Step, play, step, unlocking},
+    demo_script::scripted_boot::{Scenario, Step, play, step, unlocking},
 };
 
 const ROOT_PARTITION: &str =

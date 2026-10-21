@@ -12,8 +12,7 @@ use unicode_width::UnicodeWidthStr;
 use super::{BRANCH, DURATION_WIDTH, ELAPSED, ENDED_TRUNK, LAST_BRANCH, PASSING_TRUNK, fit_width};
 use crate::{
     boot_model::{RowStatus, TreeRow, UnitKind},
-    color_scheme::TreeColors,
-    font_glyphs::Glyphs,
+    screen_settings::{color_scheme::TreeColors, font_glyphs::Glyphs},
 };
 
 const SPINNER: [char; 4] = ['|', '/', '-', '\\'];

@@ -4,12 +4,9 @@ use ratatui::{Terminal, backend::TestBackend, buffer::Buffer};
 
 use super::{BootView, PasswordPrompt};
 use crate::{
-    boot_model::{BootState, JobResult, Phase},
-    boot_origin::BootOrigin,
-    boot_test_fixtures::{MS, queued_boot, running, waiting},
-    color_scheme::Colors,
-    config_file::Timing,
-    font_glyphs::Glyphs,
+    boot_model::{BootState, JobResult, Phase, boot_origin::BootOrigin},
+    demo_script::boot_test_fixtures::{MS, queued_boot, running, waiting},
+    screen_settings::{color_scheme::Colors, config_file::Timing, font_glyphs::Glyphs},
 };
 
 pub fn render(state: &BootState, now: Duration, width: u16, height: u16) -> Vec<String> {

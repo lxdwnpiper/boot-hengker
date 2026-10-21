@@ -8,7 +8,6 @@ use std::{
     time::Duration,
 };
 
-use bootvine::{boot_view::PasswordPrompt, passphrase_input};
 use crossterm::event::Event;
 use rustix::{
     fs::inotify::{self, CreateFlags, WatchFlags},
@@ -17,7 +16,10 @@ use rustix::{
 };
 use zeroize::Zeroizing;
 
-use crate::monotonic_clock::monotonic_now;
+use crate::{
+    boot_view::PasswordPrompt, console_session::passphrase_input,
+    systemd_link::monotonic_clock::monotonic_now,
+};
 
 const REQUESTS: &str = "/run/systemd/ask-password";
 const REQUEST_PREFIX: &str = "ask.";
@@ -29,6 +31,7 @@ pub struct RequestWatch {
 }
 
 impl RequestWatch {
+    #[must_use]
     pub fn open() -> Option<Self> {
         fs::create_dir_all(REQUESTS).ok()?;
         let inotify = inotify::init(CreateFlags::CLOEXEC | CreateFlags::NONBLOCK).ok()?;
@@ -45,6 +48,7 @@ impl RequestWatch {
         Some(Self { inotify })
     }
 
+    #[must_use]
     pub fn changed(&self) -> bool {
         let mut events = [0_u8; INOTIFY_BUFFER];
         iter::from_fn(|| {
@@ -74,6 +78,7 @@ pub struct PasswordRequest {
     asker: Option<Pid>,
 }
 
+#[must_use]
 pub fn requested() -> bool {
     !request_files().is_empty()
 }
@@ -195,6 +200,7 @@ impl PasswordEntry {
         self.request.is_awaited() && (!requests_changed || self.request.file.exists())
     }
 
+    #[must_use]
     pub fn prompt(&self) -> PasswordPrompt<'_> {
         let input = if self.request.silent {
             String::new()

@@ -92,7 +92,9 @@ mod tests {
     use super::*;
     use crate::{
         boot_model::{Activity, JobResult, Phase},
-        boot_test_fixtures::{MS, nested_boot_sample, queued_boot, waiting, waiting_rows},
+        demo_script::boot_test_fixtures::{
+            MS, nested_boot_sample, queued_boot, waiting, waiting_rows,
+        },
     };
 
     #[test]

@@ -4,14 +4,16 @@ use std::{
     time::Duration,
 };
 
-use bootvine::boot_model::{ActiveState, Activity, JobKind, JobResult, UnitFacts};
 use dbus::{
     Message, MessageType, Path,
     arg::{AppendAll, PropMap, RefArg, Variant},
     channel::{BusType, Channel},
 };
 
-use crate::watch_error::Error;
+use crate::{
+    boot_model::{ActiveState, Activity, JobKind, JobResult, UnitFacts},
+    systemd_link::link_error::Error,
+};
 
 const DESTINATION: &str = "org.freedesktop.systemd1";
 const MANAGER_PATH: &str = "/org/freedesktop/systemd1";

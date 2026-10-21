@@ -2,7 +2,7 @@ use std::{io, time::Duration};
 
 use bootvine::{
     boot_model::Phase,
-    scripted_boot::{Scenario, Step, failing, play, step},
+    demo_script::scripted_boot::{Scenario, Step, failing, play, step},
 };
 
 const INITRD: &[Step] = &[

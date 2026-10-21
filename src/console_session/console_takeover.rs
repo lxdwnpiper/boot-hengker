@@ -1,6 +1,5 @@
 use std::{collections::HashSet, fs, ptr};
 
-use bootvine::font_glyphs::Glyphs;
 use rustix::{
     io::Errno,
     ioctl::{Getter, IntegerSetter, Opcode, Updater, ioctl},
@@ -8,7 +7,7 @@ use rustix::{
     termios::ttyname,
 };
 
-use crate::ask_password;
+use crate::{console_session::ask_password, screen_settings::font_glyphs::Glyphs};
 
 const GIO_UNIMAP: Opcode = 0x4B66;
 const VT_GETSTATE: Opcode = 0x5603;
@@ -43,6 +42,7 @@ impl Console {
         }
     }
 
+    #[must_use]
     pub fn answers_password_prompts(&self) -> bool {
         self.for_system && self.foreground.is_some()
     }

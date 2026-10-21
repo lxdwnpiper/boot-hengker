@@ -94,7 +94,7 @@ mod tests {
     use super::*;
     use crate::{
         boot_model::{BootState, Phase},
-        boot_test_fixtures::{
+        demo_script::boot_test_fixtures::{
             activating, nested_boot_sample, queued_boot, running, tree_outline, waiting,
         },
     };
