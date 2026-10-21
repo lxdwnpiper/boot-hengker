@@ -7,16 +7,16 @@ use std::{
     time::{Duration, Instant},
 };
 
-use bootvine::model::{
+use bootvine::boot_model::{
     BootState, HANDOFF_UNIT, HOST_MILESTONES, JobKind, Phase, SHUTDOWN_MILESTONES,
 };
 use dbus::Path;
 
 use crate::{
-    clock::monotonic_now,
-    error::Error,
-    sysroot::{INITRD_RELEASE, Sysroot},
-    systemd::{Scope, Session, Signal},
+    monotonic_clock::monotonic_now,
+    switch_root::{INITRD_RELEASE, Sysroot},
+    systemd_bus::{Scope, Session, Signal},
+    watch_error::Error,
 };
 
 const RECONNECT_PATIENCE: Duration = Duration::from_secs(60);

@@ -1,11 +1,11 @@
-mod clock;
-mod console;
-mod error;
-mod feed;
-mod password;
-mod run;
-mod sysroot;
-mod systemd;
+mod ask_password;
+mod boot_feed;
+mod console_takeover;
+mod monotonic_clock;
+mod switch_root;
+mod systemd_bus;
+mod watch_error;
+mod watch_loop;
 
 use std::{
     error::Error,
@@ -15,14 +15,14 @@ use std::{
     time::Duration,
 };
 
-use bootvine::config::{Config, ConfigError, Timing, default_config_table, read_config_file};
+use bootvine::config_file::{Config, ConfigError, Timing, default_config_table, read_config_file};
 use clap::{Parser, Subcommand, ValueEnum};
 use jiff::fmt::friendly::SpanParser;
 
 use crate::{
-    feed::RootRequest,
-    run::{Settings, run},
-    systemd::Scope,
+    boot_feed::RootRequest,
+    systemd_bus::Scope,
+    watch_loop::{Settings, run},
 };
 
 #[derive(Parser)]

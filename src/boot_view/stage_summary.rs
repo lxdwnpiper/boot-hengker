@@ -9,7 +9,7 @@ use ratatui::{
 };
 
 use super::{BRANCH, ELAPSED, LAST_BRANCH, unit_count};
-use crate::{colors::StageColors, glyphs::Glyphs, model::BootState};
+use crate::{boot_model::BootState, color_scheme::StageColors, font_glyphs::Glyphs};
 
 const SHUTDOWN_SUCCESSOR: &str = "systemd-shutdown";
 const PHASE_WIDTH: usize = 9;

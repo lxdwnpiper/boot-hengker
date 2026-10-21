@@ -10,10 +10,10 @@ use ratatui::{
 
 use super::{DURATION_WIDTH, ELAPSED};
 use crate::{
-    colors::{FooterColors, HeaderColors, PasswordColors},
-    glyphs::Glyphs,
-    model::Tally,
-    origin::BootOrigin,
+    boot_model::Tally,
+    boot_origin::BootOrigin,
+    color_scheme::{FooterColors, HeaderColors, PasswordColors},
+    font_glyphs::Glyphs,
 };
 
 pub const FOOTER_HEIGHT: u16 = 2;

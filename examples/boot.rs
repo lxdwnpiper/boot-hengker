@@ -1,8 +1,8 @@
 use std::{io, time::Duration};
 
 use bootvine::{
-    model::Phase,
-    script::{Scenario, Step, failing, play, step},
+    boot_model::Phase,
+    scripted_boot::{Scenario, Step, failing, play, step},
 };
 
 const INITRD: &[Step] = &[

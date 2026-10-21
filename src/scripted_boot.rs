@@ -10,13 +10,13 @@ use ratatui::{
 };
 
 use crate::{
-    colors::Colors,
-    config::Timing,
-    glyphs::Glyphs,
-    model::{ActiveState, Activity, BootState, JobKind, JobResult, Phase, UnitFacts},
-    origin::BootOrigin,
-    passphrase,
-    view::{BootView, PasswordPrompt},
+    boot_model::{ActiveState, Activity, BootState, JobKind, JobResult, Phase, UnitFacts},
+    boot_origin::BootOrigin,
+    boot_view::{BootView, PasswordPrompt},
+    color_scheme::Colors,
+    config_file::Timing,
+    font_glyphs::Glyphs,
+    passphrase_input,
 };
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(100);
@@ -209,7 +209,7 @@ impl Script {
     fn prompt(&self, typed: &str, now: Duration) -> Option<PasswordPrompt<'static>> {
         Some(PasswordPrompt {
             message: self.asking()?.asks?,
-            input: passphrase::masked(typed),
+            input: passphrase_input::masked(typed),
             sent: self.is_checking(now),
         })
     }
@@ -311,7 +311,7 @@ pub fn play(terminal: &mut DefaultTerminal, scenario: &Scenario) -> io::Result<(
     let mut switched_root = scenario.after_switch_root.is_empty();
     let mut settled_at = None;
     let mut frame = 0;
-    let mut typed = passphrase::empty();
+    let mut typed = passphrase_input::empty();
     loop {
         script.advance(&mut state, now());
         if script.is_done() && !switched_root {
@@ -351,7 +351,7 @@ pub fn play(terminal: &mut DefaultTerminal, scenario: &Scenario) -> io::Result<(
             }
             if asking
                 && !script.is_checking(now())
-                && let Some(submitted) = passphrase::type_key(&mut typed, &event)
+                && let Some(submitted) = passphrase_input::type_key(&mut typed, &event)
             {
                 script.answer(&submitted, now());
             }

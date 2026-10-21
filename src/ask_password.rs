@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-use bootvine::{passphrase, view::PasswordPrompt};
+use bootvine::{boot_view::PasswordPrompt, passphrase_input};
 use crossterm::event::Event;
 use rustix::{
     fs::inotify::{self, CreateFlags, WatchFlags},
@@ -17,7 +17,7 @@ use rustix::{
 };
 use zeroize::Zeroizing;
 
-use crate::clock::monotonic_now;
+use crate::monotonic_clock::monotonic_now;
 
 const REQUESTS: &str = "/run/systemd/ask-password";
 const REQUEST_PREFIX: &str = "ask.";
@@ -186,7 +186,7 @@ impl PasswordEntry {
         }
         Some(Self {
             request,
-            typed: passphrase::empty(),
+            typed: passphrase_input::empty(),
             sent: false,
         })
     }
@@ -201,7 +201,7 @@ impl PasswordEntry {
         } else if self.request.echo {
             self.typed.to_string()
         } else {
-            passphrase::masked(&self.typed)
+            passphrase_input::masked(&self.typed)
         };
         PasswordPrompt {
             message: &self.request.message,
@@ -214,7 +214,7 @@ impl PasswordEntry {
         if self.sent {
             return Ok(());
         }
-        let Some(submitted) = passphrase::type_key(&mut self.typed, event) else {
+        let Some(submitted) = passphrase_input::type_key(&mut self.typed, event) else {
             return Ok(());
         };
         self.request.answer(&submitted)?;
@@ -271,7 +271,7 @@ mod tests {
     fn hides_what_is_typed() {
         let mut entry = PasswordEntry {
             request: PasswordRequest::parse(Path::new("ask.x"), CRYPTSETUP_ASK).expect("parsed"),
-            typed: passphrase::empty(),
+            typed: passphrase_input::empty(),
             sent: false,
         };
         "secret".chars().for_each(|character| {

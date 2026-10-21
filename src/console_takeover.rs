@@ -1,6 +1,6 @@
 use std::{collections::HashSet, fs, ptr};
 
-use bootvine::glyphs::Glyphs;
+use bootvine::font_glyphs::Glyphs;
 use rustix::{
     io::Errno,
     ioctl::{Getter, IntegerSetter, Opcode, Updater, ioctl},
@@ -8,7 +8,7 @@ use rustix::{
     termios::ttyname,
 };
 
-use crate::password;
+use crate::ask_password;
 
 const GIO_UNIMAP: Opcode = 0x4B66;
 const VT_GETSTATE: Opcode = 0x5603;
@@ -26,7 +26,7 @@ pub struct Console {
 
 impl Console {
     pub fn take(for_system: bool) -> Self {
-        let prompt_elsewhere = for_system && password::requested();
+        let prompt_elsewhere = for_system && ask_password::requested();
         if prompt_elsewhere {
             eprintln!("bootvine: a password prompt is already showing, staying behind it");
         }
@@ -48,7 +48,7 @@ impl Console {
     }
 
     pub fn come_forward_once_prompts_are_gone(&mut self) -> bool {
-        if !self.for_system || self.foreground.is_some() || password::requested() {
+        if !self.for_system || self.foreground.is_some() || ask_password::requested() {
             return false;
         }
         self.foreground = ForegroundVt::take();
@@ -194,7 +194,7 @@ impl ForegroundVt {
 
 impl Drop for ForegroundVt {
     fn drop(&mut self) {
-        if password::requested() {
+        if ask_password::requested() {
             eprintln!("bootvine: leaving a password prompt to the console agent on this terminal");
             return;
         }

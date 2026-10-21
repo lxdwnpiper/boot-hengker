@@ -5,7 +5,7 @@ use jiff::fmt::serde::unsigned_duration::friendly::compact::required as friendly
 use serde::{Deserialize, Serialize};
 use toml::{Table, Value, de::Error as ParseError, ser::Error as SerializeError};
 
-use crate::colors::Colors;
+use crate::color_scheme::Colors;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]

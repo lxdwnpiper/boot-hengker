@@ -1,7 +1,7 @@
-mod chrome;
-mod stages;
-mod timeline;
-mod tree;
+mod run_timeline;
+mod screen_chrome;
+mod stage_summary;
+mod unit_tree;
 
 use std::time::Duration;
 
@@ -16,25 +16,25 @@ use ratatui::{
 use unicode_truncate::UnicodeTruncateStr;
 use unicode_width::UnicodeWidthStr;
 
-pub use self::chrome::PasswordPrompt;
+pub use self::screen_chrome::PasswordPrompt;
 use self::{
-    chrome::{FOOTER_HEIGHT, Footer, Header, PasswordPopup},
-    stages::Stages,
-    timeline::{RunningRun, Timeline},
-    tree::UnitTree,
+    run_timeline::{RunningRun, Timeline},
+    screen_chrome::{FOOTER_HEIGHT, Footer, Header, PasswordPopup},
+    stage_summary::Stages,
+    unit_tree::UnitTree,
 };
 use crate::{
-    colors::Colors,
-    config::Timing,
-    glyphs::Glyphs,
-    model::{BootState, RowStatus, TreeRow, UnitKind, fit_to_height, fold_chains},
-    origin::BootOrigin,
+    boot_model::{BootState, RowStatus, TreeRow, UnitKind, fit_to_height, fold_chains},
+    boot_origin::BootOrigin,
+    color_scheme::Colors,
+    config_file::Timing,
+    font_glyphs::Glyphs,
 };
 
 const DURATION_WIDTH: u16 = 8;
 const MIN_BAR_WIDTH: u16 = 12;
 const MIN_HEIGHT_FOR_TIMELINE: u16 = 12;
-const MIN_TIMELINE_HEIGHT: u16 = timeline::CHROME_HEIGHT + 4;
+const MIN_TIMELINE_HEIGHT: u16 = run_timeline::CHROME_HEIGHT + 4;
 const HEADER_HEIGHT: u16 = 1;
 const BRANCH: &str = "├─ ";
 const LAST_BRANCH: &str = "└─ ";
@@ -123,7 +123,7 @@ impl Widget for BootView<'_> {
             colors: &self.colors.footer,
             glyphs: self.glyphs,
         };
-        let fits_timeline = area.width >= timeline::LABEL_WIDTH + 1 + MIN_BAR_WIDTH
+        let fits_timeline = area.width >= run_timeline::LABEL_WIDTH + 1 + MIN_BAR_WIDTH
             && area.height >= MIN_HEIGHT_FOR_TIMELINE;
         let free = area
             .height
@@ -236,7 +236,7 @@ mod tests {
     use ratatui::{Terminal, backend::TestBackend};
 
     use super::*;
-    use crate::model::{ActiveState, Activity, JobKind, JobResult, Phase, UnitFacts};
+    use crate::boot_model::{ActiveState, Activity, JobKind, JobResult, Phase, UnitFacts};
 
     const MS: Duration = Duration::from_millis(1);
 

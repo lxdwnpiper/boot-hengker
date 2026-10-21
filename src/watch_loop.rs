@@ -11,11 +11,11 @@ use std::{
 };
 
 use bootvine::{
-    colors::Colors,
-    config::Timing,
-    model::{BootState, Phase},
-    origin::BootOrigin,
-    view::BootView,
+    boot_model::{BootState, Phase},
+    boot_origin::BootOrigin,
+    boot_view::BootView,
+    color_scheme::Colors,
+    config_file::Timing,
 };
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
@@ -33,13 +33,13 @@ use rustix::{
 use signal_hook::{consts::SIGTERM, flag};
 
 use crate::{
-    clock::monotonic_now,
-    console::Console,
-    error::Error,
-    feed::{Feed, RootRequest},
-    password::{PasswordEntry, RequestWatch},
-    sysroot::INITRD_RELEASE,
-    systemd::{Scope, Session},
+    ask_password::{PasswordEntry, RequestWatch},
+    boot_feed::{Feed, RootRequest},
+    console_takeover::Console,
+    monotonic_clock::monotonic_now,
+    switch_root::INITRD_RELEASE,
+    systemd_bus::{Scope, Session},
+    watch_error::Error,
 };
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(100);

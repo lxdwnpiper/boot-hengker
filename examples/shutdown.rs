@@ -1,8 +1,8 @@
 use std::{io, time::Duration};
 
 use bootvine::{
-    model::Phase,
-    script::{Scenario, Step, play, step, stopping},
+    boot_model::Phase,
+    scripted_boot::{Scenario, Step, play, step, stopping},
 };
 
 const SHUTDOWN: &[Step] = &[
