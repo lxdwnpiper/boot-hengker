@@ -5,7 +5,7 @@ nix-output-monitor. It replaces the scrolling kernel and systemd lines with the
 units still pending and, in the room the tree leaves, a timeline of the slowest
 ones that ran.
 
-<img src="docs/boot.gif" width="691" alt="A boot through the initrd into stage 2, with one failed unit">
+<img src="https://codeberg.org/wvhulle/bootvine/raw/branch/main/docs/boot.gif" width="691" alt="A boot through the initrd into stage 2, with one failed unit">
 
 It needs systemd ≥ 246 as PID 1, libdbus and a virtual terminal (it draws on
 tty12). With a systemd initrd it starts about a second after the kernel and
@@ -19,12 +19,12 @@ It also follows shutdowns and reboots: the units being stopped, nested under
 the units that have to stop first, until systemd hands over to
 `systemd-shutdown`.
 
-<img src="docs/shutdown.gif" width="691" alt="A poweroff: units stopping under the targets waiting on them">
+<img src="https://codeberg.org/wvhulle/bootvine/raw/branch/main/docs/shutdown.gif" width="691" alt="A poweroff: units stopping under the targets waiting on them">
 
 Passphrase prompts, such as a LUKS unlock in the initrd, are answered in place
 over the tree.
 
-<img src="docs/passphrase.png" width="640" alt="A LUKS passphrase prompt floating over the initrd tree">
+<img src="https://codeberg.org/wvhulle/bootvine/raw/branch/main/docs/passphrase.png" width="640" alt="A LUKS passphrase prompt floating over the initrd tree">
 
 ## Try
 

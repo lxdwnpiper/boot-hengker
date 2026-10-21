@@ -4,6 +4,12 @@ name = "bootvine"
 version = "0.1.0"
 license = "GPL-3.0-or-later"
 repository = "https://codeberg.org/wvhulle/bootvine"
+description = "Boot and shutdown progress for systemd on the console, with each job nested under the units waiting on it"
+readme = "README.md"
+keywords = ["systemd", "boot", "initrd", "tui", "console"]
+categories = ["command-line-utilities", "os::linux-apis"]
+rust-version = "1.87"
+include = ["/src", "/examples", "/packaging", "/README.md", "/LICENSE"]
 
 [lints.clippy]
 absolute_paths = "warn"
