@@ -8,7 +8,7 @@ description = "Boot and shutdown progress for systemd on the console, with each 
 readme = "README.md"
 keywords = ["systemd", "boot", "initrd", "tui", "console"]
 categories = ["command-line-utilities", "os::linux-apis"]
-rust-version = "1.87"
+rust-version = "1.91"
 include = ["/src", "/examples", "/packaging", "/README.md", "/LICENSE"]
 
 [lints.clippy]
