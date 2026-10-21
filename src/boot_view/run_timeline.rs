@@ -47,7 +47,7 @@ pub struct Timeline<'a> {
     pub origin: Duration,
     pub now: Duration,
     pub root_switches: Vec<Duration>,
-    pub milestones: Vec<MilestoneRow>,
+    pub milestones: &'a [MilestoneRow],
     pub finished: Vec<&'a FinishedRun>,
     pub running: Vec<RunningRun<'a>>,
     pub colors: &'a TimelineColors,

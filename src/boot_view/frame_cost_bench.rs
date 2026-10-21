@@ -6,9 +6,9 @@ use std::{
 
 use ratatui::{Terminal, backend::TestBackend};
 
-use super::{BootView, screen_render_fixtures::ryzen_origin};
+use super::{BootView, project_boot, screen_render_fixtures::ryzen_origin};
 use crate::{
-    boot_model::{BootState, JobResult, Phase, flatten_forest},
+    boot_model::{BootProjection, BootState, JobResult, Phase, flatten_forest},
     demo_script::boot_test_fixtures::{MS, QueuedUnit, queued_boot, running, waiting},
     screen_settings::{color_scheme::Colors, config_file::Timing, font_glyphs::Glyphs},
 };
@@ -63,29 +63,50 @@ fn report_timed_draws(label: &str, mut work: impl FnMut(Duration)) {
     println!("{label} over {DRAW_COUNT} draws: median {median:?}, p90 {slowest_tenth:?}");
 }
 
+fn draw_boot_frame(
+    terminal: &mut Terminal<TestBackend>,
+    state: &BootState,
+    projection: &BootProjection,
+    now: Duration,
+) {
+    terminal
+        .draw(|frame| {
+            frame.render_widget(
+                BootView {
+                    state,
+                    projection,
+                    colors: &Colors::default(),
+                    timing: &Timing::default(),
+                    glyphs: &Glyphs::default(),
+                    now,
+                    origin: &ryzen_origin(),
+                    password_prompt: None,
+                },
+                frame.area(),
+            );
+        })
+        .expect("draw");
+}
+
 #[test]
 #[ignore = "benchmark: cargo test --release frame_cost -- --ignored --nocapture"]
 fn frame_cost_of_a_crowded_boot() {
     let state = crowded_boot();
-    let origin = ryzen_origin();
     let mut terminal = Terminal::new(TestBackend::new(110, 40)).expect("test backend");
     report_timed_draws("whole frame", |now| {
-        terminal
-            .draw(|frame| {
-                frame.render_widget(
-                    BootView {
-                        state: &state,
-                        colors: &Colors::default(),
-                        timing: &Timing::default(),
-                        glyphs: &Glyphs::default(),
-                        now,
-                        origin: &origin,
-                        password_prompt: None,
-                    },
-                    frame.area(),
-                );
-            })
-            .expect("draw");
+        let projection = project_boot(&state, &Timing::default(), now);
+        draw_boot_frame(&mut terminal, &state, &projection, now);
+    });
+}
+
+#[test]
+#[ignore = "benchmark: cargo test --release frame_cost -- --ignored --nocapture"]
+fn frame_cost_with_a_cached_projection() {
+    let state = crowded_boot();
+    let projection = project_boot(&state, &Timing::default(), Duration::from_secs(90));
+    let mut terminal = Terminal::new(TestBackend::new(110, 40)).expect("test backend");
+    report_timed_draws("cached frame", |now| {
+        draw_boot_frame(&mut terminal, &state, &projection, now);
     });
 }
 

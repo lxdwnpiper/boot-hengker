@@ -10,13 +10,14 @@ use ratatui::{
 };
 
 use crate::{
-    boot_model::{BootChange, BootState, boot_origin::BootOrigin},
-    boot_view::{BootView, PasswordPrompt},
+    boot_model::{BootChange, BootProjection, BootState, boot_origin::BootOrigin},
+    boot_view::{BootView, PasswordPrompt, project_boot},
     screen_settings::{color_scheme::Colors, config_file::Timing, font_glyphs::Glyphs},
     systemd_link::{link_error::Error, monotonic_clock::monotonic_now},
 };
 
 const INPUT_BATCH: usize = 64;
+const PROJECTION_REFRESH: Duration = Duration::from_millis(100);
 
 pub enum ScreenInput {
     Boot(Vec<BootChange>),
@@ -55,6 +56,11 @@ pub trait ConsoleDesk {
     }
 }
 
+struct CachedProjection {
+    projection: BootProjection,
+    built_at: Duration,
+}
+
 pub struct WatchScreen<Desk> {
     pub state: BootState,
     pub desk: Desk,
@@ -63,6 +69,7 @@ pub struct WatchScreen<Desk> {
     colors: Colors,
     timing: Timing,
     epoch: Duration,
+    projection: Option<CachedProjection>,
 }
 
 impl<Desk: ConsoleDesk> WatchScreen<Desk> {
@@ -82,6 +89,7 @@ impl<Desk: ConsoleDesk> WatchScreen<Desk> {
             colors,
             timing,
             epoch,
+            projection: None,
         }
     }
 
@@ -119,6 +127,7 @@ impl<Desk: ConsoleDesk> WatchScreen<Desk> {
         changes
             .into_iter()
             .for_each(|change| self.state.apply(change));
+        self.projection = None;
         if self.state.phase != phase_before
             && let Some(origin) = self.desk.refreshed_origin()
         {
@@ -157,10 +166,25 @@ impl<Desk: ConsoleDesk> WatchScreen<Desk> {
             terminal.clear()?;
         }
         let now = self.now();
+        if self
+            .projection
+            .as_ref()
+            .is_some_and(|cached| now.saturating_sub(cached.built_at) >= PROJECTION_REFRESH)
+        {
+            self.projection = None;
+        }
+        let projection = &self
+            .projection
+            .get_or_insert_with(|| CachedProjection {
+                projection: project_boot(&self.state, &self.timing, now),
+                built_at: now,
+            })
+            .projection;
         let completed = terminal.draw(|canvas| {
             canvas.render_widget(
                 BootView {
                     state: &self.state,
+                    projection,
                     colors: &self.colors,
                     timing: &self.timing,
                     glyphs: self.desk.glyphs(),

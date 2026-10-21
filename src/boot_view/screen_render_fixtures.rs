@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use ratatui::{Terminal, backend::TestBackend, buffer::Buffer};
 
-use super::{BootView, PasswordPrompt};
+use super::{BootView, PasswordPrompt, project_boot};
 use crate::{
     boot_model::{BootState, JobResult, Phase, boot_origin::BootOrigin},
     demo_script::boot_test_fixtures::{MS, queued_boot, running, waiting},
@@ -21,13 +21,16 @@ pub fn render_prompted(
     password_prompt: Option<PasswordPrompt>,
 ) -> Buffer {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("test backend");
+    let timing = Timing::default();
+    let projection = project_boot(state, &timing, now);
     terminal
         .draw(|frame| {
             frame.render_widget(
                 BootView {
                     state,
+                    projection: &projection,
                     colors: &Colors::default(),
-                    timing: &Timing::default(),
+                    timing: &timing,
                     glyphs: &Glyphs::default(),
                     now,
                     origin: &ryzen_origin(),

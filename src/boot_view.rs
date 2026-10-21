@@ -35,7 +35,8 @@ use self::{
 };
 use crate::{
     boot_model::{
-        BootState, RowStatus, TreeRow, UnitKind, boot_origin::BootOrigin, flatten_forest,
+        BootProjection, BootState, RowStatus, TreeRow, UnitKind, boot_origin::BootOrigin,
+        flatten_forest,
     },
     screen_settings::{color_scheme::Colors, config_file::Timing, font_glyphs::Glyphs},
 };
@@ -58,6 +59,7 @@ const ELAPSED: SpanPrinter = SpanPrinter::new()
 
 pub struct BootView<'a> {
     pub state: &'a BootState,
+    pub projection: &'a BootProjection,
     pub colors: &'a Colors,
     pub timing: &'a Timing,
     pub glyphs: &'a Glyphs,
@@ -90,7 +92,7 @@ impl BootView<'_> {
                 .iter()
                 .map(|stage| stage.reached_at)
                 .collect(),
-            milestones: self.state.milestones(),
+            milestones: &self.projection.milestones,
             finished: self
                 .state
                 .finished_runs
@@ -109,9 +111,7 @@ impl BootView<'_> {
 
 impl Widget for BootView<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let forest = self
-            .state
-            .waiting_forest(self.now.saturating_sub(self.timing.keep_finished_units_for));
+        let forest = &self.projection.forest;
         let all_rows = flatten_forest(forest.clone());
         let pending_count = all_rows.len();
         let header = Header {
@@ -128,7 +128,7 @@ impl Widget for BootView<'_> {
         };
         let timeline = self.timeline(&all_rows);
         let footer = Footer {
-            tally: self.state.tally(),
+            tally: self.projection.tally,
             colors: &self.colors.footer,
             glyphs: self.glyphs,
         };
@@ -143,7 +143,7 @@ impl Widget for BootView<'_> {
             if fits_timeline { timeline.height() } else { 0 },
         );
         let budget = usize::from(heights.tree.saturating_sub(1));
-        let rows = rows_within_height(&forest, budget);
+        let rows = rows_within_height(forest, budget);
         let tree = UnitTree {
             phase: stages.current_phase(),
             rows: &rows,
@@ -208,6 +208,11 @@ impl Heights {
             timeline,
         }
     }
+}
+
+#[must_use]
+pub fn project_boot(state: &BootState, timing: &Timing, now: Duration) -> BootProjection {
+    state.project(now.saturating_sub(timing.keep_finished_units_for))
 }
 
 fn rule(color: Color, left: Line<'static>) -> Block<'static> {
