@@ -2,9 +2,8 @@ use std::{collections::HashSet, time::Duration};
 
 use petgraph::{
     Direction::Incoming,
-    algo::{DfsSpace, has_path_connecting},
     graphmap::DiGraphMap,
-    visit::Visitable,
+    visit::{Dfs, Walker},
 };
 
 use super::{
@@ -13,7 +12,11 @@ use super::{
 };
 
 type WaitingGraph<'a> = DiGraphMap<&'a str, ()>;
-type WaitingSearch<'a> = DfsSpace<&'a str, <WaitingGraph<'a> as Visitable>::Map>;
+
+struct ReachableSibling<'a> {
+    unit: &'a str,
+    reaches: HashSet<&'a str>,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RowStatus {
@@ -130,7 +133,6 @@ impl BootState {
             unblocked.clear();
             leftovers.clear();
         }
-        let mut space = DfsSpace::new(&graph);
         let mut visited = HashSet::new();
         let mut forest = Vec::new();
         stages
@@ -142,7 +144,7 @@ impl BootState {
                 if visited.contains(top) {
                     return;
                 }
-                let stage = self.grow(top, &graph, &mut space, &mut visited);
+                let stage = self.grow(top, &graph, &mut visited);
                 if stage.row.status != RowStatus::Done || !stage.children.is_empty() {
                     forest.push(stage);
                 }
@@ -154,7 +156,6 @@ impl BootState {
         &'a self,
         unit: &'a str,
         graph: &WaitingGraph<'a>,
-        space: &mut WaitingSearch<'a>,
         visited: &mut HashSet<&'a str>,
     ) -> TreeNode {
         visited.insert(unit);
@@ -167,20 +168,24 @@ impl BootState {
             status: record.row_status(),
             chain: Vec::new(),
         };
-        let candidates: Vec<&str> = graph
+        let siblings: Vec<ReachableSibling> = graph
             .neighbors(unit)
             .filter(|dependency| !visited.contains(dependency) && !self.is_milestone(dependency))
+            .map(|sibling| ReachableSibling {
+                unit: sibling,
+                reaches: Dfs::new(graph, sibling).iter(graph).collect(),
+            })
             .collect();
-        let mut waits_on =
-            |waiter, dependency| has_path_connecting(graph, waiter, dependency, Some(&mut *space));
-        let mut children: Vec<&str> = candidates
+        let mut children: Vec<&str> = siblings
             .iter()
-            .copied()
             .filter(|child| {
-                !candidates.iter().any(|sibling| {
-                    sibling != child && waits_on(*sibling, *child) && !waits_on(*child, *sibling)
+                !siblings.iter().any(|sibling| {
+                    sibling.unit != child.unit
+                        && sibling.reaches.contains(child.unit)
+                        && !child.reaches.contains(sibling.unit)
                 })
             })
+            .map(|child| child.unit)
             .collect();
         self.sort_siblings(&mut children);
         visited.extend(children.iter().copied());
@@ -190,7 +195,7 @@ impl BootState {
                 .into_iter()
                 .map(|child| {
                     visited.remove(child);
-                    self.grow(child, graph, space, visited)
+                    self.grow(child, graph, visited)
                 })
                 .collect(),
         }
