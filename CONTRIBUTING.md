@@ -54,9 +54,12 @@ exports libraries that clash with QEMU's or Chromium's.
 - No comments or doc comments; intent lives in names and call flow.
 - Pub fields instead of getters, `Duration` instead of raw integers, crates
   instead of hand-written formatting.
-- One thread: the loop sleeps in one `poll(2)` on the terminal, the bus and an
-  inotify watch on `/run/systemd/ask-password`, with the next frame as timeout,
-  then draws.
+- One thread, Elm-style: a tokio current-thread runtime merges streams of
+  `ScreenInput` (the bus as `BootChange` batches, keys, frame ticks, full
+  repaints, the ask-password inotify watch, SIGTERM) with `stream::select`,
+  and one owned `WatchScreen` absorbs each ready batch and draws once. The
+  live boot and the scripted demos share this loop and differ only in their
+  console desk.
 - Ratatui views are built declaratively from iterators.
 
 ## systemd's private socket
