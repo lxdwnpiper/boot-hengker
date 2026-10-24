@@ -23,6 +23,10 @@ assert console_level() == "1", f"stage 2 sysctl reopened the kernel console: {co
 
 machine.wait_for_unit("greetd.service")
 retry(lambda _: unit_state("bootvine") == "inactive", timeout_seconds=60)
+assert unit_state("demo-late-sensor") == "activating", "the boot finished before the display manager took over"
+assert foreground_terminal() != f"tty{BOOTVINE_TERMINAL}", "bootvine took the console back from the display manager"
+machine.succeed("touch /run/release-late-sensor")
+machine.wait_for_unit("graphical.target")
 
 journal = bootvine_journal()
 print(journal)

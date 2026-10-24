@@ -147,16 +147,20 @@ impl<Desk: ConsoleDesk> WatchScreen<Desk> {
         {
             self.origin = origin;
         }
-        if !self.state.is_complete() {
-            return ControlFlow::Continue(());
+        if self.state.display_manager_started() {
+            let display_manager = self
+                .state
+                .handoff_unit
+                .as_deref()
+                .unwrap_or("display manager");
+            self.desk
+                .begin_handover(display_manager, now + self.timing.wait_for_display_manager);
+        } else if self.state.is_complete() {
+            self.desk.begin_handover(
+                self.state.root.unit().unwrap_or("boot"),
+                now + self.timing.keep_final_frame_for,
+            );
         }
-        let hold_for = if self.state.display_manager_started() {
-            self.timing.wait_for_display_manager
-        } else {
-            self.timing.keep_final_frame_for
-        };
-        self.desk
-            .begin_handover(self.state.root.unit().unwrap_or("boot"), now + hold_for);
         ControlFlow::Continue(())
     }
 
@@ -260,4 +264,85 @@ fn drop_bold(frame: &mut Buffer) {
         .content
         .iter_mut()
         .for_each(|cell| cell.modifier.remove(Modifier::BOLD));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        boot_model::{ActiveState, Activity, HANDOFF_UNIT},
+        demo_script::boot_test_fixtures::{MS, nested_boot_sample, queue_unit, waiting},
+    };
+
+    #[derive(Default)]
+    struct HandoverRecorder {
+        glyphs: Glyphs,
+        handovers: Vec<String>,
+    }
+
+    impl ConsoleDesk for HandoverRecorder {
+        fn glyphs(&self) -> &Glyphs {
+            &self.glyphs
+        }
+
+        fn drops_bold(&self) -> bool {
+            false
+        }
+
+        fn prompt(&self, _now: Duration) -> Option<PasswordPrompt<'_>> {
+            None
+        }
+
+        fn press_key(&mut self, _event: &Event, _now: Duration) -> ControlFlow<WatchEnding> {
+            ControlFlow::Continue(())
+        }
+
+        fn frame_passed(
+            &mut self,
+            _state: &mut BootState,
+            _now: Duration,
+        ) -> ControlFlow<WatchEnding> {
+            ControlFlow::Continue(())
+        }
+
+        fn begin_handover(&mut self, reached: &str, _deadline: Duration) {
+            self.handovers.push(reached.to_owned());
+        }
+    }
+
+    fn screen_watching(state: BootState) -> WatchScreen<HandoverRecorder> {
+        let origin = BootOrigin {
+            host: "test".to_owned(),
+            system: None,
+            generation: None,
+            kernel: "Linux".to_owned(),
+        };
+        WatchScreen::new(
+            state,
+            HandoverRecorder::default(),
+            origin,
+            Colors::default(),
+            Timing::default(),
+            Duration::ZERO,
+        )
+    }
+
+    #[test]
+    fn display_manager_start_hands_over_before_the_boot_completes() {
+        let mut state = nested_boot_sample();
+        queue_unit(&mut state, 20, waiting(HANDOFF_UNIT, &[]), 500 * MS);
+        let mut screen = screen_watching(state);
+        let _ = screen.apply_boot_changes(Vec::new(), 1000 * MS);
+        assert!(screen.desk.handovers.is_empty());
+        let started = BootChange::UpdateActivity {
+            unit: HANDOFF_UNIT.to_owned(),
+            activity: Activity {
+                state: Some(ActiveState::Active),
+                ..Activity::default()
+            },
+        };
+        let _ = screen.apply_boot_changes(vec![started], 6000 * MS);
+        assert!(!screen.state.is_complete());
+        assert_eq!(screen.desk.handovers, [HANDOFF_UNIT]);
+    }
 }

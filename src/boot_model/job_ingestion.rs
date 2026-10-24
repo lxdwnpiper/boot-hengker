@@ -293,7 +293,7 @@ mod tests {
     }
 
     #[test]
-    fn display_manager_activation_does_not_hand_the_console_over() {
+    fn display_manager_activation_does_not_complete_the_boot() {
         let mut state = sample();
         queue_unit(&mut state, 20, waiting(HANDOFF_UNIT, &[]), 500 * MS);
         assert!(!state.display_manager_started());

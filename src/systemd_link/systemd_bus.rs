@@ -389,7 +389,7 @@ fn parse_signal(message: &Message) -> Option<Signal> {
     let member = message.member()?;
     match (&*interface, &*member) {
         (MANAGER_INTERFACE, "JobNew" | "JobRemoved") => parse_job_signal(message, &member),
-        (MANAGER_INTERFACE, "PropertiesChanged") => parse_manager_change(message),
+        (MANAGER_INTERFACE, "StartupFinished") => Some(Signal::BootFinished),
         (PROPERTIES_INTERFACE, "PropertiesChanged") => parse_unit_change(message),
         _ => None,
     }
@@ -425,24 +425,6 @@ fn parse_unit_change(message: &Message) -> Option<Signal> {
     })
 }
 
-fn parse_manager_change(message: &Message) -> Option<Signal> {
-    let (changed_interface, changed, _invalidated): (String, PropMap, Vec<String>) =
-        message.read3().ok()?;
-    if changed_interface != MANAGER_INTERFACE {
-        return None;
-    }
-    finish_timestamp(&changed)
-        .is_some()
-        .then_some(Signal::BootFinished)
-}
-
-fn finish_timestamp(properties: &PropMap) -> Option<u64> {
-    properties
-        .get("FinishTimestampMonotonic")
-        .and_then(|value| value.0.as_u64())
-        .filter(|micros| *micros != 0)
-}
-
 fn activity_from(properties: &PropMap) -> Activity {
     let monotonic = |property: &str| {
         properties
@@ -459,5 +441,25 @@ fn activity_from(properties: &PropMap) -> Activity {
         inactive_exit: monotonic("InactiveExitTimestampMonotonic"),
         active_enter: monotonic("ActiveEnterTimestampMonotonic"),
         active_exit: monotonic("ActiveExitTimestampMonotonic"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn startup_finished_signal_marks_the_boot_finished() {
+        let startup_finished = Message::signal(
+            &Path::from(MANAGER_PATH),
+            &MANAGER_INTERFACE.into(),
+            &"StartupFinished".into(),
+        )
+        .append3(0_u64, 0_u64, 0_u64)
+        .append3(0_u64, 0_u64, 0_u64);
+        assert!(matches!(
+            parse_signal(&startup_finished),
+            Some(Signal::BootFinished)
+        ));
     }
 }

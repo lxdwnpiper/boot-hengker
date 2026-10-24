@@ -17,6 +17,14 @@
         settings.Manager.ShowStatus = lib.mkForce true;
         services.demo-db.serviceConfig.ExecStop = lib.mkForce (waitFor "release-demo-db");
         services.backdoor.before = [ "demo-db.service" ];
+        services.demo-late-sensor = {
+          wantedBy = [ "graphical.target" ];
+          after = [ "greetd.service" ];
+          serviceConfig = {
+            Type = "oneshot";
+            ExecStart = waitFor "release-late-sensor";
+          };
+        };
       };
       virtualisation = {
         memorySize = 2048;
