@@ -9,7 +9,7 @@ name = "bootvine"
 readme = "README.md"
 repository = "https://codeberg.org/wvhulle/bootvine"
 rust-version = "1.91"
-version = "0.0.1"
+version = "0.1.0"
 
 [workspace]
 members = [".", "xtask"]
