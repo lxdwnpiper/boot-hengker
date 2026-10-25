@@ -36,12 +36,16 @@
               inherit system;
               overlays = [ (import rust-overlay) ];
             };
-            craneLib = (crane.mkLib pkgs).overrideToolchain (
-              p: p.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml
-            );
+            rustToolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
+            craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
           in
           f {
-            inherit system pkgs craneLib;
+            inherit
+              system
+              pkgs
+              craneLib
+              rustToolchain
+              ;
             builds = import ./crane-builds.nix { inherit lib pkgs craneLib; };
           }
         );
@@ -75,9 +79,34 @@
           pkgs,
           system,
           builds,
+          rustToolchain,
           ...
         }:
+        let
+          runReleasePlzOnCodeberg = subcommand: description: {
+            type = "app";
+            meta.description = description;
+            program = lib.getExe (
+              pkgs.writeShellApplication {
+                name = "release-plz-${subcommand}";
+                runtimeInputs = [
+                  pkgs.release-plz
+                  pkgs.gitMinimal
+                  pkgs.pkg-config
+                  pkgs.stdenv.cc
+                  rustToolchain
+                ];
+                text = ''
+                  export PKG_CONFIG_PATH="${lib.getDev pkgs.dbus}/lib/pkgconfig"
+                  exec release-plz ${subcommand} --forge gitea --git-token "$CODEBERG_TOKEN"
+                '';
+              }
+            );
+          };
+        in
         {
+          release-plz-release = runReleasePlzOnCodeberg "release" "Publish unpublished versions to crates.io and tag them with a Codeberg release";
+          release-plz-release-pr = runReleasePlzOnCodeberg "release-pr" "Open or update the Codeberg pull request that bumps the version and changelog";
           sample-machine-vm = {
             type = "app";
             meta.description = "Boot a sample machine with bootvine and slow sample units in QEMU";
@@ -156,6 +185,8 @@
             packages = [
               pkgs.prek
               pkgs.convco
+              pkgs.release-plz
+              pkgs.git-cliff
             ];
           };
         }

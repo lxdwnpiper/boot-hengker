@@ -36,6 +36,22 @@ pull requests. Builds on `main` are pushed to the `wvhulle` [Cachix](https://www
 `nixConfig` in `flake.nix` offers as a substituter. The two VM checks need KVM,
 which Codeberg's runners lack, so they only run locally.
 
+## Releases
+
+`.woodpecker/release-pr-and-publish.yaml` runs
+[release-plz](https://release-plz.dev) after the checks pass on `main`. It
+keeps a pull request labelled `release` open on Codeberg that bumps the version
+in `Cargo.toml` and adds the new commits to `CHANGELOG.md`. Only `feat`, `fix`
+and `perf` commits open one; a `!` or a `BREAKING CHANGE` footer bumps the
+minor version while bootvine is below 1.0. Merging that pull request publishes
+the crate to crates.io, tags the merge `v<version>` and creates a Codeberg
+release with the changelog. Settings are in `release-plz.toml`.
+
+The pipeline needs two Woodpecker secrets: `codeberg_token`, a Codeberg access
+token with repository write access, and `cargo_registry_token`, a crates.io
+token that may publish new crates and updates. Preview the next release
+locally from the dev shell with `release-plz update`.
+
 ## Testing
 
 | What | Command |
