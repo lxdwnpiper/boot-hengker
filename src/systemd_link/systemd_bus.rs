@@ -62,6 +62,11 @@ impl StatusOutput {
     }
 }
 
+pub enum SignalBatch {
+    Open(Vec<Signal>),
+    Closed(Vec<Signal>),
+}
+
 pub enum Signal {
     JobNew {
         id: u32,
@@ -207,17 +212,14 @@ impl Session {
         poll(&mut watched, Some(&Timespec::default())).is_ok_and(|ready| ready > 0)
     }
 
-    fn read_one_chunk(&self) -> Result<(), Error> {
-        let still_connected =
-            self.channel.read_write(Some(Duration::ZERO)).is_ok() && self.channel.is_connected();
-        still_connected.then_some(()).ok_or(Error::Disconnected)
+    fn read_one_chunk(&self) -> bool {
+        self.channel.read_write(Some(Duration::ZERO)).is_ok() && self.channel.is_connected()
     }
 
-    fn arrived_messages(&self) -> Result<Vec<Message>, Error> {
+    fn arrived_messages(&self) -> Vec<Message> {
         iter::repeat_with(|| self.read_one_chunk())
-            .find(|outcome| outcome.is_err() || !self.socket_has_unread_bytes())
-            .unwrap_or(Ok(()))?;
-        Ok(iter::from_fn(|| self.channel.pop_message()).collect())
+            .find(|still_connected| !still_connected || !self.socket_has_unread_bytes());
+        iter::from_fn(|| self.channel.pop_message()).collect()
     }
 }
 
@@ -240,15 +242,18 @@ impl BusConnection {
     }
 
     fn drain_replies(&mut self) -> Result<Vec<Message>, Error> {
-        let (signals, replies): (Vec<Message>, Vec<Message>) = self
-            .session
-            .get_ref()
-            .arrived_messages()?
+        let session = self.session.get_ref();
+        let (signals, replies): (Vec<Message>, Vec<Message>) = session
+            .arrived_messages()
             .into_iter()
             .partition(|message| message.msg_type() == MessageType::Signal);
         self.early_signals
             .extend(signals.iter().filter_map(parse_signal));
-        Ok(replies)
+        if session.channel.is_connected() {
+            Ok(replies)
+        } else {
+            Err(Error::Disconnected)
+        }
     }
 
     async fn next_replies(&mut self) -> Result<Vec<Message>, Error> {
@@ -350,12 +355,17 @@ impl BusConnection {
             .read1()?)
     }
 
-    pub async fn receive_signals(&mut self, patience: Duration) -> Result<Vec<Signal>, Error> {
+    pub async fn receive_signals(&mut self, patience: Duration) -> SignalBatch {
         if self.early_signals.is_empty() {
             readable_or_timeout(&self.session, patience).await;
         }
-        self.drain_replies()?;
-        Ok(mem::take(&mut self.early_signals))
+        let still_connected = self.drain_replies().is_ok();
+        let signals = mem::take(&mut self.early_signals);
+        if still_connected {
+            SignalBatch::Open(signals)
+        } else {
+            SignalBatch::Closed(signals)
+        }
     }
 }
 

@@ -20,7 +20,8 @@ use crate::{
         monotonic_clock::monotonic_now,
         switch_root::Sysroot,
         systemd_bus::{
-            BusConnection, FetchedUnit, JobListing, Scope, Session, Signal, StatusOutput,
+            BusConnection, FetchedUnit, JobListing, Scope, Session, Signal, SignalBatch,
+            StatusOutput,
         },
     },
 };
@@ -93,6 +94,13 @@ impl TrackedUnit {
             Self::New { facts, activity } => Some(BootChange::TrackUnit { facts, activity }),
         }
     }
+}
+
+fn queued_units(signals: &[Signal]) -> impl Iterator<Item = &str> {
+    signals.iter().filter_map(|signal| match signal {
+        Signal::JobNew { unit, .. } => Some(unit.as_str()),
+        _ => None,
+    })
 }
 
 struct BootTracker {
@@ -196,14 +204,30 @@ impl BusFeed {
 
 impl BootTracker {
     async fn receive(&mut self, connection: &mut BusConnection) -> Result<Vec<BootChange>, Error> {
-        let signals = connection
-            .receive_signals(BACKGROUND_CHECK_INTERVAL)
-            .await?;
-        Ok(self
-            .collect_changes(connection, signals, async |tracker, connection, signal| {
-                tracker.changes_for(connection, signal).await
-            })
-            .await)
+        match connection.receive_signals(BACKGROUND_CHECK_INTERVAL).await {
+            SignalBatch::Open(signals) => {
+                self.arm_root_switch(queued_units(&signals));
+                Ok(self
+                    .collect_changes(connection, signals, async |tracker, connection, signal| {
+                        tracker.changes_for(connection, signal).await
+                    })
+                    .await)
+            }
+            SignalBatch::Closed(signals) => {
+                self.arm_root_switch(queued_units(&signals));
+                Err(Error::Disconnected)
+            }
+        }
+    }
+
+    fn arm_root_switch<'unit>(&mut self, mut queued_units: impl Iterator<Item = &'unit str>) {
+        if self.phase == Phase::Initrd
+            && matches!(self.root_switch, RootSwitch::NotQueued)
+            && queued_units.any(|unit| unit == SWITCH_ROOT_UNIT)
+            && let Ok(sysroot) = Sysroot::hold()
+        {
+            self.root_switch = RootSwitch::Queued(sysroot);
+        }
     }
 
     async fn collect_changes<Item>(
@@ -288,6 +312,7 @@ impl BootTracker {
             .into_iter()
             .filter(|job| shutting_down || job.kind == JobKind::BringsUp)
             .collect();
+        self.arm_root_switch(jobs.iter().map(|job| job.unit.as_str()));
         let requested_root = self.requested_root(connection, &jobs).await?;
         let boot_progress = self.boot_progress_changes(connection, attempt).await?;
         let tracked_root = self.track(connection, &requested_root).await;
@@ -407,13 +432,6 @@ impl BootTracker {
         let unit = tracked
             .as_ref()
             .map_or(unit, |tracked| tracked.name().to_owned());
-        if self.phase == Phase::Initrd
-            && matches!(self.root_switch, RootSwitch::NotQueued)
-            && unit == SWITCH_ROOT_UNIT
-            && let Ok(sysroot) = Sysroot::hold()
-        {
-            self.root_switch = RootSwitch::Queued(sysroot);
-        }
         tracked
             .and_then(TrackedUnit::into_change)
             .into_iter()
