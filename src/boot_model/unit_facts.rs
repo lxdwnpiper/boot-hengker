@@ -113,25 +113,20 @@ impl UnitKind {
             Self::Scope => Some("Scope"),
         }
     }
-
-    fn labelled_by_description(self) -> bool {
-        matches!(
-            self,
-            Self::Device | Self::Mount | Self::Swap | Self::Automount
-        )
-    }
 }
 
-fn labelled_by_description(facts: &UnitFacts) -> bool {
-    facts.description.is_some() && UnitKind::of(&facts.name).labelled_by_description()
+fn description_label(facts: &UnitFacts) -> Option<&String> {
+    facts.description.as_ref().filter(|_| {
+        matches!(
+            UnitKind::of(&facts.name),
+            UnitKind::Device | UnitKind::Mount | UnitKind::Swap | UnitKind::Automount
+        )
+    })
 }
 
 pub(super) fn display_label(facts: &UnitFacts) -> String {
-    if labelled_by_description(facts) {
-        return facts
-            .description
-            .clone()
-            .unwrap_or_else(|| facts.name.clone());
+    if let Some(description) = description_label(facts) {
+        return description.clone();
     }
     match UnitKind::of(&facts.name) {
         UnitKind::Target | UnitKind::Other => facts.name.clone(),
@@ -146,7 +141,7 @@ pub(super) fn summary(facts: &UnitFacts) -> Option<String> {
     let repeats_the_name = facts.description.as_deref().is_some_and(|description| {
         description == facts.name || description.eq_ignore_ascii_case(&display_label(facts))
     });
-    if labelled_by_description(facts) || repeats_the_name {
+    if description_label(facts).is_some() || repeats_the_name {
         return None;
     }
     facts.description.clone()

@@ -1,6 +1,5 @@
 mod boot_change;
 pub mod boot_origin;
-mod boot_projection;
 mod job_ingestion;
 mod reached_milestones;
 mod unit_facts;
@@ -10,7 +9,6 @@ use std::{collections::HashMap, time::Duration};
 
 pub use self::{
     boot_change::BootChange,
-    boot_projection::BootProjection,
     reached_milestones::MilestoneRow,
     unit_facts::{ActiveState, Activity, JobKind, JobResult, UnitFacts, UnitKind, UnitTimeouts},
     waiting_tree::{RowStatus, TreeNode, TreeRow, flatten_forest},

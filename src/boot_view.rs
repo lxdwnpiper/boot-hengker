@@ -35,7 +35,7 @@ use self::{
 };
 use crate::{
     boot_model::{
-        BootProjection, BootState, RowStatus, TreeRow, UnitKind, boot_origin::BootOrigin,
+        BootState, MilestoneRow, RowStatus, TreeNode, TreeRow, UnitKind, boot_origin::BootOrigin,
         flatten_forest,
     },
     screen_settings::{color_scheme::Colors, config_file::Timing, font_glyphs::Glyphs},
@@ -136,7 +136,7 @@ impl Widget for BootView<'_> {
         };
         let timeline = self.timeline(&all_rows);
         let footer = Footer {
-            tally: self.projection.tally,
+            tally: self.state.tally(),
             colors: &self.colors.footer,
             glyphs: self.glyphs,
         };
@@ -218,9 +218,18 @@ impl Heights {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct BootProjection {
+    pub forest: Vec<TreeNode>,
+    pub milestones: Vec<MilestoneRow>,
+}
+
 #[must_use]
 pub fn project_boot(state: &BootState, timing: &Timing, now: Duration) -> BootProjection {
-    state.project(now.saturating_sub(timing.keep_finished_units_for))
+    BootProjection {
+        forest: state.waiting_forest(now.saturating_sub(timing.keep_finished_units_for)),
+        milestones: state.milestones(),
+    }
 }
 
 fn rule(color: Color, left: Line<'static>) -> Block<'static> {

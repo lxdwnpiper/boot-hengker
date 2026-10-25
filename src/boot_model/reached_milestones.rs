@@ -10,30 +10,9 @@ pub struct MilestoneRow {
     pub reached_at: Duration,
 }
 
-struct ReachedMilestone<'a> {
-    target: &'a str,
-    reached_at: Duration,
-}
-
-struct MilestoneWalk {
-    rows: Vec<MilestoneRow>,
+struct MilestoneCursor {
     previous: Duration,
     consumed: usize,
-}
-
-impl MilestoneWalk {
-    fn advance(mut self, reached: &ReachedMilestone, succeeded_sorted: &[Duration]) -> Self {
-        let upto = succeeded_sorted.partition_point(|at| *at <= reached.reached_at);
-        self.rows.push(MilestoneRow {
-            label: reached.target.to_owned(),
-            finished_units: upto.saturating_sub(self.consumed),
-            started_at: self.previous.min(reached.reached_at),
-            reached_at: reached.reached_at,
-        });
-        self.consumed = self.consumed.max(upto);
-        self.previous = reached.reached_at;
-        self
-    }
 }
 
 impl BootState {
@@ -59,31 +38,41 @@ impl BootState {
             })
             .collect();
         succeeded.sort_unstable();
-        let start = MilestoneWalk {
-            rows: self
-                .finished_stages
-                .iter()
-                .map(|stage| MilestoneRow {
-                    label: stage.label.to_owned(),
-                    finished_units: stage.finished_units,
-                    started_at: stage.started_at,
-                    reached_at: stage.reached_at,
-                })
-                .collect(),
+        let start = MilestoneCursor {
             previous: self
                 .finished_stages
                 .last()
                 .map_or(self.origin, |stage| stage.reached_at),
             consumed: 0,
         };
-        self.milestone_targets
+        let reached_rows = self
+            .milestone_targets
             .iter()
-            .filter_map(|target| {
-                self.milestone_reached_at(target)
-                    .map(|reached_at| ReachedMilestone { target, reached_at })
+            .scan(start, |cursor, target| {
+                Some(self.milestone_reached_at(target).map(|reached_at| {
+                    let upto = succeeded.partition_point(|at| *at <= reached_at);
+                    let row = MilestoneRow {
+                        label: target.clone(),
+                        finished_units: upto.saturating_sub(cursor.consumed),
+                        started_at: cursor.previous.min(reached_at),
+                        reached_at,
+                    };
+                    cursor.consumed = cursor.consumed.max(upto);
+                    cursor.previous = reached_at;
+                    row
+                }))
             })
-            .fold(start, |walk, reached| walk.advance(&reached, &succeeded))
-            .rows
+            .flatten();
+        self.finished_stages
+            .iter()
+            .map(|stage| MilestoneRow {
+                label: stage.label.to_owned(),
+                finished_units: stage.finished_units,
+                started_at: stage.started_at,
+                reached_at: stage.reached_at,
+            })
+            .chain(reached_rows)
+            .collect()
     }
 }
 

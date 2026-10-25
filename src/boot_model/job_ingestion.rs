@@ -103,16 +103,6 @@ impl BootState {
         }
     }
 
-    pub fn set_handoff(&mut self, unit: String) {
-        if self.handoff_unit.is_some() {
-            self.handoff_unit = Some(unit);
-        }
-    }
-
-    pub fn mark_boot_finished(&mut self) {
-        self.boot_finished = true;
-    }
-
     pub fn track_unit(&mut self, facts: UnitFacts, activity: Activity) {
         let record = self
             .units
@@ -133,21 +123,20 @@ impl BootState {
     }
 
     pub fn queue_job(&mut self, id: u32, unit: &str, kind: JobKind, at: Duration) {
-        self.enqueue(id, unit, kind, at);
-        if kind == JobKind::BringsUp
-            && self.jobs.get(&id).is_some_and(|tracked| tracked == unit)
+        if self.enqueue(id, unit, kind, at)
+            && kind == JobKind::BringsUp
             && self.root == Root::Awaiting(unit.to_owned())
         {
             self.root = Root::Queued(unit.to_owned());
         }
     }
 
-    fn enqueue(&mut self, id: u32, unit: &str, kind: JobKind, at: Duration) {
-        if self.jobs.contains_key(&id) {
-            return;
+    fn enqueue(&mut self, id: u32, unit: &str, kind: JobKind, at: Duration) -> bool {
+        if let Some(tracked) = self.jobs.get(&id) {
+            return tracked == unit;
         }
         let Some(record) = self.units.get_mut(unit) else {
-            return;
+            return false;
         };
         record.progress = Progress::Pending(PendingJob {
             id,
@@ -155,6 +144,7 @@ impl BootState {
             kind,
         });
         self.jobs.insert(id, unit.to_owned());
+        true
     }
 
     pub fn finish_job(&mut self, id: u32, result: JobResult, at: Duration) {
@@ -253,11 +243,6 @@ impl BootState {
     }
 
     #[must_use]
-    pub fn display_manager_started(&self) -> bool {
-        self.started_display_manager().is_some()
-    }
-
-    #[must_use]
     pub fn tally(&self) -> Tally {
         let carried = Tally {
             done: self
@@ -287,7 +272,7 @@ impl BootState {
 mod tests {
     use super::*;
     use crate::{
-        boot_model::{RowStatus, UnitTimeouts},
+        boot_model::{BootChange, RowStatus, UnitTimeouts},
         demo_script::boot_test_fixtures::{
             MS, activating, facts, nested_boot_sample as sample, queue_unit, queued_boot, running,
             waiting, waiting_rows,
@@ -335,24 +320,24 @@ mod tests {
     fn display_manager_activation_does_not_complete_the_boot() {
         let mut state = sample();
         queue_unit(&mut state, 20, waiting(HANDOFF_UNIT, &[]), 500 * MS);
-        assert!(!state.display_manager_started());
+        assert_eq!(state.started_display_manager(), None);
         state.update_activity(HANDOFF_UNIT, activating(6000 * MS));
         assert!(!state.is_complete());
-        assert!(state.display_manager_started());
+        assert_eq!(state.started_display_manager(), Some(HANDOFF_UNIT));
     }
 
     #[test]
     fn boot_finished_hands_the_console_over() {
         let mut state = sample();
         queue_unit(&mut state, 20, waiting(HANDOFF_UNIT, &[]), 500 * MS);
-        state.mark_boot_finished();
+        state.apply(BootChange::BootFinished);
         assert!(state.is_complete());
     }
 
     #[test]
     fn boot_finished_is_ignored_in_the_initrd() {
         let mut state = BootState::new(Phase::Initrd);
-        state.mark_boot_finished();
+        state.apply(BootChange::BootFinished);
         assert!(!state.is_complete());
     }
 

@@ -6,9 +6,9 @@ use std::{
 
 use ratatui::{Terminal, backend::TestBackend};
 
-use super::{BootView, project_boot, screen_render_fixtures::ryzen_origin};
+use super::{BootProjection, BootView, project_boot, screen_render_fixtures::ryzen_origin};
 use crate::{
-    boot_model::{BootProjection, BootState, JobResult, Phase, flatten_forest},
+    boot_model::{BootState, JobResult, Phase, flatten_forest},
     demo_script::boot_test_fixtures::{MS, QueuedUnit, queued_boot, running, waiting},
     screen_settings::{color_scheme::Colors, config_file::Timing, font_glyphs::Glyphs},
 };

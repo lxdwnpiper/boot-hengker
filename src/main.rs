@@ -92,8 +92,14 @@ enum DefaultsFormat {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
-        Some(Command::Defaults(options)) => print_defaults(options.format),
-        Some(Command::Check(options)) => check_config_file(&options),
+        Some(Command::Defaults(options)) => report_outcome(
+            render_defaults(options.format).map(|text| println!("{}", text.trim_end())),
+        ),
+        Some(Command::Check(options)) => report_outcome(
+            read_config_file(&options.path)
+                .map(|_| ())
+                .map_err(|error| format!("{}: {error}", options.path.display())),
+        ),
         Some(Command::Install(options)) => report_outcome(install_files(&options)),
         Some(Command::Uninstall(options)) => report_outcome(uninstall_files(&options)),
         None => watch_boot(cli.watch),
@@ -116,29 +122,6 @@ fn render_defaults(format: DefaultsFormat) -> Result<String, Box<dyn Error>> {
         DefaultsFormat::Toml => toml::to_string_pretty(&defaults)?,
         DefaultsFormat::Nix => ser_nix::to_string(&defaults)?,
     })
-}
-
-fn print_defaults(format: DefaultsFormat) -> ExitCode {
-    match render_defaults(format) {
-        Ok(text) => {
-            println!("{}", text.trim_end());
-            ExitCode::SUCCESS
-        }
-        Err(error) => {
-            eprintln!("bootvine: {error}");
-            ExitCode::FAILURE
-        }
-    }
-}
-
-fn check_config_file(options: &CheckOptions) -> ExitCode {
-    match read_config_file(&options.path) {
-        Ok(_) => ExitCode::SUCCESS,
-        Err(error) => {
-            eprintln!("bootvine: {}: {error}", options.path.display());
-            ExitCode::FAILURE
-        }
-    }
 }
 
 fn watch_boot(options: WatchOptions) -> ExitCode {

@@ -43,12 +43,16 @@ impl BootState {
             BootChange::QueueJob { id, unit, kind, at } => self.queue_job(id, &unit, kind, at),
             BootChange::FinishJob { id, result, at } => self.finish_job(id, result, at),
             BootChange::SetRoot(root) => self.set_root(root),
-            BootChange::SetHandoff(unit) => self.set_handoff(unit),
+            BootChange::SetHandoff(unit) => {
+                if let Some(handoff) = &mut self.handoff_unit {
+                    *handoff = unit;
+                }
+            }
             BootChange::SetOrigin(origin) => self.origin = origin,
             BootChange::SwitchRoot { at } => self.switch_root(at),
             BootChange::ForgetJobs => self.forget_jobs(),
             BootChange::ManagerExited { at } => self.manager_exited_at = Some(at),
-            BootChange::BootFinished => self.mark_boot_finished(),
+            BootChange::BootFinished => self.boot_finished = true,
         }
     }
 }

@@ -9,8 +9,8 @@ use ratatui::{
 };
 
 use crate::{
-    boot_model::{BootChange, BootProjection, BootState, boot_origin::BootOrigin},
-    boot_view::{BootView, PasswordPrompt, project_boot},
+    boot_model::{BootChange, BootState, boot_origin::BootOrigin},
+    boot_view::{BootProjection, BootView, PasswordPrompt, project_boot},
     console_session::console_palette::ConsoleLook,
     screen_settings::{color_scheme::Colors, config_file::Timing},
     systemd_link::{link_error::Error, monotonic_clock::monotonic_now},
@@ -162,12 +162,7 @@ impl<Desk: ConsoleDesk> WatchScreen<Desk> {
         if self.state.phase != phase_before {
             self.origin = (self.read_origin)();
         }
-        if self.state.display_manager_started() {
-            let display_manager = self
-                .state
-                .handoff_unit
-                .as_deref()
-                .unwrap_or("display manager");
+        if let Some(display_manager) = self.state.started_display_manager() {
             self.desk
                 .begin_handover(display_manager, now + self.timing.wait_for_display_manager);
         } else if self.state.is_complete() {
