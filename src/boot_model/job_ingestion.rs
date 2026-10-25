@@ -88,7 +88,6 @@ impl BootState {
             manager_exited_at: None,
             milestone_targets,
             boot_finished: false,
-            finished_before_reconnect: 0,
             units: HashMap::new(),
             jobs: HashMap::new(),
         }
@@ -190,7 +189,7 @@ impl BootState {
             .count();
         self.finished_stages.push(FinishedStage {
             label: Phase::Initrd.label(),
-            finished_units: finished_here + self.finished_before_reconnect,
+            finished_units: finished_here,
             failed_units: self
                 .units
                 .values()
@@ -201,20 +200,15 @@ impl BootState {
         });
         self.phase = Phase::Host;
         self.root = Root::Unresolved;
-        self.finished_before_reconnect = 0;
         self.units.clear();
         self.jobs.clear();
     }
 
     pub fn forget_jobs(&mut self) {
-        self.finished_before_reconnect += self
-            .units
-            .values()
-            .filter(|record| record.is_finished())
-            .count();
         self.jobs.clear();
         self.units
             .values_mut()
+            .filter(|record| matches!(record.progress, Progress::Pending(_)))
             .for_each(|record| record.progress = Progress::Untouched);
     }
 
@@ -249,8 +243,7 @@ impl BootState {
                 .finished_stages
                 .iter()
                 .map(|stage| stage.finished_units)
-                .sum::<usize>()
-                + self.finished_before_reconnect,
+                .sum::<usize>(),
             failed: self.failed.len(),
             ..Tally::default()
         };
@@ -304,6 +297,18 @@ mod tests {
         let mut state = sample();
         state.forget_jobs();
         assert!(!state.is_complete());
+    }
+
+    #[test]
+    fn reconnecting_keeps_the_finished_units() {
+        let mut state = sample();
+        state.finish_job(7, JobResult::Done, 2000 * MS);
+        let tally = state.tally();
+        let milestones = state.milestones();
+        state.forget_jobs();
+        assert_eq!(state.tally().done, tally.done);
+        assert_eq!(state.milestones(), milestones);
+        assert!(!milestones.is_empty());
     }
 
     #[test]
