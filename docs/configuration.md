@@ -39,7 +39,70 @@ some, write only those keys:
 
 `bootvine defaults` prints every key with its default as TOML, and
 `bootvine defaults --format nix` prints the same as a Nix attribute set to
-paste into `services.bootvine.settings`.
+paste into `services.bootvine.settings`:
+
+```toml
+[colors.header]
+origin = "white"
+separators = "dark-gray"
+total-time = "white"
+
+[colors.stages]
+branches = "dark-gray"
+finished-label = "gray"
+finished-time = "green"
+unit-count = "gray"
+failed-count = "light-red"
+current = "white"
+
+[colors.tree]
+branches = "dark-gray"
+columns = "dark-gray"
+target = "cyan"
+current-stage = "yellow"
+reached-stage = "green"
+running-unit = "white"
+running-marker = "yellow"
+waiting-unit = "gray"
+finished-unit = "dark-gray"
+finished-marker = "green"
+failed-unit = "light-red"
+overflow = "gray"
+
+[colors.timeline]
+rule = "dark-gray"
+title = "gray"
+axis = "dark-gray"
+milestone = "green"
+finished = "green"
+finished-label = "gray"
+failed = "light-red"
+queued-bar = "gray"
+running = "yellow"
+running-label = "white"
+
+[colors.footer]
+rule = "dark-gray"
+done = "green"
+running = "yellow"
+waiting = "gray"
+failed = "light-red"
+no-failures = "gray"
+
+[colors.password]
+frame = "yellow"
+message = "white"
+hint = "dark-gray"
+checking = "gray"
+rejected = "light-red"
+backdrop = "dark-gray"
+
+[timing]
+keep-finished-units-for = "2s"
+hide-runs-shorter-than = "1s"
+keep-final-frame-for = "1s"
+wait-for-display-manager = "10s"
+```
 
 ## Colours
 
@@ -61,12 +124,12 @@ palette instead: `console.colors` on NixOS, or the `vt.default_red`,
 
 ## Timing
 
-| Key | Default | Meaning |
-| --- | --- | --- |
-| `keep-finished-units-for` | `2s` | How long a finished unit stays in the tree, faded, before it leaves. |
-| `hide-runs-shorter-than` | `1s` | Runs shorter than this get no timer and no timeline bar. |
-| `keep-final-frame-for` | `1s` | How long the last frame stays before the console is handed back. |
-| `wait-for-display-manager` | `10s` | When a display manager is starting, how long to wait for it to switch to its own terminal instead, so the console's status lines never show in between. |
+| Key | Meaning |
+| --- | --- |
+| `keep-finished-units-for` | How long a finished unit stays in the tree, faded, before it leaves. |
+| `hide-runs-shorter-than` | Runs shorter than this get no timer and no timeline bar. |
+| `keep-final-frame-for` | How long the last frame stays before the console is handed back. |
+| `wait-for-display-manager` | When a display manager is starting, how long to wait for it to switch to its own terminal instead, so the console's status lines never show in between. |
 
 ## Early kernel messages
 

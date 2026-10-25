@@ -1,4 +1,5 @@
 mod record_screencasts;
+mod sync_default_config;
 mod task_error;
 
 use std::{path::PathBuf, process::ExitCode};
@@ -19,6 +20,10 @@ enum Task {
                  recordings/"
     )]
     RecordScreencasts(RecordScreencastsOptions),
+    #[command(
+        about = "Rewrite the defaults block in docs/configuration.md from `bootvine defaults`"
+    )]
+    SyncDefaultConfig,
 }
 
 #[derive(Args)]
@@ -32,6 +37,7 @@ fn main() -> ExitCode {
         Task::RecordScreencasts(options) => {
             record_screencasts::record_screencasts(&options.passphrase_png)
         }
+        Task::SyncDefaultConfig => sync_default_config::sync_default_config(),
     };
     match outcome {
         Ok(()) => ExitCode::SUCCESS,

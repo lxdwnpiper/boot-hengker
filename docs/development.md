@@ -85,6 +85,8 @@ exports libraries that clash with [QEMU](https://www.qemu.org) or Chromium.
 
 - `nix run .#record-screencasts` re-records the README animations from the
   scripted demos and copies the passphrase screenshot from the VM check.
+- `cargo xtask sync-default-config` rewrites the defaults block in
+  [configuration](configuration.md#defaults) from `bootvine defaults`.
 - `cargo run -- install --destdir <dir> --initrd dracut` stages an install
   without touching the system; `cargo run -- uninstall --destdir <dir>` removes
   it again.

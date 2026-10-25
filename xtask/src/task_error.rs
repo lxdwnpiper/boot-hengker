@@ -10,4 +10,6 @@ pub enum TaskError {
     File { path: PathBuf, source: io::Error },
     #[error("no recordings directory here; run from the repository root")]
     NotInRepositoryRoot,
+    #[error("{0} has no ```toml block under its Defaults heading")]
+    DefaultsBlockMissing(&'static str),
 }
