@@ -11,8 +11,8 @@ use ratatui::{
 use crate::{
     boot_model::{BootChange, BootProjection, BootState, boot_origin::BootOrigin},
     boot_view::{BootView, PasswordPrompt, project_boot},
-    console_session::console_palette::ConsolePalette,
-    screen_settings::{color_scheme::Colors, config_file::Timing, font_glyphs::Glyphs},
+    console_session::console_palette::ConsoleLook,
+    screen_settings::{color_scheme::Colors, config_file::Timing},
     systemd_link::{link_error::Error, monotonic_clock::monotonic_now},
 };
 
@@ -37,27 +37,30 @@ pub enum WatchEnding {
     Failed(Error),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Refresh {
+    Steady,
+    Repaint,
+    Clear,
+}
+
 pub trait ConsoleDesk {
-    fn glyphs(&self) -> &Glyphs;
-    fn palette(&self) -> ConsolePalette;
     fn prompt(&self, now: Duration) -> Option<PasswordPrompt<'_>>;
     fn press_key(&mut self, event: &Event, now: Duration) -> ControlFlow<WatchEnding>;
-    fn frame_passed(&mut self, state: &mut BootState, now: Duration) -> ControlFlow<WatchEnding>;
+    fn frame_passed(&mut self, now: Duration) -> ControlFlow<WatchEnding, Vec<BootChange>>;
 
-    fn password_requests_changed(&mut self) {}
+    fn look(&self) -> ConsoleLook {
+        ConsoleLook::default()
+    }
+
+    fn password_requests_changed(&mut self) -> Refresh {
+        Refresh::Steady
+    }
 
     fn check_prompts(&mut self) {}
 
-    fn keep_console_up(&mut self) -> bool {
-        false
-    }
-
-    fn take_clear_request(&mut self) -> bool {
-        false
-    }
-
-    fn refreshed_origin(&self) -> Option<BootOrigin> {
-        None
+    fn keep_console_up(&mut self) -> Refresh {
+        Refresh::Steady
     }
 
     fn begin_handover(&mut self, _reached: &str, _deadline: Duration) {}
@@ -71,8 +74,9 @@ struct CachedProjection {
 pub struct WatchScreen<Desk> {
     pub state: BootState,
     pub desk: Desk,
+    read_origin: fn() -> BootOrigin,
     origin: BootOrigin,
-    full_repaint_due: bool,
+    refresh_due: Refresh,
     colors: Colors,
     timing: Timing,
     epoch: Duration,
@@ -83,7 +87,7 @@ impl<Desk: ConsoleDesk> WatchScreen<Desk> {
     pub fn new(
         state: BootState,
         desk: Desk,
-        origin: BootOrigin,
+        read_origin: fn() -> BootOrigin,
         colors: Colors,
         timing: Timing,
         epoch: Duration,
@@ -91,13 +95,18 @@ impl<Desk: ConsoleDesk> WatchScreen<Desk> {
         Self {
             state,
             desk,
-            origin,
-            full_repaint_due: false,
+            read_origin,
+            origin: read_origin(),
+            refresh_due: Refresh::Steady,
             colors,
             timing,
             epoch,
             projection: None,
         }
+    }
+
+    fn request_refresh(&mut self, refresh: Refresh) {
+        self.refresh_due = self.refresh_due.max(refresh);
     }
 
     #[must_use]
@@ -110,21 +119,29 @@ impl<Desk: ConsoleDesk> WatchScreen<Desk> {
         match input {
             ScreenInput::Boot(changes) => self.apply_boot_changes(changes, now),
             ScreenInput::Key(event) => self.desk.press_key(&event, now),
-            ScreenInput::Frame => self.desk.frame_passed(&mut self.state, now),
+            ScreenInput::Frame => {
+                let changes = self.desk.frame_passed(now)?;
+                if changes.is_empty() {
+                    return ControlFlow::Continue(());
+                }
+                self.apply_boot_changes(changes, now)
+            }
             ScreenInput::PromptCheck => {
                 self.desk.check_prompts();
                 ControlFlow::Continue(())
             }
             ScreenInput::ConsoleUpkeep => {
-                self.full_repaint_due |= self.desk.keep_console_up();
+                let refresh = self.desk.keep_console_up();
+                self.request_refresh(refresh);
                 ControlFlow::Continue(())
             }
             ScreenInput::FullRepaint => {
-                self.full_repaint_due = true;
+                self.request_refresh(Refresh::Repaint);
                 ControlFlow::Continue(())
             }
             ScreenInput::PasswordRequests => {
-                self.desk.password_requests_changed();
+                let refresh = self.desk.password_requests_changed();
+                self.request_refresh(refresh);
                 ControlFlow::Continue(())
             }
             ScreenInput::Terminate => ControlFlow::Break(WatchEnding::ViewerLeft),
@@ -142,10 +159,8 @@ impl<Desk: ConsoleDesk> WatchScreen<Desk> {
             .into_iter()
             .for_each(|change| self.state.apply(change));
         self.projection = None;
-        if self.state.phase != phase_before
-            && let Some(origin) = self.desk.refreshed_origin()
-        {
-            self.origin = origin;
+        if self.state.phase != phase_before {
+            self.origin = (self.read_origin)();
         }
         if self.state.display_manager_started() {
             let display_manager = self
@@ -183,10 +198,11 @@ impl<Desk: ConsoleDesk> WatchScreen<Desk> {
     where
         Error: From<B::Error>,
     {
-        if self.desk.take_clear_request() {
+        if self.refresh_due == Refresh::Clear {
             terminal.clear()?;
         }
         let now = self.now();
+        let look = self.desk.look();
         if self
             .projection
             .as_ref()
@@ -208,20 +224,20 @@ impl<Desk: ConsoleDesk> WatchScreen<Desk> {
                     projection,
                     colors: &self.colors,
                     timing: &self.timing,
-                    glyphs: self.desk.glyphs(),
+                    glyphs: &look.glyphs,
                     now,
                     origin: &self.origin,
                     password_prompt: self.desk.prompt(now),
                 },
                 canvas.area(),
             );
-            self.desk.palette().fit_frame(canvas.buffer_mut());
+            look.palette.fit_frame(canvas.buffer_mut());
         })?;
-        if self.full_repaint_due {
+        if self.refresh_due == Refresh::Repaint {
             let painted = completed.buffer.clone();
             overwrite_every_cell(terminal.backend_mut(), &painted)?;
-            self.full_repaint_due = false;
         }
+        self.refresh_due = Refresh::Steady;
         Ok(())
     }
 }
@@ -267,19 +283,10 @@ mod tests {
 
     #[derive(Default)]
     struct HandoverRecorder {
-        glyphs: Glyphs,
         handovers: Vec<String>,
     }
 
     impl ConsoleDesk for HandoverRecorder {
-        fn glyphs(&self) -> &Glyphs {
-            &self.glyphs
-        }
-
-        fn palette(&self) -> ConsolePalette {
-            ConsolePalette::Terminal
-        }
-
         fn prompt(&self, _now: Duration) -> Option<PasswordPrompt<'_>> {
             None
         }
@@ -288,12 +295,8 @@ mod tests {
             ControlFlow::Continue(())
         }
 
-        fn frame_passed(
-            &mut self,
-            _state: &mut BootState,
-            _now: Duration,
-        ) -> ControlFlow<WatchEnding> {
-            ControlFlow::Continue(())
+        fn frame_passed(&mut self, _now: Duration) -> ControlFlow<WatchEnding, Vec<BootChange>> {
+            ControlFlow::Continue(Vec::new())
         }
 
         fn begin_handover(&mut self, reached: &str, _deadline: Duration) {
@@ -301,17 +304,20 @@ mod tests {
         }
     }
 
-    fn screen_watching(state: BootState) -> WatchScreen<HandoverRecorder> {
-        let origin = BootOrigin {
+    fn test_origin() -> BootOrigin {
+        BootOrigin {
             host: "test".to_owned(),
             system: None,
             generation: None,
             kernel: "Linux".to_owned(),
-        };
+        }
+    }
+
+    fn screen_watching(state: BootState) -> WatchScreen<HandoverRecorder> {
         WatchScreen::new(
             state,
             HandoverRecorder::default(),
-            origin,
+            test_origin,
             Colors::default(),
             Timing::default(),
             Duration::ZERO,

@@ -1,62 +1,81 @@
-use std::{future::ready, io, mem, ops::ControlFlow, time::Duration};
+use std::{future::ready, io, ops::ControlFlow, time::Duration};
 
 use crossterm::event::Event;
 use futures::{Stream, StreamExt};
 
 use crate::{
-    boot_model::{BootState, boot_origin::BootOrigin},
+    boot_model::BootChange,
     boot_view::PasswordPrompt,
     console_session::{
-        ask_password::{PasswordEntry, RequestWatch},
-        console_palette::ConsolePalette,
-        console_takeover::Console,
+        ask_password::{self, PasswordEntry, RequestWatch},
+        console_palette::ConsoleLook,
+        console_takeover::{ForegroundVt, QuietKernelConsole, console_look, vt_of_stdin},
         passphrase_input::asks_to_quit,
-        stream_sources::{BACKGROUND_CHECK_INTERVAL, items_when_readable, periodic_inputs},
-        watch_screen::{ConsoleDesk, ScreenInput, WatchEnding},
+        stream_sources::items_when_readable,
+        watch_screen::{ConsoleDesk, Refresh, ScreenInput, WatchEnding},
     },
-    screen_settings::font_glyphs::Glyphs,
 };
 
-const FULL_REPAINT_INTERVAL: Duration = Duration::from_secs(5);
-
 pub struct LiveDesk {
-    console: Console,
+    quiet_kernel: Option<QuietKernelConsole>,
+    foreground: Option<ForegroundVt>,
+    for_system: bool,
+    own_vt: Option<u16>,
+    look: ConsoleLook,
     entry: Option<PasswordEntry>,
-    requests_watched: bool,
-    clear_requested: bool,
     handover_deadline: Option<Duration>,
 }
 
 impl LiveDesk {
     #[must_use]
-    pub fn new(console: Console, requests_watched: bool) -> Self {
+    pub fn take_console(for_system: bool) -> Self {
+        let prompt_elsewhere = for_system && ask_password::requested();
+        if prompt_elsewhere {
+            eprintln!("bootvine: a password prompt is already showing, staying behind it");
+        }
+        let own_vt = vt_of_stdin();
         Self {
-            console,
+            quiet_kernel: for_system.then(QuietKernelConsole::take).flatten(),
+            foreground: own_vt
+                .filter(|_| !prompt_elsewhere)
+                .and_then(ForegroundVt::take),
+            for_system,
+            own_vt,
+            look: console_look(own_vt),
             entry: None,
-            requests_watched,
-            clear_requested: false,
             handover_deadline: None,
         }
     }
 
-    fn follow_requests(&mut self, requests_changed: bool) {
-        self.clear_requested |=
-            requests_changed && self.console.come_forward_once_prompts_are_gone();
-        self.entry = if self.console.answers_password_prompts() {
+    fn come_forward_once_prompts_are_gone(&mut self) -> bool {
+        if !self.for_system || self.foreground.is_some() || ask_password::requested() {
+            return false;
+        }
+        self.foreground = self.own_vt.and_then(ForegroundVt::take);
+        if self.foreground.is_some() {
+            eprintln!("bootvine: password prompt answered, taking the console back");
+        }
+        self.foreground.is_some()
+    }
+
+    fn follow_requests(&mut self, requests_changed: bool) -> Refresh {
+        let came_forward = requests_changed && self.come_forward_once_prompts_are_gone();
+        self.entry = if self.for_system && self.foreground.is_some() {
             PasswordEntry::follow(self.entry.take(), requests_changed)
         } else {
             None
         };
+        if came_forward {
+            Refresh::Clear
+        } else {
+            Refresh::Steady
+        }
     }
 }
 
 impl ConsoleDesk for LiveDesk {
-    fn glyphs(&self) -> &Glyphs {
-        &self.console.glyphs
-    }
-
-    fn palette(&self) -> ConsolePalette {
-        self.console.palette
+    fn look(&self) -> ConsoleLook {
+        self.look
     }
 
     fn prompt(&self, _now: Duration) -> Option<PasswordPrompt<'_>> {
@@ -82,57 +101,55 @@ impl ConsoleDesk for LiveDesk {
             return;
         }
         eprintln!("bootvine: {reached} reached, handing the console over");
-        self.console.begin_handover();
         self.handover_deadline = Some(deadline);
     }
 
-    fn frame_passed(&mut self, _state: &mut BootState, now: Duration) -> ControlFlow<WatchEnding> {
+    fn frame_passed(&mut self, now: Duration) -> ControlFlow<WatchEnding, Vec<BootChange>> {
         let Some(deadline) = self.handover_deadline else {
-            return ControlFlow::Continue(());
+            return ControlFlow::Continue(Vec::new());
         };
-        if self.console.console_was_taken() {
+        if self
+            .foreground
+            .as_ref()
+            .is_some_and(ForegroundVt::taken_away)
+        {
             eprintln!("bootvine: another program took the console, leaving it there");
-            self.console.leave_console();
+            if let Some(foreground) = self.foreground.take() {
+                foreground.stay_switched();
+            }
             ControlFlow::Break(WatchEnding::BootCompleted)
         } else if now >= deadline {
             eprintln!("bootvine: nothing took the console, switching back");
             ControlFlow::Break(WatchEnding::BootCompleted)
         } else {
-            ControlFlow::Continue(())
+            ControlFlow::Continue(Vec::new())
         }
     }
 
-    fn password_requests_changed(&mut self) {
-        self.follow_requests(true);
+    fn password_requests_changed(&mut self) -> Refresh {
+        self.follow_requests(true)
     }
 
     fn check_prompts(&mut self) {
-        self.follow_requests(!self.requests_watched);
+        self.follow_requests(false);
     }
 
-    fn keep_console_up(&mut self) -> bool {
-        self.console.keep_up()
+    fn keep_console_up(&mut self) -> Refresh {
+        let kernel_got_loud = self
+            .quiet_kernel
+            .as_mut()
+            .is_some_and(QuietKernelConsole::keep_quiet);
+        let terminal_was_taken = self.handover_deadline.is_none()
+            && self.foreground.as_ref().is_some_and(ForegroundVt::insist);
+        let look = console_look(self.own_vt);
+        let restyled = look != self.look;
+        self.look = look;
+        if kernel_got_loud || terminal_was_taken || restyled {
+            Refresh::Repaint
+        } else {
+            Refresh::Steady
+        }
     }
-
-    fn take_clear_request(&mut self) -> bool {
-        mem::take(&mut self.clear_requested)
-    }
-
-    fn refreshed_origin(&self) -> Option<BootOrigin> {
-        Some(BootOrigin::read())
-    }
-}
-
-pub fn prompt_check_inputs() -> impl Stream<Item = ScreenInput> {
-    periodic_inputs(BACKGROUND_CHECK_INTERVAL, || ScreenInput::PromptCheck)
-}
-
-pub fn console_upkeep_inputs() -> impl Stream<Item = ScreenInput> {
-    periodic_inputs(BACKGROUND_CHECK_INTERVAL, || ScreenInput::ConsoleUpkeep)
-}
-
-pub fn full_repaint_inputs() -> impl Stream<Item = ScreenInput> {
-    periodic_inputs(FULL_REPAINT_INTERVAL, || ScreenInput::FullRepaint)
 }
 
 pub fn password_request_inputs(watch: RequestWatch) -> io::Result<impl Stream<Item = ScreenInput>> {

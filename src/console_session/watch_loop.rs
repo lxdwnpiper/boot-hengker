@@ -7,13 +7,12 @@ use crate::{
     boot_model::{BootState, Phase, boot_origin::BootOrigin},
     console_session::{
         ask_password::RequestWatch,
-        console_takeover::Console,
-        live_desk::{
-            LiveDesk, console_upkeep_inputs, full_repaint_inputs, password_request_inputs,
-            prompt_check_inputs,
+        live_desk::{LiveDesk, password_request_inputs},
+        stream_sources::{
+            BACKGROUND_CHECK_INTERVAL, frame_inputs, key_inputs, periodic_inputs,
+            termination_inputs,
         },
-        stream_sources::{frame_inputs, key_inputs, termination_inputs},
-        watch_screen::{WatchEnding, WatchScreen, watch_until_ending},
+        watch_screen::{ScreenInput, WatchEnding, WatchScreen, watch_until_ending},
     },
     screen_settings::{color_scheme::Colors, config_file::Timing},
     systemd_link::{
@@ -32,15 +31,13 @@ pub struct Settings {
     pub colors: Colors,
 }
 
-struct ConfiguredStatusOnExit {
-    scope: Scope,
-}
+const FULL_REPAINT_INTERVAL: Duration = Duration::from_secs(5);
+
+struct ConfiguredStatusOnExit;
 
 impl Drop for ConfiguredStatusOnExit {
     fn drop(&mut self) {
-        if self.scope == Scope::System
-            && let Ok(session) = Session::open(Scope::System)
-        {
+        if let Ok(session) = Session::open(Scope::System) {
             session.set_show_status(StatusOutput::Configured).ok();
         }
     }
@@ -76,14 +73,15 @@ pub fn run(settings: &Settings) -> Result<(), Error> {
 }
 
 async fn watch_live_boot(settings: &Settings, phase: Phase) -> Result<(), Error> {
-    let _restores_status = ConfiguredStatusOnExit {
-        scope: settings.scope,
-    };
+    let for_system = settings.scope == Scope::System;
+    let _restores_status = for_system.then_some(ConfiguredStatusOnExit);
     let requests = RequestWatch::open();
-    let desk = LiveDesk::new(
-        Console::take(settings.scope == Scope::System),
-        requests.is_some(),
-    );
+    let prompt_check: fn() -> ScreenInput = if requests.is_some() {
+        || ScreenInput::PromptCheck
+    } else {
+        || ScreenInput::PasswordRequests
+    };
+    let desk = LiveDesk::take_console(for_system);
     let password_inputs = requests.map(password_request_inputs).transpose()?;
     let event_inputs = stream::select(
         stream::select(
@@ -96,14 +94,20 @@ async fn watch_live_boot(settings: &Settings, phase: Phase) -> Result<(), Error>
         ),
     );
     let timer_inputs = stream::select(
-        stream::select(frame_inputs(), prompt_check_inputs()),
-        stream::select(console_upkeep_inputs(), full_repaint_inputs()),
+        stream::select(
+            frame_inputs(),
+            periodic_inputs(BACKGROUND_CHECK_INTERVAL, prompt_check),
+        ),
+        stream::select(
+            periodic_inputs(BACKGROUND_CHECK_INTERVAL, || ScreenInput::ConsoleUpkeep),
+            periodic_inputs(FULL_REPAINT_INTERVAL, || ScreenInput::FullRepaint),
+        ),
     );
     let inputs = stream::select(event_inputs, timer_inputs);
     let mut screen = WatchScreen::new(
         BootState::new(phase),
         desk,
-        BootOrigin::read(),
+        BootOrigin::read,
         settings.colors,
         settings.timing,
         Duration::ZERO,

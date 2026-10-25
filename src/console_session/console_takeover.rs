@@ -1,4 +1,4 @@
-use std::{collections::HashSet, fs, ptr};
+use std::{collections::HashSet, fs, mem, ptr};
 
 use rustix::{
     io::Errno,
@@ -8,7 +8,10 @@ use rustix::{
 };
 
 use crate::{
-    console_session::{ask_password, console_palette::ConsolePalette},
+    console_session::{
+        ask_password,
+        console_palette::{ConsoleLook, ConsolePalette},
+    },
     screen_settings::font_glyphs::Glyphs,
 };
 
@@ -19,89 +22,8 @@ const VIRTUAL_TERMINAL_PREFIX: &str = "/dev/tty";
 const KERNEL_PRINTK: &str = "/proc/sys/kernel/printk";
 const ALERTS_ONLY: &str = "1";
 const HIGHEST_LOW_GLYPH: u16 = 255;
-pub struct Console {
-    quiet_kernel: Option<QuietKernelConsole>,
-    foreground: Option<ForegroundVt>,
-    for_system: bool,
-    own_vt: Option<u16>,
-    pub glyphs: Glyphs,
-    pub palette: ConsolePalette,
-}
 
-impl Console {
-    pub fn take(for_system: bool) -> Self {
-        let prompt_elsewhere = for_system && ask_password::requested();
-        if prompt_elsewhere {
-            eprintln!("bootvine: a password prompt is already showing, staying behind it");
-        }
-        let own_vt = vt_of_stdin();
-        let font = loaded_font();
-        Self {
-            quiet_kernel: for_system.then(QuietKernelConsole::take).flatten(),
-            foreground: own_vt
-                .filter(|_| !prompt_elsewhere)
-                .and_then(ForegroundVt::take),
-            for_system,
-            own_vt,
-            glyphs: font_glyphs(font.as_ref()),
-            palette: console_palette(own_vt, font.as_ref()),
-        }
-    }
-
-    #[must_use]
-    pub fn answers_password_prompts(&self) -> bool {
-        self.for_system && self.foreground.is_some()
-    }
-
-    pub fn come_forward_once_prompts_are_gone(&mut self) -> bool {
-        if !self.for_system || self.foreground.is_some() || ask_password::requested() {
-            return false;
-        }
-        self.foreground = self.own_vt.and_then(ForegroundVt::take);
-        if self.foreground.is_some() {
-            eprintln!("bootvine: password prompt answered, taking the console back");
-        }
-        self.foreground.is_some()
-    }
-
-    pub fn keep_up(&mut self) -> bool {
-        let kernel_got_loud = self
-            .quiet_kernel
-            .as_mut()
-            .is_some_and(QuietKernelConsole::keep_quiet);
-        let terminal_was_taken = self.foreground.as_ref().is_some_and(ForegroundVt::insist);
-        let font = loaded_font();
-        let glyphs = font_glyphs(font.as_ref());
-        let palette = console_palette(self.own_vt, font.as_ref());
-        let font_changed = glyphs != self.glyphs || palette != self.palette;
-        self.glyphs = glyphs;
-        self.palette = palette;
-        kernel_got_loud || terminal_was_taken || font_changed
-    }
-
-    pub fn begin_handover(&mut self) {
-        self.set_grip(TerminalGrip::Yielding);
-    }
-
-    #[must_use]
-    pub fn console_was_taken(&self) -> bool {
-        self.foreground
-            .as_ref()
-            .is_some_and(ForegroundVt::taken_away)
-    }
-
-    pub fn leave_console(&mut self) {
-        self.set_grip(TerminalGrip::Surrendered);
-    }
-
-    fn set_grip(&mut self, grip: TerminalGrip) {
-        if let Some(foreground) = &mut self.foreground {
-            foreground.grip = grip;
-        }
-    }
-}
-
-struct QuietKernelConsole {
+pub(super) struct QuietKernelConsole {
     previous_level: String,
 }
 
@@ -111,13 +33,13 @@ fn console_level() -> Option<String> {
 }
 
 impl QuietKernelConsole {
-    fn take() -> Option<Self> {
+    pub(super) fn take() -> Option<Self> {
         let previous_level = console_level()?;
         fs::write(KERNEL_PRINTK, ALERTS_ONLY).ok()?;
         Some(Self { previous_level })
     }
 
-    fn keep_quiet(&mut self) -> bool {
+    pub(super) fn keep_quiet(&mut self) -> bool {
         let Some(level) = console_level() else {
             return false;
         };
@@ -134,17 +56,19 @@ struct LoadedFont {
     uses_high_glyphs: bool,
 }
 
-fn font_glyphs(font: Option<&LoadedFont>) -> Glyphs {
-    font.map_or_else(Glyphs::default, |font| {
+pub(super) fn console_look(own_vt: Option<u16>) -> ConsoleLook {
+    let font = loaded_font();
+    let glyphs = font.as_ref().map_or_else(Glyphs::default, |font| {
         Glyphs::fitting(|symbol| symbol.is_ascii() || font.characters.contains(&symbol))
-    })
-}
-
-fn console_palette(own_vt: Option<u16>, font: Option<&LoadedFont>) -> ConsolePalette {
-    if own_vt.is_none() {
-        return ConsolePalette::Terminal;
-    }
-    ConsolePalette::of_virtual_terminal(font.is_some_and(|font| font.uses_high_glyphs))
+    });
+    let palette = match own_vt {
+        None => ConsolePalette::Terminal,
+        Some(_) if font.as_ref().is_some_and(|font| font.uses_high_glyphs) => {
+            ConsolePalette::EightColorVt
+        }
+        Some(_) => ConsolePalette::SixteenColorVt,
+    };
+    ConsoleLook { glyphs, palette }
 }
 
 impl Drop for QuietKernelConsole {
@@ -204,17 +128,9 @@ struct VtState {
     _state: u16,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum TerminalGrip {
-    Insisting,
-    Yielding,
-    Surrendered,
-}
-
-struct ForegroundVt {
+pub(super) struct ForegroundVt {
     own: u16,
     previous: u16,
-    grip: TerminalGrip,
 }
 
 fn active_vt() -> Option<u16> {
@@ -222,7 +138,7 @@ fn active_vt() -> Option<u16> {
     Some(state.active)
 }
 
-fn vt_of_stdin() -> Option<u16> {
+pub(super) fn vt_of_stdin() -> Option<u16> {
     let name = ttyname(stdin(), Vec::new()).ok()?;
     name.to_str()
         .ok()?
@@ -233,24 +149,24 @@ fn vt_of_stdin() -> Option<u16> {
 }
 
 impl ForegroundVt {
-    fn take(own: u16) -> Option<Self> {
+    pub(super) fn take(own: u16) -> Option<Self> {
         let previous = active_vt()?;
         if previous != own {
             activate(own).ok()?;
         }
-        Some(Self {
-            own,
-            previous,
-            grip: TerminalGrip::Insisting,
-        })
+        Some(Self { own, previous })
     }
 
-    fn insist(&self) -> bool {
-        self.grip == TerminalGrip::Insisting && self.taken_away() && activate(self.own).is_ok()
+    pub(super) fn insist(&self) -> bool {
+        self.taken_away() && activate(self.own).is_ok()
     }
 
-    fn taken_away(&self) -> bool {
+    pub(super) fn taken_away(&self) -> bool {
         active_vt().is_some_and(|active| active != self.own)
+    }
+
+    pub(super) fn stay_switched(self) {
+        mem::forget(self);
     }
 }
 
@@ -258,9 +174,6 @@ impl Drop for ForegroundVt {
     fn drop(&mut self) {
         if ask_password::requested() {
             eprintln!("bootvine: leaving a password prompt to the console agent on this terminal");
-            return;
-        }
-        if self.grip == TerminalGrip::Surrendered {
             return;
         }
         let _ = activate(self.previous);

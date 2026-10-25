@@ -3,23 +3,23 @@ use ratatui::{
     style::{Color, Modifier},
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+use crate::screen_settings::font_glyphs::Glyphs;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ConsolePalette {
+    #[default]
     Terminal,
     SixteenColorVt,
     EightColorVt,
 }
 
-impl ConsolePalette {
-    #[must_use]
-    pub fn of_virtual_terminal(font_uses_high_glyphs: bool) -> Self {
-        if font_uses_high_glyphs {
-            Self::EightColorVt
-        } else {
-            Self::SixteenColorVt
-        }
-    }
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ConsoleLook {
+    pub glyphs: Glyphs,
+    pub palette: ConsolePalette,
+}
 
+impl ConsolePalette {
     pub fn fit_frame(self, frame: &mut Buffer) {
         if self == Self::Terminal {
             return;
