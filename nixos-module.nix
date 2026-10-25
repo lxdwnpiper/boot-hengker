@@ -61,7 +61,7 @@ in
       services.bootvine-shutdown.wantedBy = [ "shutdown.target" ];
     };
 
-    boot.initrd.systemd = lib.mkIf config.boot.initrd.systemd.enable {
+    boot.initrd.systemd = {
       packages = [ cfg.package ];
       storePaths = [ (lib.getExe cfg.package) ];
       services.bootvine.wantedBy = [ "sysinit.target" ];

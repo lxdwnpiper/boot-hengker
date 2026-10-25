@@ -1,4 +1,4 @@
-# Contributing
+# Development
 
 ## Setup
 
@@ -71,30 +71,8 @@ exports libraries that clash with QEMU or Chromium.
   without touching the system; `cargo xtask uninstall --destdir <dir>` removes
   it again.
 
-## Code style
+## Code style and design
 
-- No comments; names and call flow carry the intent.
-- Public fields over getters, durations over raw integers, existing crates over
-  hand-written formatting.
-- Iterator and stream combinators over loops.
-
-## Design notes
-
-### One event loop
-
-Everything runs on one thread. The service manager, the keyboard, the frame
-timer, password prompts and termination each produce a stream of inputs; the
-streams are merged, applied in batches to a single screen state, and the screen
-is drawn once per batch. The live boot and the scripted demos share this loop
-and differ only in where their inputs come from.
-
-### systemd's private socket
-
-- zbus rejects it, because PID 1 sends under its well-known name rather than a
-  unique one. libdbus works.
-- libdbus sends its authentication handshake together with the first message,
-  which systemd leaves unread, so a no-reply ping goes out right after
-  connecting.
-- Surviving the switch to the real root needs a process name starting with `@`,
-  a unit that is not stopped on isolate, and a chroot through a file descriptor
-  to the new root taken as soon as the switch is queued.
+- [Code style](style.md).
+- [Architecture](architecture.md): the event loop, the console
+  takeover and the workarounds for systemd's private socket.

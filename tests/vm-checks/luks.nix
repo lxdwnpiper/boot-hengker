@@ -21,7 +21,6 @@ in
       services.bootvine.enable = true;
 
       testing.initrdBackdoor = true;
-      boot.initrd.systemd.enable = true;
       boot.initrd.luks.devices = lib.mkVMOverride {
         secret.device = "/dev/disk/by-uuid/${secretUuid}";
       };

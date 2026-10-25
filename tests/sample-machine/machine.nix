@@ -29,7 +29,6 @@ in
   boot.consoleLogLevel = lib.mkForce 3;
 
   boot.initrd.systemd = {
-    enable = true;
     services.demo-initrd-probe = {
       description = "Slow hardware probe";
       wantedBy = [ "initrd.target" ];
