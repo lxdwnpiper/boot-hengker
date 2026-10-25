@@ -56,10 +56,9 @@ impl Link {
     }
 }
 
-enum RootFs {
-    Initrd,
-    SwitchingTo(Sysroot),
-    Host,
+enum RootSwitch {
+    NotQueued,
+    Queued(Sysroot),
 }
 
 struct TrackedUnit {
@@ -73,7 +72,7 @@ struct BusFeed {
     phase: Phase,
     link: Link,
     unit_paths: HashMap<Path<'static>, String>,
-    root_fs: RootFs,
+    root_switch: RootSwitch,
     gave_origin: bool,
 }
 
@@ -100,11 +99,7 @@ impl BusFeed {
         Self {
             scope,
             target,
-            root_fs: if phase == Phase::Initrd {
-                RootFs::Initrd
-            } else {
-                RootFs::Host
-            },
+            root_switch: RootSwitch::NotQueued,
             phase,
             link: Link::connecting(),
             unit_paths: HashMap::new(),
@@ -169,7 +164,7 @@ impl BusFeed {
 
     fn lose_connection(&mut self) -> Vec<ScreenInput> {
         let at = monotonic_now();
-        let RootFs::SwitchingTo(sysroot) = mem::replace(&mut self.root_fs, RootFs::Host) else {
+        let RootSwitch::Queued(sysroot) = &self.root_switch else {
             if self.phase == Phase::Shutdown {
                 return boot_inputs(vec![BootChange::ManagerExited { at }]);
             }
@@ -179,6 +174,7 @@ impl BusFeed {
         if let Err(error) = sysroot.enter() {
             return vec![ScreenInput::Failed(error.into())];
         }
+        self.root_switch = RootSwitch::NotQueued;
         self.unit_paths.clear();
         self.phase = Phase::Host;
         self.link = Link::connecting();
@@ -206,20 +202,25 @@ impl BusFeed {
         Ok(target.clone())
     }
 
-    async fn origin_change(
+    async fn boot_progress_changes(
         &mut self,
         connection: &mut BusConnection,
     ) -> Result<Vec<BootChange>, Error> {
-        if self.gave_origin {
-            return Ok(Vec::new());
-        }
+        let boot_in_progress = connection.boot_in_progress().await?;
+        let origin = (!self.gave_origin).then(|| {
+            BootChange::SetOrigin(if boot_in_progress {
+                Duration::ZERO
+            } else {
+                monotonic_now()
+            })
+        });
         self.gave_origin = true;
-        if connection.boot_in_progress().await? {
-            return Ok(vec![BootChange::SetOrigin(Duration::ZERO)]);
-        }
-        Ok(once(BootChange::SetOrigin(monotonic_now()))
-            .chain(self.boot_finished())
-            .collect())
+        let finished = if boot_in_progress {
+            Vec::new()
+        } else {
+            self.boot_finished()
+        };
+        Ok(origin.into_iter().chain(finished).collect())
     }
 
     async fn track_all(
@@ -262,7 +263,7 @@ impl BusFeed {
             .filter(|job| shutting_down || job.kind == JobKind::BringsUp)
             .collect();
         let requested_root = self.requested_root(connection, &jobs).await?;
-        let origin_change = self.origin_change(connection).await?;
+        let boot_progress = self.boot_progress_changes(connection).await?;
         let tracked_root = self.track(connection, &requested_root).await;
         let root = tracked_root
             .as_ref()
@@ -288,7 +289,7 @@ impl BusFeed {
             },
         );
         let queued_at = monotonic_now();
-        Ok(origin_change
+        Ok(boot_progress
             .into_iter()
             .chain(tracked_root.and_then(|tracked| tracked.change))
             .chain(tracked_handoff.and_then(|tracked| tracked.change))
@@ -374,11 +375,12 @@ impl BusFeed {
         let unit = tracked
             .as_ref()
             .map_or(unit, |tracked| tracked.name.clone());
-        if matches!(self.root_fs, RootFs::Initrd)
+        if self.phase == Phase::Initrd
+            && matches!(self.root_switch, RootSwitch::NotQueued)
             && unit == SWITCH_ROOT_UNIT
             && let Ok(sysroot) = Sysroot::hold()
         {
-            self.root_fs = RootFs::SwitchingTo(sysroot);
+            self.root_switch = RootSwitch::Queued(sysroot);
         }
         tracked
             .and_then(|tracked| tracked.change)

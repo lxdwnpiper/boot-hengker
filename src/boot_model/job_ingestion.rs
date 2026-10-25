@@ -45,10 +45,6 @@ impl UnitRecord {
         .min()
     }
 
-    fn is_pending(&self) -> bool {
-        matches!(self.progress, Progress::Pending(_))
-    }
-
     fn is_finished(&self) -> bool {
         matches!(self.progress, Progress::Finished(_))
     }
@@ -243,7 +239,7 @@ impl BootState {
         let Root::Queued(root) = &self.root else {
             return false;
         };
-        self.units.get(root).is_some_and(|root| !root.is_pending())
+        self.units.get(root).is_some_and(UnitRecord::is_finished)
     }
 
     #[must_use]
@@ -315,6 +311,23 @@ mod tests {
         let mut state = sample();
         assert!(!state.is_complete());
         (1..=7).for_each(|id| state.finish_job(id, JobResult::Done, 5000 * MS));
+        assert!(state.is_complete());
+    }
+
+    #[test]
+    fn reconnecting_keeps_the_boot_running() {
+        let mut state = sample();
+        state.forget_jobs();
+        assert!(!state.is_complete());
+    }
+
+    #[test]
+    fn boot_completes_once_the_requeued_root_job_is_gone() {
+        let mut state = sample();
+        state.forget_jobs();
+        state.queue_job(20, "graphical.target", JobKind::BringsUp, 6000 * MS);
+        assert!(!state.is_complete());
+        state.finish_job(20, JobResult::Done, 7000 * MS);
         assert!(state.is_complete());
     }
 
