@@ -275,11 +275,35 @@ pub fn install_files(options: &InstallOptions) -> Result<(), InstallError> {
     Ok(())
 }
 
+fn print_initramfs_removal_hint(initrd: InitrdGenerator) {
+    match initrd {
+        InitrdGenerator::None => {}
+        InitrdGenerator::Dracut => {
+            println!("rebuild the initramfs without bootvine: sudo dracut --force");
+        }
+        InitrdGenerator::Mkinitcpio => println!(
+            "remove sd-bootvine from HOOKS in /etc/mkinitcpio.conf, then run: sudo mkinitcpio -P"
+        ),
+    }
+}
+
+fn installed_initrd_hooks(target: &InstallTarget) -> Vec<InitrdGenerator> {
+    [InitrdGenerator::Dracut, InitrdGenerator::Mkinitcpio]
+        .into_iter()
+        .filter(|generator| {
+            initrd_hook_files(*generator)
+                .iter()
+                .any(|file| target.staged(&file.destination).exists())
+        })
+        .collect()
+}
+
 pub fn uninstall_files(options: &UninstallOptions) -> Result<(), InstallError> {
     let target = &options.target;
     if target.needs_sudo() {
         return rerun_with_sudo();
     }
+    let removed_initrd_hooks = installed_initrd_hooks(target);
     if target.changes_live_system() {
         let installed_units: Vec<&str> = unit_names()
             .filter(|unit| target.unit_path(unit).exists())
@@ -304,6 +328,9 @@ pub fn uninstall_files(options: &UninstallOptions) -> Result<(), InstallError> {
     }
     if target.changes_live_system() {
         systemctl(["daemon-reload"])?;
+        removed_initrd_hooks
+            .into_iter()
+            .for_each(print_initramfs_removal_hint);
     }
     Ok(())
 }

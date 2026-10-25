@@ -1,4 +1,5 @@
 pub mod ask_password;
+pub mod console_palette;
 pub mod console_takeover;
 pub mod live_desk;
 pub mod passphrase_input;

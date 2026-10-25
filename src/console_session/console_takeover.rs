@@ -7,7 +7,10 @@ use rustix::{
     termios::ttyname,
 };
 
-use crate::{console_session::ask_password, screen_settings::font_glyphs::Glyphs};
+use crate::{
+    console_session::{ask_password, console_palette::ConsolePalette},
+    screen_settings::font_glyphs::Glyphs,
+};
 
 const GIO_UNIMAP: Opcode = 0x4B66;
 const VT_GETSTATE: Opcode = 0x5603;
@@ -15,12 +18,14 @@ const VT_ACTIVATE: Opcode = 0x5606;
 const VIRTUAL_TERMINAL_PREFIX: &str = "/dev/tty";
 const KERNEL_PRINTK: &str = "/proc/sys/kernel/printk";
 const ALERTS_ONLY: &str = "1";
+const HIGHEST_LOW_GLYPH: u16 = 255;
 pub struct Console {
     quiet_kernel: Option<QuietKernelConsole>,
     foreground: Option<ForegroundVt>,
     for_system: bool,
+    own_vt: Option<u16>,
     pub glyphs: Glyphs,
-    pub bold_is_brightness: bool,
+    pub palette: ConsolePalette,
 }
 
 impl Console {
@@ -29,16 +34,17 @@ impl Console {
         if prompt_elsewhere {
             eprintln!("bootvine: a password prompt is already showing, staying behind it");
         }
+        let own_vt = vt_of_stdin();
+        let font = loaded_font();
         Self {
             quiet_kernel: for_system.then(QuietKernelConsole::take).flatten(),
-            foreground: if prompt_elsewhere {
-                None
-            } else {
-                ForegroundVt::take()
-            },
+            foreground: own_vt
+                .filter(|_| !prompt_elsewhere)
+                .and_then(ForegroundVt::take),
             for_system,
-            glyphs: font_glyphs(),
-            bold_is_brightness: own_vt().is_some(),
+            own_vt,
+            glyphs: font_glyphs(font.as_ref()),
+            palette: console_palette(own_vt, font.as_ref()),
         }
     }
 
@@ -51,7 +57,7 @@ impl Console {
         if !self.for_system || self.foreground.is_some() || ask_password::requested() {
             return false;
         }
-        self.foreground = ForegroundVt::take();
+        self.foreground = self.own_vt.and_then(ForegroundVt::take);
         if self.foreground.is_some() {
             eprintln!("bootvine: password prompt answered, taking the console back");
         }
@@ -64,9 +70,12 @@ impl Console {
             .as_mut()
             .is_some_and(QuietKernelConsole::keep_quiet);
         let terminal_was_taken = self.foreground.as_ref().is_some_and(ForegroundVt::insist);
-        let glyphs = font_glyphs();
-        let font_changed = glyphs != self.glyphs;
+        let font = loaded_font();
+        let glyphs = font_glyphs(font.as_ref());
+        let palette = console_palette(self.own_vt, font.as_ref());
+        let font_changed = glyphs != self.glyphs || palette != self.palette;
         self.glyphs = glyphs;
+        self.palette = palette;
         kernel_got_loud || terminal_was_taken || font_changed
     }
 
@@ -120,10 +129,22 @@ impl QuietKernelConsole {
     }
 }
 
-fn font_glyphs() -> Glyphs {
-    font_characters().map_or_else(Glyphs::default, |characters| {
-        Glyphs::fitting(|symbol| symbol.is_ascii() || characters.contains(&symbol))
+struct LoadedFont {
+    characters: HashSet<char>,
+    uses_high_glyphs: bool,
+}
+
+fn font_glyphs(font: Option<&LoadedFont>) -> Glyphs {
+    font.map_or_else(Glyphs::default, |font| {
+        Glyphs::fitting(|symbol| symbol.is_ascii() || font.characters.contains(&symbol))
     })
+}
+
+fn console_palette(own_vt: Option<u16>, font: Option<&LoadedFont>) -> ConsolePalette {
+    if own_vt.is_none() {
+        return ConsolePalette::Terminal;
+    }
+    ConsolePalette::of_virtual_terminal(font.is_some_and(|font| font.uses_high_glyphs))
 }
 
 impl Drop for QuietKernelConsole {
@@ -136,7 +157,7 @@ impl Drop for QuietKernelConsole {
 #[derive(Clone, Copy, Default)]
 struct UnicodePair {
     unicode: u16,
-    _font_position: u16,
+    font_position: u16,
 }
 
 #[repr(C)]
@@ -149,7 +170,7 @@ fn read_unicode_map(map: &mut UnicodeMap) -> Result<(), Errno> {
     unsafe { ioctl(stdin(), Updater::<GIO_UNIMAP, UnicodeMap>::new(map)) }
 }
 
-fn font_characters() -> Option<HashSet<char>> {
+fn loaded_font() -> Option<LoadedFont> {
     let mut probe = UnicodeMap {
         count: 0,
         pairs: ptr::null_mut(),
@@ -164,13 +185,16 @@ fn font_characters() -> Option<HashSet<char>> {
         pairs: pairs.as_mut_ptr(),
     };
     read_unicode_map(&mut map).ok()?;
-    Some(
-        pairs
+    let mapped = &pairs[..usize::from(map.count).min(pairs.len())];
+    Some(LoadedFont {
+        characters: mapped
             .iter()
-            .take(usize::from(map.count))
             .filter_map(|pair| char::from_u32(u32::from(pair.unicode)))
             .collect(),
-    )
+        uses_high_glyphs: mapped
+            .iter()
+            .any(|pair| pair.font_position > HIGHEST_LOW_GLYPH),
+    })
 }
 
 #[repr(C)]
@@ -198,7 +222,7 @@ fn active_vt() -> Option<u16> {
     Some(state.active)
 }
 
-fn own_vt() -> Option<u16> {
+fn vt_of_stdin() -> Option<u16> {
     let name = ttyname(stdin(), Vec::new()).ok()?;
     name.to_str()
         .ok()?
@@ -209,8 +233,7 @@ fn own_vt() -> Option<u16> {
 }
 
 impl ForegroundVt {
-    fn take() -> Option<Self> {
-        let own = own_vt()?;
+    fn take(own: u16) -> Option<Self> {
         let previous = active_vt()?;
         if previous != own {
             activate(own).ok()?;

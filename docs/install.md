@@ -117,5 +117,8 @@ the default `/usr`.
 ## Uninstall
 
 `bootvine uninstall` disables and removes everything `bootvine install` put in
-place, with the same `--prefix` and `--destdir`. On NixOS, remove
+place, with the same `--prefix` and `--destdir`. The current initramfs keeps
+its copy of bootvine until you rebuild it, so with an initrd hook installed it
+prints the command for that: `sudo dracut --force`, or for mkinitcpio, removing
+`sd-bootvine` from `HOOKS` and running `sudo mkinitcpio -P`. On NixOS, remove
 `services.bootvine.enable` and rebuild.

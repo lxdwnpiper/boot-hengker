@@ -5,7 +5,7 @@ use super::{
     screen_render_fixtures::{boot_in_progress, render, render_prompted, screen_lines},
 };
 use crate::{
-    boot_model::{BootState, JobResult, Phase},
+    boot_model::{ActiveState, Activity, BootState, HANDOFF_UNIT, JobResult, Phase},
     demo_script::boot_test_fixtures::{MS, queue_unit, queued_boot, running, waiting},
     screen_settings::color_scheme::Colors,
 };
@@ -278,11 +278,35 @@ fn finished_stages_collapse_into_a_summary_rule() {
 }
 
 #[test]
-fn completion_announces_the_handover() {
+fn completion_without_a_display_manager_hands_back_the_console() {
     let mut state = queued_boot(
         Phase::Host,
         Duration::ZERO,
         [waiting("graphical.target", &[])],
+    );
+    state.finish_job(1, JobResult::Done, 9000 * MS);
+    let lines = render(&state, 9500 * MS, 110, 24);
+    assert!(
+        lines[1].starts_with("└─ ■ Boot finished in 9.5s · handing over to the console"),
+        "{}",
+        lines.join("\n")
+    );
+}
+
+#[test]
+fn completion_names_the_display_manager_that_started() {
+    let mut state = queued_boot(
+        Phase::Host,
+        Duration::ZERO,
+        [waiting("graphical.target", &[])],
+    );
+    queue_unit(&mut state, 2, waiting(HANDOFF_UNIT, &[]), 500 * MS);
+    state.update_activity(
+        HANDOFF_UNIT,
+        Activity {
+            state: Some(ActiveState::Active),
+            ..Activity::default()
+        },
     );
     state.finish_job(1, JobResult::Done, 9000 * MS);
     let lines = render(&state, 9500 * MS, 110, 24);

@@ -8,6 +8,7 @@ use crate::{
     boot_view::PasswordPrompt,
     console_session::{
         ask_password::{PasswordEntry, RequestWatch},
+        console_palette::ConsolePalette,
         console_takeover::Console,
         passphrase_input::asks_to_quit,
         stream_sources::{
@@ -19,7 +20,6 @@ use crate::{
     screen_settings::font_glyphs::Glyphs,
 };
 
-const CONSOLE_UPKEEP_INTERVAL: Duration = Duration::from_secs(1);
 const FULL_REPAINT_INTERVAL: Duration = Duration::from_secs(5);
 
 pub struct LiveDesk {
@@ -58,8 +58,8 @@ impl ConsoleDesk for LiveDesk {
         &self.console.glyphs
     }
 
-    fn drops_bold(&self) -> bool {
-        self.console.bold_is_brightness
+    fn palette(&self) -> ConsolePalette {
+        self.console.palette
     }
 
     fn prompt(&self, _now: Duration) -> Option<PasswordPrompt<'_>> {
@@ -131,7 +131,7 @@ pub fn prompt_check_inputs() -> impl Stream<Item = ScreenInput> {
 }
 
 pub fn console_upkeep_inputs() -> impl Stream<Item = ScreenInput> {
-    periodic_inputs(CONSOLE_UPKEEP_INTERVAL, || ScreenInput::ConsoleUpkeep)
+    periodic_inputs(BACKGROUND_CHECK_INTERVAL, || ScreenInput::ConsoleUpkeep)
 }
 
 pub fn full_repaint_inputs() -> impl Stream<Item = ScreenInput> {

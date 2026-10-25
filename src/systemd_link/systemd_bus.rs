@@ -1,7 +1,7 @@
 use std::{
     future::ready,
     io, iter, mem,
-    os::fd::{AsRawFd, RawFd},
+    os::fd::{AsFd, AsRawFd, BorrowedFd, RawFd},
     time::Duration,
 };
 
@@ -11,6 +11,7 @@ use dbus::{
     channel::{BusType, Channel},
 };
 use futures::{StreamExt, stream};
+use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use tokio::{io::unix::AsyncFd, time::timeout};
 
 use crate::{
@@ -185,10 +186,34 @@ impl Session {
     pub fn boot_in_progress(&self) -> Result<bool, Error> {
         read_boot_in_progress(&self.blocking_call(boot_in_progress_call()?)?)
     }
+
+    fn send(&self, call: Message) -> Result<u32, Error> {
+        let serial = self.channel.send(call).map_err(|()| Error::Disconnected)?;
+        self.channel.flush();
+        Ok(serial)
+    }
+
+    fn socket_has_unread_bytes(&self) -> bool {
+        let mut watched = [PollFd::new(self, PollFlags::IN)];
+        poll(&mut watched, Some(&Timespec::default())).is_ok_and(|ready| ready > 0)
+    }
+
+    fn read_one_chunk(&self) -> Result<(), Error> {
+        let still_connected =
+            self.channel.read_write(Some(Duration::ZERO)).is_ok() && self.channel.is_connected();
+        still_connected.then_some(()).ok_or(Error::Disconnected)
+    }
+
+    fn arrived_messages(&self) -> Result<Vec<Message>, Error> {
+        iter::repeat_with(|| self.read_one_chunk())
+            .find(|outcome| outcome.is_err() || !self.socket_has_unread_bytes())
+            .unwrap_or(Ok(()))?;
+        Ok(iter::from_fn(|| self.channel.pop_message()).collect())
+    }
 }
 
 pub struct BusConnection {
-    readiness: AsyncFd<Session>,
+    session: AsyncFd<Session>,
     early_signals: Vec<Signal>,
 }
 
@@ -202,24 +227,23 @@ fn into_results(batch: Result<Vec<Message>, Error>) -> Vec<Result<Message, Error
 impl BusConnection {
     pub fn register(session: Session) -> io::Result<Self> {
         Ok(Self {
-            readiness: readable_source(session)?,
+            session: readable_source(session)?,
             early_signals: Vec::new(),
         })
     }
 
     #[must_use]
     pub fn peer_to_peer(&self) -> bool {
-        self.readiness.get_ref().peer_to_peer
+        self.session.get_ref().peer_to_peer
     }
 
     fn drain_replies(&mut self) -> Result<Vec<Message>, Error> {
-        let channel = &self.readiness.get_mut().channel;
-        if channel.read_write(Some(Duration::ZERO)).is_err() || !channel.is_connected() {
-            return Err(Error::Disconnected);
-        }
-        let (signals, replies): (Vec<Message>, Vec<Message>) =
-            iter::from_fn(|| channel.pop_message())
-                .partition(|message| message.msg_type() == MessageType::Signal);
+        let (signals, replies): (Vec<Message>, Vec<Message>) = self
+            .session
+            .get_ref()
+            .arrived_messages()?
+            .into_iter()
+            .partition(|message| message.msg_type() == MessageType::Signal);
         self.early_signals
             .extend(signals.iter().filter_map(parse_signal));
         Ok(replies)
@@ -230,7 +254,7 @@ impl BusConnection {
         if !drained.is_empty() {
             return Ok(drained);
         }
-        self.readiness.readable_mut().await?.clear_ready();
+        self.session.readable_mut().await?.clear_ready();
         self.drain_replies()
     }
 
@@ -256,11 +280,7 @@ impl BusConnection {
     }
 
     async fn call(&mut self, call: Message) -> Result<Message, Error> {
-        let channel = &self.readiness.get_ref().channel;
-        let Ok(serial) = channel.send(call) else {
-            return Err(Error::Disconnected);
-        };
-        channel.flush();
+        let serial = self.session.get_ref().send(call)?;
         let Ok(reply) = timeout(CALL_TIMEOUT, self.reply_to(serial)).await else {
             return Err(Error::CallTimedOut);
         };
@@ -327,7 +347,7 @@ impl BusConnection {
 
     pub async fn receive_signals(&mut self, patience: Duration) -> Result<Vec<Signal>, Error> {
         if self.early_signals.is_empty()
-            && let Ok(Ok(mut guard)) = timeout(patience, self.readiness.readable_mut()).await
+            && let Ok(Ok(mut guard)) = timeout(patience, self.session.readable_mut()).await
         {
             guard.clear_ready();
         }
@@ -365,6 +385,12 @@ fn unit_facts_from(name: &str, properties: &PropMap) -> UnitFacts {
 impl AsRawFd for Session {
     fn as_raw_fd(&self) -> RawFd {
         self.channel.watch().fd
+    }
+}
+
+impl AsFd for Session {
+    fn as_fd(&self) -> BorrowedFd<'_> {
+        unsafe { BorrowedFd::borrow_raw(self.as_raw_fd()) }
     }
 }
 

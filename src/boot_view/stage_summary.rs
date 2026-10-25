@@ -48,9 +48,7 @@ impl Stages<'_> {
             took: self.now.saturating_sub(self.state.origin),
             handed_to: self
                 .state
-                .handoff_unit
-                .as_deref()
-                .or(self.state.root.unit())
+                .started_display_manager()
                 .unwrap_or("the console"),
         })
     }

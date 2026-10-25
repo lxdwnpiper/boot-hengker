@@ -227,12 +227,18 @@ impl BootState {
     }
 
     #[must_use]
+    pub fn started_display_manager(&self) -> Option<&str> {
+        self.handoff_unit.as_deref().filter(|unit| {
+            self.units
+                .get(*unit)
+                .and_then(|handoff| handoff.activity.state)
+                .is_some_and(|state| state != ActiveState::Inactive)
+        })
+    }
+
+    #[must_use]
     pub fn display_manager_started(&self) -> bool {
-        self.handoff_unit
-            .as_deref()
-            .and_then(|unit| self.units.get(unit))
-            .and_then(|handoff| handoff.activity.state)
-            .is_some_and(|state| state != ActiveState::Inactive)
+        self.started_display_manager().is_some()
     }
 
     #[must_use]

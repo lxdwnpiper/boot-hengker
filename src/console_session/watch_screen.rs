@@ -6,12 +6,12 @@ use ratatui::{
     Terminal,
     backend::Backend,
     buffer::{Buffer, CellDiffOption},
-    style::Modifier,
 };
 
 use crate::{
     boot_model::{BootChange, BootProjection, BootState, boot_origin::BootOrigin},
     boot_view::{BootView, PasswordPrompt, project_boot},
+    console_session::console_palette::ConsolePalette,
     screen_settings::{color_scheme::Colors, config_file::Timing, font_glyphs::Glyphs},
     systemd_link::{link_error::Error, monotonic_clock::monotonic_now},
 };
@@ -39,7 +39,7 @@ pub enum WatchEnding {
 
 pub trait ConsoleDesk {
     fn glyphs(&self) -> &Glyphs;
-    fn drops_bold(&self) -> bool;
+    fn palette(&self) -> ConsolePalette;
     fn prompt(&self, now: Duration) -> Option<PasswordPrompt<'_>>;
     fn press_key(&mut self, event: &Event, now: Duration) -> ControlFlow<WatchEnding>;
     fn frame_passed(&mut self, state: &mut BootState, now: Duration) -> ControlFlow<WatchEnding>;
@@ -215,9 +215,7 @@ impl<Desk: ConsoleDesk> WatchScreen<Desk> {
                 },
                 canvas.area(),
             );
-            if self.desk.drops_bold() {
-                drop_bold(canvas.buffer_mut());
-            }
+            self.desk.palette().fit_frame(canvas.buffer_mut());
         })?;
         if self.full_repaint_due {
             let painted = completed.buffer.clone();
@@ -259,13 +257,6 @@ fn overwrite_every_cell<B: Backend>(backend: &mut B, frame: &Buffer) -> Result<(
     backend.flush()
 }
 
-fn drop_bold(frame: &mut Buffer) {
-    frame
-        .content
-        .iter_mut()
-        .for_each(|cell| cell.modifier.remove(Modifier::BOLD));
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -285,8 +276,8 @@ mod tests {
             &self.glyphs
         }
 
-        fn drops_bold(&self) -> bool {
-            false
+        fn palette(&self) -> ConsolePalette {
+            ConsolePalette::Terminal
         }
 
         fn prompt(&self, _now: Duration) -> Option<PasswordPrompt<'_>> {

@@ -17,6 +17,7 @@ use crate::{
     },
     boot_view::PasswordPrompt,
     console_session::{
+        console_palette::ConsolePalette,
         passphrase_input,
         stream_sources::{frame_inputs, key_inputs},
         watch_screen::{ConsoleDesk, WatchEnding, WatchScreen, watch_until_ending},
@@ -328,8 +329,8 @@ impl ConsoleDesk for DemoDesk {
         &self.glyphs
     }
 
-    fn drops_bold(&self) -> bool {
-        false
+    fn palette(&self) -> ConsolePalette {
+        ConsolePalette::Terminal
     }
 
     fn prompt(&self, now: Duration) -> Option<PasswordPrompt<'_>> {
