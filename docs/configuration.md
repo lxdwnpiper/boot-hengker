@@ -3,7 +3,7 @@
 Every setting has a default, so bootvine needs no configuration. To change
 some, write only those keys:
 
-- **On NixOS**, under `services.bootvine.settings`. The module writes them to
+- **On [NixOS](https://nixos.org)**, under `services.bootvine.settings`. The module writes them to
   `/etc/bootvine.toml` in the real root and the initrd, and the rebuild fails
   if `bootvine check` rejects them.
 
@@ -25,7 +25,8 @@ some, write only those keys:
   ```
 
   Then check the file and, if bootvine runs in your initrd, rebuild the
-  initramfs, since the dracut and mkinitcpio hooks copy the file into it:
+  initramfs, since the [dracut](https://github.com/dracut-ng/dracut-ng) and
+  [mkinitcpio](https://wiki.archlinux.org/title/Mkinitcpio) hooks copy the file into it:
 
   ```sh
   bootvine check /etc/bootvine.toml

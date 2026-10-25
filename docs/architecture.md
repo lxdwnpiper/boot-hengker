@@ -7,8 +7,9 @@ while it does. None of this is needed to install or configure it.
 
 - **systemd ≥ 246 as PID 1.** bootvine reads the jobs and units from the
   service manager over D-Bus.
-- **libdbus.** It talks to PID 1 over systemd's private socket, which zbus
-  cannot use; see [systemd's private socket](#systemds-private-socket).
+- **[libdbus](https://www.freedesktop.org/wiki/Software/dbus/).** It talks to
+  PID 1 over systemd's private socket, which
+  [zbus](https://github.com/dbus2/zbus) cannot use; see [systemd's private socket](#systemds-private-socket).
 - **A virtual terminal.** It draws on `tty12` and switches the console to it.
 
 ## Lifecycle
@@ -52,8 +53,10 @@ back. Kernel messages from before it starts are already on screen; see
 
 ### Passphrase prompts
 
-bootvine acts as a systemd password agent: it watches
-`/run/systemd/ask-password` and answers requests, such as a LUKS unlock, in a
+bootvine acts as a systemd
+[password agent](https://systemd.io/PASSWORD_AGENTS/): it watches
+`/run/systemd/ask-password` and answers requests, such as a
+[LUKS](https://gitlab.com/cryptsetup/cryptsetup) unlock, in a
 popup over the tree. If another agent's prompt is already showing when it
 starts, it stays behind it and comes forward once the prompt is answered.
 

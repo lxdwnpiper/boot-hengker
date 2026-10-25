@@ -1,9 +1,5 @@
 use std::{
-    error::Error,
-    io::ErrorKind,
-    path::{Path, PathBuf},
-    process::ExitCode,
-    time::Duration,
+    error::Error, fmt::Display, io::ErrorKind, path::PathBuf, process::ExitCode, time::Duration,
 };
 
 use bootvine::{
@@ -11,9 +7,12 @@ use bootvine::{
     screen_settings::config_file::{
         Config, ConfigError, Timing, default_config_table, read_config_file,
     },
+    system_install::install_files::{
+        InstallOptions, UninstallOptions, install_files, uninstall_files,
+    },
     systemd_link::{boot_feed::RootRequest, systemd_bus::Scope},
 };
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use jiff::fmt::friendly::SpanParser;
 
 #[derive(Parser)]
@@ -25,6 +24,12 @@ use jiff::fmt::friendly::SpanParser;
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
+    #[command(flatten)]
+    watch: WatchOptions,
+}
+
+#[derive(Args)]
+struct WatchOptions {
     #[arg(long, help = "Watch the user service manager instead of PID 1")]
     user: bool,
     #[arg(
@@ -55,12 +60,27 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     #[command(about = "Print every setting with its default value")]
-    Defaults {
-        #[arg(long, value_enum, default_value_t = DefaultsFormat::Toml)]
-        format: DefaultsFormat,
-    },
+    Defaults(DefaultsOptions),
     #[command(about = "Exit with an error if a config file is unreadable or invalid")]
-    Check { path: PathBuf },
+    Check(CheckOptions),
+    #[command(
+        about = "Install this binary and the systemd units, and enable them; asks sudo when needed"
+    )]
+    Install(InstallOptions),
+    #[command(about = "Disable and remove what install put in place")]
+    Uninstall(UninstallOptions),
+}
+
+#[derive(Args)]
+struct DefaultsOptions {
+    #[arg(long, value_enum, default_value_t = DefaultsFormat::Toml)]
+    format: DefaultsFormat,
+}
+
+#[derive(Args)]
+struct CheckOptions {
+    #[arg(help = "Config file to check, such as /etc/bootvine.toml")]
+    path: PathBuf,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -72,9 +92,21 @@ enum DefaultsFormat {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
-        Some(Command::Defaults { format }) => print_defaults(format),
-        Some(Command::Check { ref path }) => check_config_file(path),
-        None => watch_boot(cli),
+        Some(Command::Defaults(options)) => print_defaults(options.format),
+        Some(Command::Check(options)) => check_config_file(&options),
+        Some(Command::Install(options)) => report_outcome(install_files(&options)),
+        Some(Command::Uninstall(options)) => report_outcome(uninstall_files(&options)),
+        None => watch_boot(cli.watch),
+    }
+}
+
+fn report_outcome(outcome: Result<(), impl Display>) -> ExitCode {
+    match outcome {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("bootvine: {error}");
+            ExitCode::FAILURE
+        }
     }
 }
 
@@ -99,44 +131,42 @@ fn print_defaults(format: DefaultsFormat) -> ExitCode {
     }
 }
 
-fn check_config_file(path: &Path) -> ExitCode {
-    match read_config_file(path) {
+fn check_config_file(options: &CheckOptions) -> ExitCode {
+    match read_config_file(&options.path) {
         Ok(_) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("bootvine: {}: {error}", path.display());
+            eprintln!("bootvine: {}: {error}", options.path.display());
             ExitCode::FAILURE
         }
     }
 }
 
-fn watch_boot(cli: Cli) -> ExitCode {
-    let config = match read_config_file(&cli.config) {
+fn watch_boot(options: WatchOptions) -> ExitCode {
+    let config = match read_config_file(&options.config) {
         Ok(config) => config,
         Err(ConfigError::Unreadable(error)) if error.kind() == ErrorKind::NotFound => {
             Config::default()
         }
         Err(error) => {
-            eprintln!("bootvine: ignoring {}: {error}", cli.config.display());
+            eprintln!("bootvine: ignoring {}: {error}", options.config.display());
             Config::default()
         }
     };
     let settings = Settings {
-        scope: if cli.user { Scope::User } else { Scope::System },
-        shutdown: cli.shutdown,
-        target: cli
+        scope: if options.user {
+            Scope::User
+        } else {
+            Scope::System
+        },
+        shutdown: options.shutdown,
+        target: options
             .target
             .map_or(RootRequest::ManagerDefault, RootRequest::Named),
         timing: Timing {
-            keep_final_frame_for: cli.hold.unwrap_or(config.timing.keep_final_frame_for),
+            keep_final_frame_for: options.hold.unwrap_or(config.timing.keep_final_frame_for),
             ..config.timing
         },
         colors: config.colors,
     };
-    match run(&settings) {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(error) => {
-            eprintln!("bootvine: {error}");
-            ExitCode::FAILURE
-        }
-    }
+    report_outcome(run(&settings))
 }

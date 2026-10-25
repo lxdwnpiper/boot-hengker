@@ -2,8 +2,9 @@
 
 ## Setup
 
-Work inside the dev shell (`direnv allow` once). Version control is jj, not
-the `git` CLI.
+Work inside the dev shell (`direnv allow` once, with
+[direnv](https://direnv.net)). Version control is
+[jj](https://github.com/jj-vcs/jj), not the `git` CLI.
 
 ## Before committing
 
@@ -23,14 +24,15 @@ nix run .#check-conventional-commits -- origin/main..HEAD
 ```
 
 Git users can install the same commit-message check and a formatting check as
-hooks with `prek install` (from the dev shell) or `pre-commit install`.
+hooks with `prek install` ([prek](https://github.com/j178/prek), from the dev
+shell) or `pre-commit install` ([pre-commit](https://pre-commit.com)).
 
 ## Continuous integration
 
-`.woodpecker/rust-and-flake-checks.yaml` runs on Codeberg for every push and
-pull request: the bootvine build with its tests, the xtask build, clippy,
+`.woodpecker/rust-and-flake-checks.yaml` runs on Codeberg's
+[Woodpecker CI](https://woodpecker-ci.org) for every push and pull request: the bootvine build with its tests, the xtask build, clippy,
 rustfmt, an evaluation of every flake output, and the commit-message check on
-pull requests. Builds on `main` are pushed to the `wvhulle` Cachix cache, which
+pull requests. Builds on `main` are pushed to the `wvhulle` [Cachix](https://www.cachix.org) cache, which
 `nixConfig` in `flake.nix` offers as a substituter. The two VM checks need KVM,
 which Codeberg's runners lack, so they only run locally.
 
@@ -61,14 +63,14 @@ on marker files instead of sleeping. To step through one by hand, run
 call `test_script()`.
 
 Prefix VM and recording commands with `env -u LD_LIBRARY_PATH` when your shell
-exports libraries that clash with QEMU or Chromium.
+exports libraries that clash with [QEMU](https://www.qemu.org) or Chromium.
 
 ## Repository tasks
 
 - `nix run .#record-screencasts` re-records the README animations from the
   scripted demos and copies the passphrase screenshot from the VM check.
-- `cargo xtask install --destdir <dir> --initrd dracut` stages an install
-  without touching the system; `cargo xtask uninstall --destdir <dir>` removes
+- `cargo run -- install --destdir <dir> --initrd dracut` stages an install
+  without touching the system; `cargo run -- uninstall --destdir <dir>` removes
   it again.
 
 ## Code style and design

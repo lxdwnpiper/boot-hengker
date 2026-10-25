@@ -214,12 +214,10 @@ impl BusFeed {
             return Ok(Vec::new());
         }
         self.gave_origin = true;
-        let origin = if connection.boot_in_progress().await? {
-            Duration::ZERO
-        } else {
-            monotonic_now()
-        };
-        Ok(once(BootChange::SetOrigin(origin))
+        if connection.boot_in_progress().await? {
+            return Ok(vec![BootChange::SetOrigin(Duration::ZERO)]);
+        }
+        Ok(once(BootChange::SetOrigin(monotonic_now()))
             .chain(self.boot_finished())
             .collect())
     }

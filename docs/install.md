@@ -45,54 +45,58 @@ as well, the initrd has to run systemd.
 
 ## Ubuntu
 
-1. Install the build dependencies and Rust. The repository pins a nightly
-   toolchain in `rust-toolchain.toml`, which rustup fetches on the first
-   build:
+1. Install the build dependencies and Rust:
 
    ```sh
    sudo apt install build-essential pkg-config libdbus-1-dev git curl
    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
    ```
 
-2. Clone, build and install the binary and the systemd units, and enable
-   them. `cargo xtask install` builds as you and asks `sudo` only for the
-   copying and `systemctl enable`:
+2. Build bootvine into `~/.cargo/bin`:
 
    ```sh
-   git clone https://codeberg.org/wvhulle/bootvine.git
-   cd bootvine
-   cargo xtask install
+   cargo install --locked --git https://codeberg.org/wvhulle/bootvine bootvine
    ```
 
-   This installs `/usr/bin/bootvine`, and `bootvine.service` and
-   `bootvine-shutdown.service` in `/usr/lib/systemd/system`, which is enough
-   for stage 2 and shutdown.
+3. Install it for the system and enable its units. It asks `sudo` itself for
+   the copying and `systemctl enable`:
 
-3. Optionally, show the boot from the initrd. This needs a dracut initramfs
-   with systemd in it; initramfs-tools has no systemd, so on releases that use
+   ```sh
+   bootvine install
+   ```
+
+   This copies the binary to `/usr/bin/bootvine`, and `bootvine.service` and
+   `bootvine-shutdown.service` to `/usr/lib/systemd/system`, which is enough
+   for stage 2 and shutdown. The copy in `~/.cargo/bin` is no longer needed;
+   `cargo uninstall bootvine` removes it.
+
+4. Optionally, show the boot from the initrd. This needs a
+   [dracut](https://github.com/dracut-ng/dracut-ng) initramfs with systemd in
+   it; initramfs-tools has no systemd, so on releases that use
    it bootvine starts in stage 2 only.
 
    ```sh
-   cargo xtask install --initrd dracut
+   bootvine install --initrd dracut
    sudo dracut --force
    ```
 
    This adds the dracut module in `/usr/lib/dracut/modules.d/90bootvine` and
    enables it in `/etc/dracut.conf.d/bootvine.conf`.
 
-4. Reboot.
+5. Reboot.
 
 ## Other distributions
 
 Install as in the Ubuntu steps, with your distribution's packages for a C
 toolchain, `pkg-config` and the libdbus headers.
 
-For the initrd, use the dracut module as above, or on mkinitcpio:
+For the initrd, use the dracut module as above, or on
+[mkinitcpio](https://wiki.archlinux.org/title/Mkinitcpio):
 
 1. Install the hook in `/usr/lib/initcpio/install/sd-bootvine`:
 
    ```sh
-   cargo xtask install --initrd mkinitcpio
+   bootvine install --initrd mkinitcpio
    ```
 
 2. Add `sd-bootvine` after `systemd` in `HOOKS` in `/etc/mkinitcpio.conf`.
@@ -105,10 +109,13 @@ For the initrd, use the dracut module as above, or on mkinitcpio:
 
 ## Packaging
 
-`cargo xtask install --destdir <dir>` stages the files under `<dir>` instead of
-the root, and combines with `--initrd`.
+`bootvine install --destdir <dir>` stages the files under `<dir>` instead of
+the root, without `sudo` or `systemctl`, and combines with `--initrd` and
+`--prefix`. The units' `ExecStart` follows `--prefix`. The initrd hooks expect
+the default `/usr`.
 
 ## Uninstall
 
-`cargo xtask uninstall` removes everything `cargo xtask install` put in place.
-On NixOS, remove `services.bootvine.enable` and rebuild.
+`bootvine uninstall` disables and removes everything `bootvine install` put in
+place, with the same `--prefix` and `--destdir`. On NixOS, remove
+`services.bootvine.enable` and rebuild.
