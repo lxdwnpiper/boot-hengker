@@ -35,6 +35,21 @@ pub fn readable_source<Source: AsRawFd>(source: Source) -> io::Result<AsyncFd<So
     Ok(unsafe { AsyncFd::register_with_interest(source, Interest::READABLE) }?)
 }
 
+pub fn items_when_readable<Source: AsRawFd, Item>(
+    source: Source,
+    read: impl Fn(&Source) -> Item,
+) -> io::Result<impl Stream<Item = Item>> {
+    let readiness = readable_source(source)?;
+    Ok(stream::poll_fn(move |context| {
+        readiness.poll_read_ready(context).map(|ready| {
+            ready.ok().map(|mut guard| {
+                guard.clear_ready();
+                read(readiness.get_ref())
+            })
+        })
+    }))
+}
+
 pub async fn readable_or_timeout<Source: AsRawFd>(readiness: &AsyncFd<Source>, patience: Duration) {
     if let Ok(Ok(mut guard)) = timeout(patience, readiness.readable()).await {
         guard.clear_ready();
@@ -51,13 +66,8 @@ pub fn periodic_inputs(
     period: Duration,
     input: fn() -> ScreenInput,
 ) -> impl Stream<Item = ScreenInput> {
-    unfold_carrying(steady_interval(period), move |mut ticks| async move {
-        ticks.tick().await;
-        Some(CarriedItem {
-            item: input(),
-            state: ticks,
-        })
-    })
+    let mut ticks = steady_interval(period);
+    stream::poll_fn(move |context| ticks.poll_tick(context).map(|_| Some(input())))
 }
 
 pub fn frame_inputs() -> impl Stream<Item = ScreenInput> {
@@ -81,16 +91,11 @@ fn terminal_inputs(drained: io::Result<Vec<Event>>) -> Vec<ScreenInput> {
 }
 
 pub fn key_inputs() -> io::Result<impl Stream<Item = ScreenInput>> {
-    let readiness = readable_source(io::stdin())?;
-    Ok(unfold_carrying(readiness, |readiness| async move {
-        readiness.readable().await.ok()?.clear_ready();
-        Some(CarriedItem {
-            item: drain_terminal_events(),
-            state: readiness,
-        })
-    })
-    .map(terminal_inputs)
-    .flat_map(stream::iter))
+    Ok(
+        items_when_readable(io::stdin(), |_| drain_terminal_events())?
+            .map(terminal_inputs)
+            .flat_map(stream::iter),
+    )
 }
 
 pub fn termination_inputs() -> io::Result<impl Stream<Item = ScreenInput>> {

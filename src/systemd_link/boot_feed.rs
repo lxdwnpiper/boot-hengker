@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     iter::once,
-    mem, process,
+    process,
     time::{Duration, Instant},
 };
 
@@ -10,7 +10,7 @@ use futures::{Stream, StreamExt, stream};
 use tokio::time::sleep;
 
 use crate::{
-    boot_model::{BootChange, BootState, HANDOFF_UNIT, JobKind, Phase},
+    boot_model::{Activity, BootChange, BootState, HANDOFF_UNIT, JobKind, Phase, UnitFacts},
     console_session::{
         stream_sources::{BACKGROUND_CHECK_INTERVAL, CarriedItem, unfold_carrying},
         watch_screen::ScreenInput,
@@ -42,16 +42,26 @@ pub enum RootRequest {
     ManagerDefault,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ConnectAttempt {
+    First,
+    Again,
+}
+
 enum Link {
     Connected(BusConnection),
-    Connecting { deadline: Instant },
+    Connecting {
+        deadline: Instant,
+        attempt: ConnectAttempt,
+    },
     Finished,
 }
 
 impl Link {
-    fn connecting() -> Self {
+    fn connecting(attempt: ConnectAttempt) -> Self {
         Self::Connecting {
             deadline: Instant::now() + RECONNECT_PATIENCE,
+            attempt,
         }
     }
 }
@@ -61,124 +71,163 @@ enum RootSwitch {
     Queued(Sysroot),
 }
 
-struct TrackedUnit {
-    name: String,
-    change: Option<BootChange>,
+enum TrackedUnit {
+    Known(String),
+    New {
+        facts: UnitFacts,
+        activity: Activity,
+    },
 }
 
-struct BusFeed {
+impl TrackedUnit {
+    fn name(&self) -> &str {
+        match self {
+            Self::Known(name) => name,
+            Self::New { facts, .. } => &facts.name,
+        }
+    }
+
+    fn into_change(self) -> Option<BootChange> {
+        match self {
+            Self::Known(_) => None,
+            Self::New { facts, activity } => Some(BootChange::TrackUnit { facts, activity }),
+        }
+    }
+}
+
+struct BootTracker {
     scope: Scope,
     target: RootRequest,
     phase: Phase,
-    link: Link,
     unit_paths: HashMap<Path<'static>, String>,
     root_switch: RootSwitch,
-    gave_origin: bool,
+}
+
+struct BusFeed {
+    link: Link,
+    tracker: BootTracker,
 }
 
 struct FeedProgress<'feed> {
-    feed: &'feed mut BusFeed,
+    tracker: &'feed mut BootTracker,
     connection: &'feed mut BusConnection,
     changes: Vec<BootChange>,
-}
-
-struct WatchedConnection {
-    connection: BusConnection,
-    changes: Vec<BootChange>,
-}
-
-fn boot_inputs(changes: Vec<BootChange>) -> Vec<ScreenInput> {
-    if changes.is_empty() {
-        return Vec::new();
-    }
-    vec![ScreenInput::Boot(changes)]
 }
 
 impl BusFeed {
     fn new(phase: Phase, scope: Scope, target: RootRequest) -> Self {
         Self {
-            scope,
-            target,
-            root_switch: RootSwitch::NotQueued,
-            phase,
-            link: Link::connecting(),
-            unit_paths: HashMap::new(),
-            gave_origin: false,
+            link: Link::connecting(ConnectAttempt::First),
+            tracker: BootTracker {
+                scope,
+                target,
+                phase,
+                unit_paths: HashMap::new(),
+                root_switch: RootSwitch::NotQueued,
+            },
         }
     }
 
     async fn next_inputs(&mut self) -> Option<Vec<ScreenInput>> {
-        match mem::replace(&mut self.link, Link::Finished) {
+        match &mut self.link {
             Link::Finished => None,
-            Link::Connecting { deadline } => Some(self.connect(deadline).await),
-            Link::Connected(connection) => Some(self.receive(connection).await),
+            Link::Connecting { deadline, attempt } => {
+                let deadline = *deadline;
+                let attempt = *attempt;
+                Some(self.connect(deadline, attempt).await)
+            }
+            Link::Connected(connection) => {
+                let received = self.tracker.receive(connection).await;
+                Some(match received {
+                    Ok(changes) if changes.is_empty() => Vec::new(),
+                    Ok(changes) => vec![ScreenInput::Boot(changes)],
+                    Err(_) => self.lose_connection(),
+                })
+            }
         }
     }
 
-    async fn open_watched(&mut self) -> Result<WatchedConnection, Error> {
-        let mut connection = BusConnection::register(Session::open(self.scope)?)?;
-        let changes = self.start_watching(&mut connection).await?;
-        Ok(WatchedConnection {
-            connection,
-            changes,
-        })
+    async fn open_watched(&mut self, attempt: ConnectAttempt) -> Result<Vec<BootChange>, Error> {
+        let mut connection = BusConnection::register(Session::open(self.tracker.scope)?)?;
+        let changes = self
+            .tracker
+            .start_watching(&mut connection, attempt)
+            .await?;
+        self.link = Link::Connected(connection);
+        Ok(changes)
     }
 
-    async fn connect(&mut self, deadline: Instant) -> Vec<ScreenInput> {
-        match self.open_watched().await {
-            Ok(watched) => {
-                self.link = Link::Connected(watched.connection);
-                vec![ScreenInput::Boot(watched.changes), ScreenInput::FullRepaint]
-            }
+    async fn connect(&mut self, deadline: Instant, attempt: ConnectAttempt) -> Vec<ScreenInput> {
+        match self.open_watched(attempt).await {
+            Ok(changes) => vec![ScreenInput::Boot(changes), ScreenInput::FullRepaint],
             Err(_) if Instant::now() < deadline => {
                 sleep(BACKGROUND_CHECK_INTERVAL).await;
-                self.link = Link::Connecting { deadline };
                 Vec::new()
             }
-            Err(_) => vec![ScreenInput::Failed(Error::ManagerUnreachable)],
+            Err(_) => {
+                self.link = Link::Finished;
+                vec![ScreenInput::Failed(Error::ManagerUnreachable)]
+            }
         }
-    }
-
-    async fn receive(&mut self, mut connection: BusConnection) -> Vec<ScreenInput> {
-        let Ok(signals) = connection.receive_signals(BACKGROUND_CHECK_INTERVAL).await else {
-            return self.lose_connection();
-        };
-        let progress = stream::iter(signals)
-            .fold(
-                FeedProgress {
-                    feed: &mut *self,
-                    connection: &mut connection,
-                    changes: Vec::new(),
-                },
-                |mut progress, signal| async move {
-                    let changes = progress.feed.changes_for(progress.connection, signal).await;
-                    progress.changes.extend(changes);
-                    progress
-                },
-            )
-            .await;
-        let changes = progress.changes;
-        self.link = Link::Connected(connection);
-        boot_inputs(changes)
     }
 
     fn lose_connection(&mut self) -> Vec<ScreenInput> {
         let at = monotonic_now();
-        let RootSwitch::Queued(sysroot) = &self.root_switch else {
-            if self.phase == Phase::Shutdown {
-                return boot_inputs(vec![BootChange::ManagerExited { at }]);
+        let tracker = &mut self.tracker;
+        let RootSwitch::Queued(sysroot) = &tracker.root_switch else {
+            if tracker.phase == Phase::Shutdown {
+                self.link = Link::Finished;
+                return vec![ScreenInput::Boot(vec![BootChange::ManagerExited { at }])];
             }
-            self.link = Link::connecting();
-            return boot_inputs(vec![BootChange::ForgetJobs]);
+            self.link = Link::connecting(ConnectAttempt::Again);
+            return vec![ScreenInput::Boot(vec![BootChange::ForgetJobs])];
         };
         if let Err(error) = sysroot.enter() {
+            self.link = Link::Finished;
             return vec![ScreenInput::Failed(error.into())];
         }
-        self.root_switch = RootSwitch::NotQueued;
-        self.unit_paths.clear();
-        self.phase = Phase::Host;
-        self.link = Link::connecting();
-        boot_inputs(vec![BootChange::SwitchRoot { at }])
+        tracker.root_switch = RootSwitch::NotQueued;
+        tracker.unit_paths.clear();
+        tracker.phase = Phase::Host;
+        self.link = Link::connecting(ConnectAttempt::Again);
+        vec![ScreenInput::Boot(vec![BootChange::SwitchRoot { at }])]
+    }
+}
+
+impl BootTracker {
+    async fn receive(&mut self, connection: &mut BusConnection) -> Result<Vec<BootChange>, Error> {
+        let signals = connection
+            .receive_signals(BACKGROUND_CHECK_INTERVAL)
+            .await?;
+        Ok(self
+            .collect_changes(connection, signals, async |tracker, connection, signal| {
+                tracker.changes_for(connection, signal).await
+            })
+            .await)
+    }
+
+    async fn collect_changes<Item>(
+        &mut self,
+        connection: &mut BusConnection,
+        items: Vec<Item>,
+        step: impl AsyncFn(&mut Self, &mut BusConnection, Item) -> Vec<BootChange>,
+    ) -> Vec<BootChange> {
+        let step = &step;
+        stream::iter(items)
+            .fold(
+                FeedProgress {
+                    tracker: self,
+                    connection,
+                    changes: Vec::new(),
+                },
+                |mut progress, item| async move {
+                    let changes = step(progress.tracker, progress.connection, item).await;
+                    progress.changes.extend(changes);
+                    progress
+                },
+            )
+            .await
+            .changes
     }
 
     async fn requested_root(
@@ -203,18 +252,18 @@ impl BusFeed {
     }
 
     async fn boot_progress_changes(
-        &mut self,
+        &self,
         connection: &mut BusConnection,
+        attempt: ConnectAttempt,
     ) -> Result<Vec<BootChange>, Error> {
         let boot_in_progress = connection.boot_in_progress().await?;
-        let origin = (!self.gave_origin).then(|| {
+        let origin = (attempt == ConnectAttempt::First).then(|| {
             BootChange::SetOrigin(if boot_in_progress {
                 Duration::ZERO
             } else {
                 monotonic_now()
             })
         });
-        self.gave_origin = true;
         let finished = if boot_in_progress {
             Vec::new()
         } else {
@@ -223,33 +272,10 @@ impl BusFeed {
         Ok(origin.into_iter().chain(finished).collect())
     }
 
-    async fn track_all(
-        &mut self,
-        connection: &mut BusConnection,
-        units: Vec<String>,
-    ) -> Vec<BootChange> {
-        stream::iter(units)
-            .fold(
-                FeedProgress {
-                    feed: &mut *self,
-                    connection: &mut *connection,
-                    changes: Vec::new(),
-                },
-                |mut progress, unit| async move {
-                    let tracked = progress.feed.track(progress.connection, &unit).await;
-                    progress
-                        .changes
-                        .extend(tracked.and_then(|tracked| tracked.change));
-                    progress
-                },
-            )
-            .await
-            .changes
-    }
-
     async fn start_watching(
         &mut self,
         connection: &mut BusConnection,
+        attempt: ConnectAttempt,
     ) -> Result<Vec<BootChange>, Error> {
         connection.subscribe().await?;
         if self.scope == Scope::System {
@@ -263,21 +289,34 @@ impl BusFeed {
             .filter(|job| shutting_down || job.kind == JobKind::BringsUp)
             .collect();
         let requested_root = self.requested_root(connection, &jobs).await?;
-        let boot_progress = self.boot_progress_changes(connection).await?;
+        let boot_progress = self.boot_progress_changes(connection, attempt).await?;
         let tracked_root = self.track(connection, &requested_root).await;
         let root = tracked_root
             .as_ref()
-            .map_or(requested_root, |tracked| tracked.name.clone());
+            .map_or(requested_root, |tracked| tracked.name().to_owned());
         let tracked_handoff = self.track(connection, HANDOFF_UNIT).await;
         let handoff = tracked_handoff
             .as_ref()
-            .map(|tracked| BootChange::SetHandoff(tracked.name.clone()));
+            .map(|tracked| BootChange::SetHandoff(tracked.name().to_owned()));
         let watched_units = jobs
             .iter()
             .map(|job| job.unit.clone())
             .chain(BootState::new(self.phase).milestone_targets)
             .collect();
-        let tracked_changes = self.track_all(connection, watched_units).await;
+        let tracked_changes = self
+            .collect_changes(
+                connection,
+                watched_units,
+                async |tracker, connection, unit| {
+                    tracker
+                        .track(connection, &unit)
+                        .await
+                        .and_then(TrackedUnit::into_change)
+                        .into_iter()
+                        .collect()
+                },
+            )
+            .await;
         eprintln!(
             "bootvine: watching {root} in {} as pid {} over {}",
             self.phase.label(),
@@ -291,8 +330,8 @@ impl BusFeed {
         let queued_at = monotonic_now();
         Ok(boot_progress
             .into_iter()
-            .chain(tracked_root.and_then(|tracked| tracked.change))
-            .chain(tracked_handoff.and_then(|tracked| tracked.change))
+            .chain(tracked_root.and_then(TrackedUnit::into_change))
+            .chain(tracked_handoff.and_then(TrackedUnit::into_change))
             .chain(handoff)
             .chain(tracked_changes)
             .chain(once(BootChange::SetRoot(root)))
@@ -306,26 +345,19 @@ impl BusFeed {
     }
 
     async fn track(&mut self, connection: &mut BusConnection, unit: &str) -> Option<TrackedUnit> {
-        if let Some(known) = self.unit_paths.values().find(|known| *known == unit) {
-            return Some(TrackedUnit {
-                name: known.clone(),
-                change: None,
-            });
+        if self.unit_paths.values().any(|known| known == unit) {
+            return Some(TrackedUnit::Known(unit.to_owned()));
         }
         let FetchedUnit {
             path,
             facts,
             activity,
         } = connection.fetch_unit(unit).await.ok()?;
-        let name = facts.name.clone();
-        if self.unit_paths.values().any(|known| *known == name) {
-            return Some(TrackedUnit { name, change: None });
+        if self.unit_paths.values().any(|known| *known == facts.name) {
+            return Some(TrackedUnit::Known(facts.name));
         }
-        self.unit_paths.insert(path, name.clone());
-        Some(TrackedUnit {
-            name,
-            change: Some(BootChange::TrackUnit { facts, activity }),
-        })
+        self.unit_paths.insert(path, facts.name.clone());
+        Some(TrackedUnit::New { facts, activity })
     }
 
     async fn changes_for(
@@ -374,7 +406,7 @@ impl BusFeed {
         let tracked = self.track(connection, &unit).await;
         let unit = tracked
             .as_ref()
-            .map_or(unit, |tracked| tracked.name.clone());
+            .map_or(unit, |tracked| tracked.name().to_owned());
         if self.phase == Phase::Initrd
             && matches!(self.root_switch, RootSwitch::NotQueued)
             && unit == SWITCH_ROOT_UNIT
@@ -383,7 +415,7 @@ impl BusFeed {
             self.root_switch = RootSwitch::Queued(sysroot);
         }
         tracked
-            .and_then(|tracked| tracked.change)
+            .and_then(TrackedUnit::into_change)
             .into_iter()
             .chain(once(BootChange::QueueJob { id, unit, kind, at }))
             .collect()

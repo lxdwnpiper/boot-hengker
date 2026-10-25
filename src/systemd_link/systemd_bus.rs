@@ -2,6 +2,7 @@ use std::{
     future::ready,
     io, iter, mem,
     os::fd::{AsFd, AsRawFd, BorrowedFd, RawFd},
+    pin::pin,
     time::Duration,
 };
 
@@ -10,13 +11,15 @@ use dbus::{
     arg::{AppendAll, PropMap, RefArg, Variant},
     channel::{BusType, Channel},
 };
-use futures::{StreamExt, stream};
+use futures::{TryStreamExt, stream};
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use tokio::{io::unix::AsyncFd, time::timeout};
 
 use crate::{
     boot_model::{Activity, JobKind, JobResult, UnitFacts, UnitKind, UnitTimeouts},
-    console_session::stream_sources::{CarriedItem, readable_source, unfold_carrying},
+    console_session::stream_sources::{
+        CarriedItem, readable_or_timeout, readable_source, unfold_carrying,
+    },
     systemd_link::link_error::Error,
 };
 
@@ -102,7 +105,7 @@ impl From<ListedJob> for JobListing {
 
 pub struct Session {
     channel: Channel,
-    pub peer_to_peer: bool,
+    peer_to_peer: bool,
 }
 
 fn method_call(
@@ -153,8 +156,9 @@ impl Session {
         if scope == Scope::System
             && let Ok(channel) = Channel::open_private(PRIVATE_SOCKET)
         {
-            send_authentication_carrier(&channel)?;
-            return Ok(Self::watching(channel, true));
+            let session = Self::watching(channel, true);
+            session.send(authentication_carrier()?)?;
+            return Ok(session);
         }
         let bus = match scope {
             Scope::System => BusType::System,
@@ -222,13 +226,6 @@ pub struct BusConnection {
     early_signals: Vec<Signal>,
 }
 
-fn into_results(batch: Result<Vec<Message>, Error>) -> Vec<Result<Message, Error>> {
-    match batch {
-        Ok(messages) => messages.into_iter().map(Ok).collect(),
-        Err(error) => vec![Err(error)],
-    }
-}
-
 impl BusConnection {
     pub fn register(session: Session) -> io::Result<Self> {
         Ok(Self {
@@ -259,29 +256,24 @@ impl BusConnection {
         if !drained.is_empty() {
             return Ok(drained);
         }
-        self.session.readable_mut().await?.clear_ready();
+        self.session.readable().await?.clear_ready();
         self.drain_replies()
     }
 
     async fn reply_to(&mut self, serial: u32) -> Result<Message, Error> {
-        unfold_carrying(self, |connection| async move {
-            let replies = connection.next_replies().await;
-            Some(CarriedItem {
-                item: replies,
-                state: connection,
+        let mut replies = pin!(
+            unfold_carrying(self, |connection| async move {
+                let replies = connection.next_replies().await;
+                Some(CarriedItem {
+                    item: replies,
+                    state: connection,
+                })
             })
-        })
-        .flat_map(|replies| stream::iter(into_results(replies)))
-        .filter(|reply| {
-            ready(
-                reply
-                    .as_ref()
-                    .map_or(true, |message| message.get_reply_serial() == Some(serial)),
-            )
-        })
-        .take(1)
-        .fold(Err(Error::Disconnected), |_, reply| ready(reply))
-        .await
+            .map_ok(|replies| stream::iter(replies.into_iter().map(Ok::<_, Error>)))
+            .try_flatten()
+            .try_filter(|reply| ready(reply.get_reply_serial() == Some(serial)))
+        );
+        replies.try_next().await?.ok_or(Error::Disconnected)
     }
 
     async fn call(&mut self, call: Message) -> Result<Message, Error> {
@@ -359,10 +351,8 @@ impl BusConnection {
     }
 
     pub async fn receive_signals(&mut self, patience: Duration) -> Result<Vec<Signal>, Error> {
-        if self.early_signals.is_empty()
-            && let Ok(Ok(mut guard)) = timeout(patience, self.session.readable_mut()).await
-        {
-            guard.clear_ready();
+        if self.early_signals.is_empty() {
+            readable_or_timeout(&self.session, patience).await;
         }
         self.drain_replies()?;
         Ok(mem::take(&mut self.early_signals))
@@ -447,17 +437,10 @@ impl AsFd for Session {
     }
 }
 
-fn send_authentication_carrier(channel: &Channel) -> Result<(), Error> {
-    let Ok(mut ping) = Message::new_method_call(DESTINATION, MANAGER_PATH, PEER_INTERFACE, "Ping")
-    else {
-        return Err(Error::MalformedCall);
-    };
+fn authentication_carrier() -> Result<Message, Error> {
+    let mut ping = method_call(DESTINATION, MANAGER_PATH, PEER_INTERFACE, "Ping", ())?;
     ping.set_no_reply(true);
-    if channel.send(ping).is_err() {
-        return Err(Error::Disconnected);
-    }
-    channel.flush();
-    Ok(())
+    Ok(ping)
 }
 
 fn parse_signal(message: &Message) -> Option<Signal> {

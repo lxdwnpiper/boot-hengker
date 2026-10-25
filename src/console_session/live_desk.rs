@@ -11,10 +11,7 @@ use crate::{
         console_palette::ConsolePalette,
         console_takeover::Console,
         passphrase_input::asks_to_quit,
-        stream_sources::{
-            BACKGROUND_CHECK_INTERVAL, CarriedItem, periodic_inputs, readable_source,
-            unfold_carrying,
-        },
+        stream_sources::{BACKGROUND_CHECK_INTERVAL, items_when_readable, periodic_inputs},
         watch_screen::{ConsoleDesk, ScreenInput, WatchEnding},
     },
     screen_settings::font_glyphs::Glyphs,
@@ -139,14 +136,7 @@ pub fn full_repaint_inputs() -> impl Stream<Item = ScreenInput> {
 }
 
 pub fn password_request_inputs(watch: RequestWatch) -> io::Result<impl Stream<Item = ScreenInput>> {
-    let readiness = readable_source(watch)?;
-    Ok(unfold_carrying(readiness, |readiness| async move {
-        readiness.readable().await.ok()?.clear_ready();
-        Some(CarriedItem {
-            item: readiness.get_ref().changed(),
-            state: readiness,
-        })
-    })
-    .filter(|changed| ready(*changed))
-    .map(|_| ScreenInput::PasswordRequests))
+    Ok(items_when_readable(watch, RequestWatch::changed)?
+        .filter(|changed| ready(*changed))
+        .map(|_| ScreenInput::PasswordRequests))
 }
