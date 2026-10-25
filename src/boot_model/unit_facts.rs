@@ -26,12 +26,21 @@ pub enum JobResult {
     Failed,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct UnitTimeouts {
+    pub start: Option<Duration>,
+    pub stop: Option<Duration>,
+    pub job: Option<Duration>,
+    pub job_running: Option<Duration>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UnitFacts {
     pub name: String,
     pub description: Option<String>,
     pub after: Vec<String>,
     pub before: Vec<String>,
+    pub timeouts: UnitTimeouts,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

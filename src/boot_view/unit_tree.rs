@@ -10,7 +10,8 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 
 use super::{
-    BRANCH, DURATION_WIDTH, ENDED_TRUNK, LAST_BRANCH, PASSING_TRUNK, RUNNING_ELAPSED, fit_width,
+    BRANCH, DURATION_WIDTH, ENDED_TRUNK, LAST_BRANCH, PASSING_TRUNK, RUNNING_ELAPSED, WHOLE_UNITS,
+    fit_width,
 };
 use crate::{
     boot_model::{RowStatus, TreeRow, UnitKind},
@@ -23,6 +24,13 @@ const MIN_DESCRIPTION_WIDTH: u16 = 12;
 const MIN_TAG_WIDTH: u16 = 6;
 const MIN_LABEL_WIDTH: u16 = 24;
 const HEADER_ROWS: u16 = 1;
+const SHOW_TIMEOUT_AFTER: Duration = Duration::from_secs(5);
+const TIMEOUT_HEADER: &str = "Timeout";
+
+struct RunTimeout {
+    limit: Duration,
+    exceeded: bool,
+}
 
 pub struct UnitTree<'a> {
     pub phase: Line<'static>,
@@ -38,6 +46,7 @@ struct Columns {
     label: u16,
     tag: u16,
     description: u16,
+    timeout: u16,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -86,7 +95,47 @@ impl UnitTree<'_> {
             name("Kind"),
             name("Description"),
             name("Running").right_aligned(),
+            name(TIMEOUT_HEADER).right_aligned(),
         ]))
+    }
+
+    fn run_timeout(&self, row: &TreeRow) -> Option<RunTimeout> {
+        let RowStatus::Running {
+            since,
+            deadline: Some(deadline),
+            ..
+        } = row.status
+        else {
+            return None;
+        };
+        let elapsed = self.now.saturating_sub(since);
+        let limit = deadline.saturating_sub(since);
+        (elapsed >= SHOW_TIMEOUT_AFTER).then_some(RunTimeout {
+            limit,
+            exceeded: elapsed >= limit,
+        })
+    }
+
+    fn timeout_width(&self) -> u16 {
+        self.rows
+            .iter()
+            .filter_map(|row| self.run_timeout(row))
+            .map(|timeout| width_of(&WHOLE_UNITS.unsigned_duration_to_string(&timeout.limit)))
+            .max()
+            .map_or(0, |widest| widest.max(width_of(TIMEOUT_HEADER)))
+    }
+
+    fn timeout_cell(&self, row: &TreeRow) -> Line<'static> {
+        self.run_timeout(row)
+            .map_or_else(Line::default, |timeout| {
+                let color = if timeout.exceeded {
+                    self.colors.failed_unit
+                } else {
+                    self.colors.columns
+                };
+                Line::from(WHOLE_UNITS.unsigned_duration_to_string(&timeout.limit)).fg(color)
+            })
+            .right_aligned()
     }
 
     fn stages(&self) -> impl Iterator<Item = Stage> + '_ {
@@ -164,7 +213,9 @@ impl UnitTree<'_> {
     }
 
     fn columns(&self, width: u16) -> Columns {
-        let unannotated = width.saturating_sub(DURATION_WIDTH + 1);
+        let timeout = self.timeout_width();
+        let timeout_room = if timeout > 0 { timeout + 1 } else { 0 };
+        let unannotated = width.saturating_sub(DURATION_WIDTH + 1 + timeout_room);
         let annotated: Vec<(&TreeRow, Stage)> = self
             .rows
             .iter()
@@ -186,11 +237,13 @@ impl UnitTree<'_> {
                 label: unannotated,
                 tag: 0,
                 description: 0,
+                timeout,
             },
             |label| Columns {
                 label,
                 tag,
                 description: content - label - tag,
+                timeout,
             },
         )
     }
@@ -229,14 +282,21 @@ impl UnitTree<'_> {
                 ))
                 .fg(self.colors.columns),
                 Line::from(timer).style(style).right_aligned(),
+                self.timeout_cell(row),
             ]),
         )
     }
 }
 
 impl Columns {
-    fn shown<T>(&self, cells: [T; 4]) -> impl Iterator<Item = T> {
-        let present = [true, self.tag > 0, self.description > 0, true];
+    fn shown<T>(&self, cells: [T; 5]) -> impl Iterator<Item = T> {
+        let present = [
+            true,
+            self.tag > 0,
+            self.description > 0,
+            true,
+            self.timeout > 0,
+        ];
         cells
             .into_iter()
             .zip(present)
@@ -244,8 +304,14 @@ impl Columns {
     }
 
     fn widths(&self) -> impl Iterator<Item = Constraint> {
-        self.shown([self.label, self.tag, self.description, DURATION_WIDTH])
-            .map(Constraint::Length)
+        self.shown([
+            self.label,
+            self.tag,
+            self.description,
+            DURATION_WIDTH,
+            self.timeout,
+        ])
+        .map(Constraint::Length)
     }
 }
 

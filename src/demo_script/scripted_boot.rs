@@ -12,7 +12,7 @@ use zeroize::Zeroizing;
 
 use crate::{
     boot_model::{
-        ActiveState, Activity, BootState, JobKind, JobResult, Phase, UnitFacts,
+        ActiveState, Activity, BootState, JobKind, JobResult, Phase, UnitFacts, UnitTimeouts,
         boot_origin::BootOrigin,
     },
     boot_view::PasswordPrompt,
@@ -38,6 +38,17 @@ pub struct Step {
     fails: bool,
     stops: bool,
     asks: Option<&'static str>,
+    timeout: Option<Duration>,
+}
+
+impl Step {
+    #[must_use]
+    pub const fn timing_out_after(self, limit: Duration) -> Self {
+        Self {
+            timeout: Some(limit),
+            ..self
+        }
+    }
 }
 
 #[must_use]
@@ -49,6 +60,7 @@ pub const fn step(unit: &'static str, after: &'static [&'static str], work: Dura
         fails: false,
         stops: false,
         asks: None,
+        timeout: None,
     }
 }
 
@@ -103,6 +115,10 @@ impl ScriptedJob {
             description: describe(self.step.unit).map(str::to_owned),
             after: after.into_iter().map(ToString::to_string).collect(),
             before: before.into_iter().map(ToString::to_string).collect(),
+            timeouts: UnitTimeouts {
+                job_running: self.step.timeout,
+                ..UnitTimeouts::default()
+            },
         }
     }
 

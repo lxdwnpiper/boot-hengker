@@ -29,6 +29,7 @@ pub enum RowStatus {
     Running {
         queued_at: Duration,
         since: Duration,
+        deadline: Option<Duration>,
     },
     Failed,
     Done,
@@ -83,6 +84,7 @@ impl UnitRecord {
                     .map_or(RowStatus::Waiting, |since| RowStatus::Running {
                         queued_at: job.queued_at,
                         since,
+                        deadline: self.deadline(),
                     })
             }
             Progress::Finished(Outcome::Failed) => RowStatus::Failed,

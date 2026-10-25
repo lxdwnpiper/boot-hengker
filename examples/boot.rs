@@ -131,8 +131,9 @@ const HOST: &[Step] = &[
     step(
         "sys-devices-virtual-misc-rfkill.device",
         &[],
-        Duration::from_millis(4000),
-    ),
+        Duration::from_millis(7000),
+    )
+    .timing_out_after(Duration::from_secs(90)),
     step(
         "systemd-rfkill.service",
         &["sys-devices-virtual-misc-rfkill.device"],

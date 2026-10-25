@@ -1,7 +1,8 @@
 use std::{iter::once, time::Duration};
 
 use crate::boot_model::{
-    ActiveState, Activity, BootState, JobKind, Phase, TreeRow, UnitFacts, flatten_forest,
+    ActiveState, Activity, BootState, JobKind, Phase, TreeRow, UnitFacts, UnitTimeouts,
+    flatten_forest,
 };
 
 pub const MS: Duration = Duration::from_millis(1);
@@ -18,6 +19,7 @@ pub fn facts(name: &str, after: &[&str]) -> UnitFacts {
         description: None,
         after: after.iter().map(ToString::to_string).collect(),
         before: Vec::new(),
+        timeouts: UnitTimeouts::default(),
     }
 }
 
@@ -54,6 +56,11 @@ impl QueuedUnit {
 
     pub fn ordered_before(mut self, before: &[&str]) -> Self {
         self.facts.before = before.iter().map(ToString::to_string).collect();
+        self
+    }
+
+    pub fn timing_out(mut self, timeouts: UnitTimeouts) -> Self {
+        self.facts.timeouts = timeouts;
         self
     }
 

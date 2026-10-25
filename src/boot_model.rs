@@ -12,7 +12,7 @@ pub use self::{
     boot_change::BootChange,
     boot_projection::BootProjection,
     reached_milestones::MilestoneRow,
-    unit_facts::{ActiveState, Activity, JobKind, JobResult, UnitFacts, UnitKind},
+    unit_facts::{ActiveState, Activity, JobKind, JobResult, UnitFacts, UnitKind, UnitTimeouts},
     waiting_tree::{RowStatus, TreeNode, TreeRow, flatten_forest},
 };
 

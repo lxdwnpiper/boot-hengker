@@ -59,6 +59,10 @@ const ELAPSED: SpanPrinter = SpanPrinter::new()
 
 const RUNNING_ELAPSED: SpanPrinter = ELAPSED.precision(Some(2));
 
+const WHOLE_UNITS: SpanPrinter = SpanPrinter::new()
+    .designator(Designator::Compact)
+    .spacing(Spacing::None);
+
 pub struct BootView<'a> {
     pub state: &'a BootState,
     pub projection: &'a BootProjection,
@@ -76,7 +80,9 @@ impl BootView<'_> {
             .iter()
             .filter(|row| row.kind != UnitKind::Target)
             .filter_map(|row| match row.status {
-                RowStatus::Running { queued_at, since } => Some(RunningRun {
+                RowStatus::Running {
+                    queued_at, since, ..
+                } => Some(RunningRun {
                     label: &row.label,
                     queued_at,
                     since,

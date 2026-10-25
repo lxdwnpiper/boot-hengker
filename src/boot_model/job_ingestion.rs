@@ -25,6 +25,26 @@ impl UnitRecord {
         transitioning.then(|| self.transition_started(job.kind).unwrap_or(job.queued_at))
     }
 
+    pub(super) fn deadline(&self) -> Option<Duration> {
+        let Progress::Pending(job) = self.progress else {
+            return None;
+        };
+        let since = self.running_since()?;
+        let timeouts = self.facts.timeouts;
+        let transition = match job.kind {
+            JobKind::TakesDown => timeouts.stop,
+            JobKind::BringsUp | JobKind::Unknown => timeouts.start,
+        };
+        [
+            transition.map(|limit| since + limit),
+            timeouts.job_running.map(|limit| since + limit),
+            timeouts.job.map(|limit| job.queued_at + limit),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
+    }
+
     fn is_pending(&self) -> bool {
         matches!(self.progress, Progress::Pending(_))
     }
@@ -271,10 +291,10 @@ impl BootState {
 mod tests {
     use super::*;
     use crate::{
-        boot_model::RowStatus,
+        boot_model::{RowStatus, UnitTimeouts},
         demo_script::boot_test_fixtures::{
-            MS, activating, facts, nested_boot_sample as sample, queue_unit, queued_boot, waiting,
-            waiting_rows,
+            MS, activating, facts, nested_boot_sample as sample, queue_unit, queued_boot, running,
+            waiting, waiting_rows,
         },
     };
 
@@ -368,7 +388,8 @@ mod tests {
             waiting_rows(&state)[0].status,
             RowStatus::Running {
                 queued_at: 1000 * MS,
-                since: 1200 * MS
+                since: 1200 * MS,
+                deadline: None,
             }
         );
         state.finish_job(1, JobResult::Done, 1700 * MS);
@@ -381,5 +402,53 @@ mod tests {
                 failed: false,
             }]
         );
+    }
+
+    fn deadline_of(state: &BootState) -> Option<Duration> {
+        match waiting_rows(state)[0].status {
+            RowStatus::Running { deadline, .. } => deadline,
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn the_earliest_timer_sets_the_deadline() {
+        let state = queued_boot(
+            Phase::Host,
+            1000 * MS,
+            [
+                running("web.service", &[], 3000 * MS).timing_out(UnitTimeouts {
+                    start: Some(90_000 * MS),
+                    job: Some(10_000 * MS),
+                    ..UnitTimeouts::default()
+                }),
+            ],
+        );
+        assert_eq!(deadline_of(&state), Some(11_000 * MS));
+    }
+
+    #[test]
+    fn stopping_units_run_against_the_stop_timeout() {
+        let mut state = queued_boot(
+            Phase::Shutdown,
+            Duration::ZERO,
+            [waiting("db.service", &[])
+                .stopping()
+                .timing_out(UnitTimeouts {
+                    start: Some(5000 * MS),
+                    stop: Some(90_000 * MS),
+                    ..UnitTimeouts::default()
+                })],
+        );
+        assert_eq!(deadline_of(&state), None);
+        state.update_activity(
+            "db.service",
+            Activity {
+                state: Some(ActiveState::Deactivating),
+                active_exit: Some(2000 * MS),
+                ..Activity::default()
+            },
+        );
+        assert_eq!(deadline_of(&state), Some(92_000 * MS));
     }
 }

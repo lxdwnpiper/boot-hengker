@@ -40,7 +40,8 @@ const SHUTDOWN: &[Step] = &[
         &["display-manager.service"],
         Duration::from_millis(1600),
     ),
-    stopping("docker.service", &[], Duration::from_millis(3200)),
+    stopping("docker.service", &[], Duration::from_millis(6500))
+        .timing_out_after(Duration::from_secs(90)),
     stopping(
         "containerd.service",
         &["docker.service"],

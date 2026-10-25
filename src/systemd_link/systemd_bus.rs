@@ -15,7 +15,7 @@ use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use tokio::{io::unix::AsyncFd, time::timeout};
 
 use crate::{
-    boot_model::{Activity, JobKind, JobResult, UnitFacts},
+    boot_model::{Activity, JobKind, JobResult, UnitFacts, UnitKind, UnitTimeouts},
     console_session::stream_sources::{CarriedItem, readable_source, unfold_carrying},
     systemd_link::link_error::Error,
 };
@@ -24,6 +24,10 @@ const DESTINATION: &str = "org.freedesktop.systemd1";
 const MANAGER_PATH: &str = "/org/freedesktop/systemd1";
 const MANAGER_INTERFACE: &str = "org.freedesktop.systemd1.Manager";
 const UNIT_INTERFACE: &str = "org.freedesktop.systemd1.Unit";
+const SERVICE_INTERFACE: &str = "org.freedesktop.systemd1.Service";
+const MOUNT_INTERFACE: &str = "org.freedesktop.systemd1.Mount";
+const SWAP_INTERFACE: &str = "org.freedesktop.systemd1.Swap";
+const SOCKET_INTERFACE: &str = "org.freedesktop.systemd1.Socket";
 const JOB_INTERFACE: &str = "org.freedesktop.systemd1.Job";
 const PROPERTIES_INTERFACE: &str = "org.freedesktop.DBus.Properties";
 const PEER_INTERFACE: &str = "org.freedesktop.DBus.Peer";
@@ -32,6 +36,7 @@ const BUS_PATH: &str = "/org/freedesktop/DBus";
 const PRIVATE_SOCKET: &str = "unix:path=/run/systemd/private";
 const SIGNAL_RULE: &str = "type='signal',path_namespace='/org/freedesktop/systemd1'";
 const CALL_TIMEOUT: Duration = Duration::from_secs(1);
+const UNLIMITED: Duration = Duration::from_micros(u64::MAX);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Scope {
@@ -328,21 +333,29 @@ impl BusConnection {
             .call(manager_call("GetUnit", (name,))?)
             .await?
             .read1()?;
-        let properties: PropMap = self
-            .call(method_call(
-                DESTINATION,
-                &path,
-                PROPERTIES_INTERFACE,
-                "GetAll",
-                (UNIT_INTERFACE,),
-            )?)
-            .await?
-            .read1()?;
+        let properties = self.all_properties(&path, UNIT_INTERFACE).await?;
+        let kind_properties = match kind_interface(UnitKind::of(&unit_id(name, &properties))) {
+            Some(interface) => self.all_properties(&path, interface).await?,
+            None => PropMap::new(),
+        };
         Ok(FetchedUnit {
-            facts: unit_facts_from(name, &properties),
+            facts: unit_facts_from(name, &properties, &kind_properties),
             activity: activity_from(&properties),
             path,
         })
+    }
+
+    async fn all_properties(&mut self, path: &Path<'_>, interface: &str) -> Result<PropMap, Error> {
+        Ok(self
+            .call(method_call(
+                DESTINATION,
+                path,
+                PROPERTIES_INTERFACE,
+                "GetAll",
+                (interface,),
+            )?)
+            .await?
+            .read1()?)
     }
 
     pub async fn receive_signals(&mut self, patience: Duration) -> Result<Vec<Signal>, Error> {
@@ -356,13 +369,51 @@ impl BusConnection {
     }
 }
 
-fn unit_facts_from(name: &str, properties: &PropMap) -> UnitFacts {
-    let text = |property: &str| {
-        properties
-            .get(property)
-            .and_then(|value| value.0.as_str())
-            .map(ToOwned::to_owned)
+fn text_property(properties: &PropMap, property: &str) -> Option<String> {
+    properties
+        .get(property)
+        .and_then(|value| value.0.as_str())
+        .map(ToOwned::to_owned)
+}
+
+fn unit_id(name: &str, properties: &PropMap) -> String {
+    text_property(properties, "Id").unwrap_or_else(|| name.to_owned())
+}
+
+fn kind_interface(kind: UnitKind) -> Option<&'static str> {
+    match kind {
+        UnitKind::Service => Some(SERVICE_INTERFACE),
+        UnitKind::Mount => Some(MOUNT_INTERFACE),
+        UnitKind::Swap => Some(SWAP_INTERFACE),
+        UnitKind::Socket => Some(SOCKET_INTERFACE),
+        _ => None,
+    }
+}
+
+fn time_limit(properties: &PropMap, property: &str) -> Option<Duration> {
+    properties
+        .get(property)
+        .and_then(|value| value.0.as_u64())
+        .map(Duration::from_micros)
+        .filter(|limit| !limit.is_zero() && *limit != UNLIMITED)
+}
+
+fn timeouts_from(kind: UnitKind, unit: &PropMap, kind_specific: &PropMap) -> UnitTimeouts {
+    let (start, stop) = if kind == UnitKind::Service {
+        ("TimeoutStartUSec", "TimeoutStopUSec")
+    } else {
+        ("TimeoutUSec", "TimeoutUSec")
     };
+    UnitTimeouts {
+        start: time_limit(kind_specific, start),
+        stop: time_limit(kind_specific, stop),
+        job: time_limit(unit, "JobTimeoutUSec"),
+        job_running: time_limit(unit, "JobRunningTimeoutUSec"),
+    }
+}
+
+fn unit_facts_from(name: &str, properties: &PropMap, kind_properties: &PropMap) -> UnitFacts {
+    let text = |property: &str| text_property(properties, property);
     let names = |property: &str| {
         properties
             .get(property)
@@ -374,8 +425,10 @@ fn unit_facts_from(name: &str, properties: &PropMap) -> UnitFacts {
             })
             .unwrap_or_default()
     };
+    let id = unit_id(name, properties);
     UnitFacts {
-        name: text("Id").unwrap_or_else(|| name.to_owned()),
+        timeouts: timeouts_from(UnitKind::of(&id), properties, kind_properties),
+        name: id,
         description: text("Description").filter(|description| !description.is_empty()),
         after: names("After"),
         before: names("Before"),
@@ -487,5 +540,45 @@ mod tests {
             parse_signal(&startup_finished),
             Some(Signal::BootFinished)
         ));
+    }
+
+    fn limit_properties(entries: &[(&str, Duration)]) -> PropMap {
+        entries
+            .iter()
+            .map(|(name, limit)| {
+                let micros = u64::try_from(limit.as_micros()).unwrap_or(u64::MAX);
+                (
+                    (*name).to_owned(),
+                    Variant(Box::new(micros) as Box<dyn RefArg>),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn unlimited_timeouts_are_absent() {
+        let unit = limit_properties(&[
+            ("JobTimeoutUSec", UNLIMITED),
+            ("JobRunningTimeoutUSec", Duration::ZERO),
+        ]);
+        let service = limit_properties(&[
+            ("TimeoutStartUSec", UNLIMITED),
+            ("TimeoutStopUSec", Duration::from_secs(90)),
+        ]);
+        assert_eq!(
+            timeouts_from(UnitKind::Service, &unit, &service),
+            UnitTimeouts {
+                stop: Some(Duration::from_secs(90)),
+                ..UnitTimeouts::default()
+            }
+        );
+    }
+
+    #[test]
+    fn mounts_use_one_timeout_for_both_directions() {
+        let mount = limit_properties(&[("TimeoutUSec", Duration::from_secs(20))]);
+        let timeouts = timeouts_from(UnitKind::Mount, &PropMap::new(), &mount);
+        assert_eq!(timeouts.start, Some(Duration::from_secs(20)));
+        assert_eq!(timeouts.stop, Some(Duration::from_secs(20)));
     }
 }

@@ -1,6 +1,5 @@
 use std::{cmp::Reverse, iter::once, time::Duration};
 
-use jiff::fmt::friendly::{Designator, Spacing, SpanPrinter};
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Layout, Rect},
@@ -13,7 +12,7 @@ use ratatui::{
     },
 };
 
-use super::{fit_width, rule, unit_count};
+use super::{WHOLE_UNITS, fit_width, rule, unit_count};
 use crate::{
     boot_model::{FinishedRun, MilestoneRow},
     screen_settings::{color_scheme::TimelineColors, font_glyphs::Glyphs},
@@ -39,9 +38,6 @@ const AXIS_STEPS: [Duration; 12] = [
     Duration::from_mins(30),
     Duration::from_hours(1),
 ];
-const AXIS_LABEL: SpanPrinter = SpanPrinter::new()
-    .designator(Designator::Compact)
-    .spacing(Spacing::None);
 
 pub struct Timeline<'a> {
     pub origin: Duration,
@@ -313,7 +309,7 @@ impl TimeAxis {
         if offset.is_zero() && self.origin.is_zero() {
             KERNEL_ORIGIN_LABEL.to_owned()
         } else {
-            AXIS_LABEL.unsigned_duration_to_string(&offset)
+            WHOLE_UNITS.unsigned_duration_to_string(&offset)
         }
     }
 }

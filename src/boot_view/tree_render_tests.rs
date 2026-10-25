@@ -4,7 +4,7 @@ use unicode_width::UnicodeWidthStr;
 
 use super::screen_render_fixtures::{boot_in_progress, chain_boot, described_boot, render};
 use crate::{
-    boot_model::{JobResult, Phase},
+    boot_model::{BootState, JobResult, Phase, UnitTimeouts},
     demo_script::boot_test_fixtures::{MS, queue_unit, queued_boot, running, waiting},
 };
 
@@ -71,6 +71,72 @@ fn only_running_units_carry_a_timer() {
     assert!(lines[2].ends_with("multi-user.target"), "{screen}");
     assert!(lines[3].ends_with("6.40s"), "{screen}");
     assert!(lines[5].ends_with("web"), "{screen}");
+}
+
+fn timing_out_boot() -> BootState {
+    let start_timeout = UnitTimeouts {
+        start: Some(Duration::from_secs(90)),
+        ..UnitTimeouts::default()
+    };
+    queued_boot(
+        Phase::Host,
+        Duration::ZERO,
+        [
+            waiting(
+                "multi-user.target",
+                &["slow.service", "quick.service", "unlimited.service"],
+            ),
+            running("slow.service", &[], 1000 * MS).timing_out(start_timeout),
+            running("quick.service", &[], 5000 * MS).timing_out(start_timeout),
+            running("unlimited.service", &[], 1000 * MS),
+        ],
+    )
+}
+
+fn line_with<'a>(lines: &'a [String], text: &str) -> &'a str {
+    lines
+        .iter()
+        .find(|line| line.contains(text))
+        .unwrap_or_else(|| panic!("{text} missing\n{}", lines.join("\n")))
+}
+
+#[test]
+fn slow_runs_show_their_timeout_in_a_column() {
+    let lines = render(&timing_out_boot(), 7400 * MS, 110, 24);
+    let screen = lines.join("\n");
+    assert!(
+        line_with(&lines, "Running").ends_with("Timeout"),
+        "{screen}"
+    );
+    assert!(
+        line_with(&lines, "slow").ends_with("6.40s   1m30s"),
+        "{screen}"
+    );
+    assert!(line_with(&lines, "quick").ends_with("2.40s"), "{screen}");
+    assert!(
+        line_with(&lines, "unlimited").ends_with("6.40s"),
+        "{screen}"
+    );
+}
+
+#[test]
+fn the_timeout_column_waits_for_a_slow_run() {
+    let lines = render(&timing_out_boot(), 4000 * MS, 110, 24);
+    assert!(
+        lines.iter().all(|line| !line.contains("Timeout")),
+        "{}",
+        lines.join("\n")
+    );
+}
+
+#[test]
+fn narrow_screens_keep_the_timeout() {
+    let lines = render(&timing_out_boot(), 7400 * MS, 50, 24);
+    assert!(
+        line_with(&lines, "slow").ends_with("1m30s"),
+        "{}",
+        lines.join("\n")
+    );
 }
 
 #[test]
