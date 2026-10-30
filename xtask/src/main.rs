@@ -1,3 +1,4 @@
+mod publish_recordings;
 mod record_screencasts;
 mod sync_default_config;
 mod task_error;
@@ -21,6 +22,10 @@ enum Task {
     )]
     RecordScreencasts(RecordScreencastsOptions),
     #[command(
+        about = "Replace the recordings branch on origin with a single commit holding recordings/"
+    )]
+    PublishRecordings,
+    #[command(
         about = "Rewrite the defaults block in docs/configuration.md from `bootvine defaults`"
     )]
     SyncDefaultConfig,
@@ -41,6 +46,7 @@ fn main() -> ExitCode {
         Task::RecordScreencasts(options) => {
             record_screencasts::record_screencasts(&options.vm_check_outputs)
         }
+        Task::PublishRecordings => publish_recordings::publish_recordings(),
         Task::SyncDefaultConfig => sync_default_config::sync_default_config(),
     };
     match outcome {

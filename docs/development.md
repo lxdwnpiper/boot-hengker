@@ -9,7 +9,7 @@
 | `xtask/` | repository tasks run with `cargo xtask` |
 | `vm-tests/` | the sample NixOS machines, one folder each with its VM check |
 | `nix/` | the crane builds and the NixOS module |
-| `recordings/` | the scripted demo GIFs and the sample machine WebP recordings the README and the [guide](guide.md) show |
+| `recordings/` | ignored output of `record-screencasts`: the scripted demo GIFs and the sample machine WebP recordings, published on the `recordings` branch for the README and the [guide](guide.md) |
 
 `cargo build` and `cargo test` act on every crate. `cargo run` needs the binary:
 `--bin bootvine`, `--bin scripted-boot` and so on.
@@ -109,6 +109,10 @@ exports libraries that clash with [QEMU](https://www.qemu.org) or Chromium.
 - `nix run .#record-screencasts` re-records the animations from the scripted
   demos and turns the frames each VM check captured into
   `recordings/<machine>.webp`, for the README and the [guide](guide.md).
+- `nix run .#publish-recordings` force-pushes `recordings/` as the single,
+  parentless commit of the `recordings` branch, which the README and the guide
+  link to. Keeping the recordings off `main` keeps them out of every clone and
+  flake fetch.
 - `cargo xtask sync-default-config` rewrites the defaults block in
   [configuration](configuration.md#defaults) from `bootvine defaults`.
 - `cargo run --bin bootvine -- install --destdir <dir> --initrd dracut` stages an install

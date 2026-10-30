@@ -13,6 +13,7 @@ const TAPES: [&str; 2] = [
     "scripted-demos/tapes/scripted-shutdown.tape",
 ];
 const RECORDING_FRAME_MILLISECONDS: &str = "500";
+pub const RECORDINGS_DIRECTORY: &str = "recordings";
 
 fn sorted_entries(directory: &Path) -> Result<Vec<PathBuf>, TaskError> {
     let read_failure = |source| TaskError::File {
@@ -106,10 +107,14 @@ fn encode_machine_recording(
 }
 
 pub fn record_screencasts(vm_check_outputs: &Path) -> Result<(), TaskError> {
-    let recordings = Path::new("recordings");
-    if !recordings.is_dir() {
+    if !TAPES.iter().all(|tape| Path::new(tape).is_file()) {
         return Err(TaskError::NotInRepositoryRoot);
     }
+    let recordings = Path::new(RECORDINGS_DIRECTORY);
+    fs::create_dir_all(recordings).map_err(|source| TaskError::File {
+        path: recordings.to_path_buf(),
+        source,
+    })?;
     let shell = Shell::new()?;
     TAPES.iter().try_for_each(|tape| {
         let tape_path = Path::new(tape);

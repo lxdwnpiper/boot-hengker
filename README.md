@@ -9,7 +9,7 @@ I started bootvine out of frustration with the boot screen of most Linux
 distributions: a wall of log lines scrolling past too fast to read, which never
 gave me any idea of what was going on.
 
-<img src="https://codeberg.org/wvhulle/bootvine/raw/branch/main/recordings/boot.gif" width="691" alt="A boot through the initrd into stage 2, with one failed unit">
+<img src="https://codeberg.org/wvhulle/bootvine/raw/branch/recordings/boot.gif" width="691" alt="A boot through the initrd into stage 2, with one failed unit">
 
 It also follows shutdowns, answers passphrase prompts such as a
 [LUKS](https://gitlab.com/cryptsetup/cryptsetup) unlock in place, and shows why

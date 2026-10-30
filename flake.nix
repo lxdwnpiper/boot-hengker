@@ -124,7 +124,7 @@
 
           record-screencasts =
             shellScriptApp "record-screencasts"
-              "Re-record the scripted demo animations and the sample machine recordings into recordings/"
+              "Re-record the scripted demo animations and the sample machine recordings into recordings/; publish them with publish-recordings"
               {
                 runtimeInputs = [
                   pkgs.vhs
@@ -137,6 +137,17 @@
                     lib.mapAttrs (machineName: _: self.checks.${system}."vm-${machineName}") vmTests.machines
                   )
                 }";
+              };
+
+          publish-recordings =
+            shellScriptApp "publish-recordings"
+              "Replace the recordings branch on origin with a single commit holding recordings/"
+              {
+                runtimeInputs = [
+                  pkgs.gitMinimal
+                  builds.repo-tasks
+                ];
+                text = "exec xtask publish-recordings";
               };
 
           build-and-push-to-cachix =

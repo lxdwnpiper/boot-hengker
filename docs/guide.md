@@ -7,7 +7,7 @@ by their [VM checks](development.md#testing).
 
 ## Reading the screen
 
-<img src="../recordings/boot.gif" width="691" alt="A boot through the initrd into stage 2, with one failed unit">
+<img src="https://codeberg.org/wvhulle/bootvine/raw/branch/recordings/boot.gif" width="691" alt="A boot through the initrd into stage 2, with one failed unit">
 
 From top to bottom:
 
@@ -47,7 +47,7 @@ From top to bottom:
 
 ## Booting through the initrd
 
-<img src="../recordings/slow-services.webp" width="640" alt="A NixOS machine booting through the initrd into stage 2, handing over to a greetd login, then powering off">
+<img src="https://codeberg.org/wvhulle/bootvine/raw/branch/recordings/slow-services.webp" width="640" alt="A NixOS machine booting through the initrd into stage 2, handing over to a greetd login, then powering off">
 
 The `slow-services` machine boots with a held hardware probe in the initrd,
 slow units in stage 2 and one failing unit, hands over to its greetd login
@@ -69,7 +69,7 @@ How bootvine gets in that early and survives the switch is in
 
 ### Without a display manager
 
-<img src="../recordings/text-console.webp" width="640" alt="The same boot on a machine without a display manager, ending at a text login">
+<img src="https://codeberg.org/wvhulle/bootvine/raw/branch/recordings/text-console.webp" width="640" alt="The same boot on a machine without a display manager, ending at a text login">
 
 The `text-console` machine boots the same units without greetd. With no
 display manager to wait for, bootvine hands the console back as soon as the
@@ -77,7 +77,7 @@ default target is reached, and the text login on `tty1` comes forward.
 
 ### Without a systemd initrd
 
-<img src="../recordings/scripted-initrd.webp" width="640" alt="The same boot with NixOS's scripted initrd: the kernel and initrd lines scroll past before bootvine starts in stage 2">
+<img src="https://codeberg.org/wvhulle/bootvine/raw/branch/recordings/scripted-initrd.webp" width="640" alt="The same boot with NixOS's scripted initrd: the kernel and initrd lines scroll past before bootvine starts in stage 2">
 
 The `scripted-initrd` machine uses NixOS's older scripted initrd, which has no
 systemd. The initrd's lines scroll past as usual, and bootvine starts in
@@ -85,7 +85,7 @@ stage 2, from `sysinit.target` on.
 
 ## Shutdown
 
-<img src="../recordings/shutdown.gif" width="691" alt="A poweroff: units stopping under the targets waiting on them">
+<img src="https://codeberg.org/wvhulle/bootvine/raw/branch/recordings/shutdown.gif" width="691" alt="A poweroff: units stopping under the targets waiting on them">
 
 On a poweroff, reboot or halt the tree turns around:
 
@@ -97,7 +97,7 @@ On a poweroff, reboot or halt the tree turns around:
 
 ## Passphrase prompts
 
-<img src="../recordings/encrypted-volume.webp" width="640" alt="A LUKS passphrase prompt floating over the initrd tree, a wrong answer, then the unlock">
+<img src="https://codeberg.org/wvhulle/bootvine/raw/branch/recordings/encrypted-volume.webp" width="640" alt="A LUKS passphrase prompt floating over the initrd tree, a wrong answer, then the unlock">
 
 The `encrypted-volume` machine asks for a LUKS passphrase in the initrd; its
 recording shows a wrong answer, then the right one.
@@ -118,7 +118,7 @@ bootvine started, bootvine waits behind it.
 
 ## Failures
 
-<img src="../recordings/failures.webp" width="640" alt="Units failing one after another, each landing in the failure panel with its reason and last journal lines">
+<img src="https://codeberg.org/wvhulle/bootvine/raw/branch/recordings/failures.webp" width="640" alt="Units failing one after another, each landing in the failure panel with its reason and last journal lines">
 
 A unit that broke or timed out gets an entry in the failure panel, newest
 first:
