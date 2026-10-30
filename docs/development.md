@@ -1,5 +1,19 @@
 # Development
 
+## Layout
+
+| Folder | Holds |
+| --- | --- |
+| `bootvine/` | the published crate: the library, the `bootvine` binary and the unit and initrd files it installs |
+| `scripted-demos/` | the scripted boot, shutdown and passphrase demos, and the VHS tapes that record them |
+| `xtask/` | repository tasks run with `cargo xtask` |
+| `vm-tests/` | the sample NixOS machines, one folder each with its VM check |
+| `nix/` | the crane builds and the NixOS module |
+| `recordings/` | the animations and screenshots the README and the [guide](guide.md) show |
+
+`cargo build` and `cargo test` act on every crate. `cargo run` needs the binary:
+`--bin bootvine`, `--bin scripted-boot` and so on.
+
 ## Setup
 
 Work inside the dev shell (`direnv allow` once, with
@@ -57,24 +71,32 @@ locally from the dev shell with `release-plz update`.
 | What | Command |
 | --- | --- |
 | Model and render tests | `cargo test --workspace` |
-| Scripted demos | `cargo run --example boot` (also `shutdown`, `luks`) |
-| Sample machine in a window | `nix run .#sample-machine-vm` |
+| Scripted demos | `cargo run --bin scripted-boot` (also `scripted-shutdown`, `scripted-luks-unlock`) |
+| Sample machines in a window | `nix run .#sample-vm-<machine>`, see the [guide](guide.md#sample-machines) |
 | Boot and shutdown in a VM | `nix build .#checks.x86_64-linux.vm-boot-and-shutdown` |
 | Passphrase prompt in a VM | `nix build .#checks.x86_64-linux.vm-luks-passphrase` |
+| Failure panel in a VM | `nix build .#checks.x86_64-linux.vm-failures` |
 
 To watch your own user manager start the sample units:
 
 ```sh
 units=$(nix build --no-link --print-out-paths .#sample-unit-files)
 systemctl --user link --runtime $units/*
-systemctl --user start --no-block bootvine-demo.target
-cargo run -- --user --target bootvine-demo.target --hold 3s
+systemctl --user start --no-block bootvine-sample-services.target
+cargo run --bin bootvine -- --user --target bootvine-sample-services.target --hold 3s
 systemctl --user stop $(ls $units)
 systemctl --user disable --runtime $(ls $units)
 ```
 
+Everything a sample machine needs sits in its own folder under `vm-tests/`:
+`machine.nix`, and for the machines with a check, `check.nix` and `check.py`.
+`vm-tests/shared/` holds the settings every machine shares, the window setup
+for `nix run` and the console helpers for the checks. A new machine is a new
+folder plus its name in `vm-tests/default.nix`.
+
 The VM checks read the console as text, hold the boot at fixed points and wait
-on marker files instead of sleeping. To step through one by hand, run
+on marker files instead of sleeping. The failures check starts each failing
+unit by hand, so it knows which one is newest in the panel. To step through one by hand, run
 `nix run .#checks.x86_64-linux.vm-boot-and-shutdown.driverInteractive` and
 call `test_script()`.
 
@@ -83,12 +105,13 @@ exports libraries that clash with [QEMU](https://www.qemu.org) or Chromium.
 
 ## Repository tasks
 
-- `nix run .#record-screencasts` re-records the README animations from the
-  scripted demos and copies the passphrase screenshot from the VM check.
+- `nix run .#record-screencasts` re-records the animations from the scripted
+  demos and copies the passphrase and failures screenshots from the VM checks
+  into `recordings/`, for the README and the [guide](guide.md).
 - `cargo xtask sync-default-config` rewrites the defaults block in
   [configuration](configuration.md#defaults) from `bootvine defaults`.
-- `cargo run -- install --destdir <dir> --initrd dracut` stages an install
-  without touching the system; `cargo run -- uninstall --destdir <dir>` removes
+- `cargo run --bin bootvine -- install --destdir <dir> --initrd dracut` stages an install
+  without touching the system; `cargo run --bin bootvine -- uninstall --destdir <dir>` removes
   it again.
 
 ## Code style and design

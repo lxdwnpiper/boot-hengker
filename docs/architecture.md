@@ -11,6 +11,8 @@ while it does. None of this is needed to install or configure it.
   PID 1 over systemd's private socket, which
   [zbus](https://github.com/dbus2/zbus) cannot use; see
   [systemd's private socket](#systemds-private-socket).
+- **libsystemd.** It reads the last journal lines of a failed unit; see
+  [failures](#failures).
 - **A virtual terminal.** It draws on `tty12` and switches the console to it.
 
 ## Overview
@@ -116,7 +118,7 @@ From then on it follows the signals:
 | Signal | Carries | Used for |
 | --- | --- | --- |
 | `JobNew` | job id, job path, unit name | a row in the tree |
-| `JobRemoved` | job id, result | the row finishes as done, failed or skipped |
+| `JobRemoved` | job id, unit name, result | the row finishes as done, failed or skipped |
 | `PropertiesChanged` on a unit | `ActiveState` and its timestamps | running since, and the timeline |
 | `StartupFinished` | | the boot reached its default target |
 
@@ -150,6 +152,47 @@ systemd's `…TimestampMonotonic` properties count microseconds of
 `CLOCK_MONOTONIC`, which starts with the kernel. bootvine reads the same
 clock, so the times it shows are measured from the kernel start, even for
 units that ran before bootvine did.
+
+### Failures
+
+`JobRemoved` says how a job ended: `failed`, `timeout` or `dependency`. Like
+systemd's own `[FAILED]`, `[ TIME ]` and `[DEPEND]`, bootvine tells them
+apart: a unit that failed only because a dependency did is shown dimmed in the
+tree and left out of the failure panel, so the panel points at the unit that
+actually broke. A unit whose `ActiveState` turns `failed` without a failed job,
+such as a service crashing after it started, counts as failed too.
+
+For a unit that broke or timed out, bootvine collects the cause once:
+
+```mermaid
+sequenceDiagram
+    participant PID1 as systemd (PID 1)
+    participant Bootvine as bootvine
+    participant Journal as journal files
+
+    PID1-->>Bootvine: ActiveState=failed, or JobRemoved failed/timeout
+    Bootvine->>PID1: GetUnit, Properties.GetAll on the unit type
+    PID1->>Bootvine: Result, ExecMainCode, ExecMainStatus, StatusText
+    Note over Bootvine: wait 200 ms for journald, longer while nothing is there yet
+    Bootvine->>Journal: sd_journal, matching the unit in this boot
+    Journal->>Bootvine: last messages, newest last
+    Note over Bootvine: reason and lines in the failure panel
+```
+
+- **The reason** comes from the unit type's `Result` (`exit-code`, `signal`,
+  `timeout`, `start-limit-hit`, `oom-kill`, …), with the exit status or signal
+  of the main process, and the service's `StatusText` when it set one. These
+  are read when the unit fails, since they change at that moment.
+- **The journal lines** match the unit the same way `journalctl -u` does
+  (`_SYSTEMD_UNIT=` or `UNIT=`, in the current boot), without PID 1's own
+  "Starting…", "Failed with result…" and "Failed to start…" lines, which the
+  reason already covers. In the initrd they come from `/run/log/journal`. The
+  journal is opened without `SD_JOURNAL_LOCAL_ONLY`: libsystemd caches the
+  initrd's machine ID, which would hide the real root's files after the
+  switch, and the boot ID match already keeps other machines out.
+- **libsystemd** is linked rather than calling `journalctl`, since dracut,
+  mkinitcpio and the NixOS initrd builder copy the libraries a binary links
+  into the initramfs along with it, while `journalctl` may not be there.
 
 ## Surviving the switch to the real root
 

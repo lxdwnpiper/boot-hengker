@@ -1,0 +1,17 @@
+[package]
+description = "Scripted boots, shutdowns and passphrase prompts that play bootvine's screen in a terminal"
+edition = "2024"
+license = "GPL-3.0-or-later"
+name = "scripted-demos"
+publish = false
+version = "0.1.0"
+
+[lints]
+workspace = true
+
+[dependencies]
+bootvine = { path = "../bootvine" }
+futures = { version = "0.3.34", default-features = false, features = ["std"] }
+ratatui = "0.30.2"
+tokio = { version = "1.54.0", default-features = false, features = ["rt", "time"] }
+zeroize = "1.9.1"

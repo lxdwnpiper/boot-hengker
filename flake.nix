@@ -46,11 +46,11 @@
               craneLib
               rustToolchain
               ;
-            builds = import ./crane-builds.nix { inherit lib pkgs craneLib; };
+            builds = import ./nix/crane-builds.nix { inherit lib pkgs craneLib; };
           }
         );
 
-      sampleMachine = import ./tests/sample-machine {
+      vmTests = import ./vm-tests {
         inherit lib;
         bootvineModule = self.nixosModules.bootvine;
       };
@@ -60,19 +60,22 @@
         { pkgs, builds, ... }:
         {
           default = builds.bootvine;
-          inherit (builds) bootvine scripted-boot-examples repo-tasks;
-          sample-unit-files = pkgs.callPackage ./tests/sample-machine/sample-unit-files.nix {
-            inherit (sampleMachine) sampleUnits;
+          inherit (builds) bootvine scripted-demos repo-tasks;
+          sample-unit-files = pkgs.callPackage ./vm-tests/slow-services/sample-unit-files.nix {
+            inherit (vmTests) sampleUnits;
           };
         }
       );
 
       nixosModules = {
         default = self.nixosModules.bootvine;
-        bootvine = import ./nixos-module.nix { inherit self; };
+        bootvine = import ./nix/nixos-module.nix { inherit self; };
       };
 
-      nixosConfigurations.sample-machine = sampleMachine.nixosSystemFor "x86_64-linux";
+      nixosConfigurations = lib.mapAttrs' (
+        machineName: _:
+        lib.nameValuePair "sample-${machineName}" (vmTests.nixosSystemFor "x86_64-linux" machineName)
+      ) vmTests.machines;
 
       apps = forEachSystem (
         {
@@ -83,6 +86,11 @@
           ...
         }:
         let
+          runSampleMachine = machineName: description: {
+            type = "app";
+            meta.description = "Boot the ${machineName} sample machine in QEMU: ${description}";
+            program = lib.getExe (vmTests.nixosSystemFor system machineName).config.system.build.vm;
+          };
           runReleasePlzOnCodeberg = subcommand: description: {
             type = "app";
             meta.description = description;
@@ -107,25 +115,25 @@
         {
           release-plz-release = runReleasePlzOnCodeberg "release" "Publish unpublished versions to crates.io and tag them with a Codeberg release";
           release-plz-release-pr = runReleasePlzOnCodeberg "release-pr" "Open or update the Codeberg pull request that bumps the version and changelog";
-          sample-machine-vm = {
-            type = "app";
-            meta.description = "Boot a sample machine with bootvine and slow sample units in QEMU";
-            program = lib.getExe (sampleMachine.nixosSystemFor system).config.system.build.vm;
-          };
+          sample-vm-slow-services = runSampleMachine "slow-services" "slow and failing units, a held initrd probe and a greetd login";
+          sample-vm-text-console = runSampleMachine "text-console" "the slow units without a display manager, handing over at the default target";
+          sample-vm-scripted-initrd = runSampleMachine "scripted-initrd" "the slow units with the scripted initrd, so bootvine starts in stage 2";
+          sample-vm-encrypted-volume = runSampleMachine "encrypted-volume" "a LUKS volume unlocked in the initrd with the passphrase 'sample passphrase'";
+          sample-vm-failures = runSampleMachine "failures" "units that fail in every way systemd reports, each with journal messages";
           record-screencasts = {
             type = "app";
-            meta.description = "Re-record the README screencasts and passphrase screenshot into recordings/";
+            meta.description = "Re-record the screencasts and the passphrase and failures screenshots into recordings/";
             program = lib.getExe (
               pkgs.writeShellApplication {
                 name = "record-screencasts";
                 runtimeInputs = [
                   pkgs.vhs
-                  builds.scripted-boot-examples
+                  builds.scripted-demos
                   builds.repo-tasks
                 ];
                 text = "exec xtask record-screencasts --passphrase-png ${
                   self.checks.${system}.vm-luks-passphrase
-                }/passphrase.png";
+                }/passphrase.png --failures-png ${self.checks.${system}.vm-failures}/failures.png";
               }
             );
           };
@@ -163,13 +171,8 @@
           inherit (builds) rustfmt-formatting clippy-lints;
           bootvine-build = builds.bootvine;
           repo-tasks-build = builds.repo-tasks;
-          vm-boot-and-shutdown = pkgs.testers.runNixOSTest (
-            import ./tests/vm-checks/boot.nix { sampleMachine = sampleMachine.machine; }
-          );
-          vm-luks-passphrase = pkgs.testers.runNixOSTest (
-            import ./tests/vm-checks/luks.nix { bootvineModule = self.nixosModules.bootvine; }
-          );
         }
+        // vmTests.checksFor pkgs
       );
 
       devShells = forEachSystem (

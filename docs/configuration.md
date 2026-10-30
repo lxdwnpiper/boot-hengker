@@ -81,6 +81,14 @@ queued-bar = "gray"
 running = "yellow"
 running-label = "white"
 
+[colors.failures]
+rule = "dark-gray"
+title = "light-red"
+unit = "light-red"
+reason = "white"
+log = "gray"
+overflow = "dark-gray"
+
 [colors.footer]
 rule = "dark-gray"
 done = "green"
@@ -114,6 +122,7 @@ Each `[colors.*]` table covers one part of the screen:
 | `stages` | the finished stages, such as the initrd |
 | `tree` | the unit tree |
 | `timeline` | the timeline of the slowest units |
+| `failures` | the failed units with their reason and last journal lines |
 | `footer` | the tallies of done, running, waiting and failed units |
 | `password` | the passphrase popup |
 

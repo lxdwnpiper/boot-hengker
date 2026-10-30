@@ -48,7 +48,7 @@ as well, the initrd has to run systemd.
 1. Install the build dependencies and Rust:
 
    ```sh
-   sudo apt install build-essential pkg-config libdbus-1-dev git curl
+   sudo apt install build-essential pkg-config libdbus-1-dev libsystemd-dev git curl
    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
    ```
 
@@ -88,7 +88,7 @@ as well, the initrd has to run systemd.
 ## Other distributions
 
 Install as in the Ubuntu steps, with your distribution's packages for a C
-toolchain, `pkg-config` and the libdbus headers.
+toolchain, `pkg-config` and the libdbus and libsystemd headers.
 
 For the initrd, use the dracut module as above, or on
 [mkinitcpio](https://wiki.archlinux.org/title/Mkinitcpio):

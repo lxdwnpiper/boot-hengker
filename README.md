@@ -11,21 +11,16 @@ gave me any idea of what was going on.
 
 <img src="https://codeberg.org/wvhulle/bootvine/raw/branch/main/recordings/boot.gif" width="691" alt="A boot through the initrd into stage 2, with one failed unit">
 
-It follows shutdowns and reboots too: the units being stopped, nested under the
-units that have to stop first.
-
-<img src="https://codeberg.org/wvhulle/bootvine/raw/branch/main/recordings/shutdown.gif" width="691" alt="A poweroff: units stopping under the targets waiting on them">
-
-Passphrase prompts, such as a
-[LUKS](https://gitlab.com/cryptsetup/cryptsetup) unlock in the initrd, are
-answered in place over the tree.
-
-<img src="https://codeberg.org/wvhulle/bootvine/raw/branch/main/recordings/passphrase.png" width="640" alt="A LUKS passphrase prompt floating over the initrd tree">
+It also follows shutdowns, answers passphrase prompts such as a
+[LUKS](https://gitlab.com/cryptsetup/cryptsetup) unlock in place, and shows why
+a unit failed with its last journal lines. The
+[guide](https://codeberg.org/wvhulle/bootvine/src/branch/main/docs/guide.md)
+walks through each part of the screen.
 
 ## Requirements
 
 - systemd ≥ 246 as PID 1
-- [libdbus](https://www.freedesktop.org/wiki/Software/dbus/)
+- [libdbus](https://www.freedesktop.org/wiki/Software/dbus/) and libsystemd
 - a virtual terminal
 - a systemd initrd, to show the boot from the initrd as well as stage 2
 
@@ -34,33 +29,23 @@ for each distribution.
 
 ## Try it without installing
 
-Neither of these touches your system's boot.
-
-Play a scripted boot, poweroff and encrypted-root boot in your terminal, with
-[Rust](https://www.rust-lang.org/tools/install) installed:
-
-```sh
-git clone https://codeberg.org/wvhulle/bootvine.git
-cd bootvine
-cargo run --example boot
-cargo run --example shutdown
-cargo run --example luks
-```
-
-`q` quits. The encrypted root unlocks with the passphrase `demo`; `Esc` quits
-while it asks.
-
-Or, with [Nix](https://nixos.org/download/), boot a sample [NixOS](https://nixos.org) machine with slow and
-failing units in a [QEMU](https://www.qemu.org) window:
+With [Nix](https://nixos.org/download/), boot a sample [NixOS](https://nixos.org) machine with slow and
+failing units in a [QEMU](https://www.qemu.org) window, without touching your
+system's boot:
 
 ```sh
-nix run git+https://codeberg.org/wvhulle/bootvine#sample-machine-vm
+nix run git+https://codeberg.org/wvhulle/bootvine#sample-vm-slow-services
 ```
 
-It logs in as root; `poweroff` shows the shutdown.
+It logs in as root; `poweroff` shows the shutdown. The
+[guide](https://codeberg.org/wvhulle/bootvine/src/branch/main/docs/guide.md#trying-it)
+lists the other sample machines and the scripted demos that play in a terminal.
 
 ## Documentation
 
+- [Guide](https://codeberg.org/wvhulle/bootvine/src/branch/main/docs/guide.md)
+  to the screen: the tree, the timeline, failures, shutdown and passphrase
+  prompts.
 - [Install](https://codeberg.org/wvhulle/bootvine/src/branch/main/docs/install.md)
   on NixOS, Ubuntu and other distributions.
 - [Configuration](https://codeberg.org/wvhulle/bootvine/src/branch/main/docs/configuration.md)
