@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1](https://codeberg.org/wvhulle/bootvine/compare/v0.1.0...v0.1.1) - 2026-10-30
+
+### Changed
+
+- read the release environment from the crate build and generate the sample machine apps
+- keep recordings on an orphan branch
+
 ## [0.1.0](https://codeberg.org/wvhulle/bootvine/releases/tag/v0.1.0) - 2026-10-25
 
 ### Added
