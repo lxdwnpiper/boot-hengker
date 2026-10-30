@@ -4,6 +4,19 @@ semver_check = false
 git_release_type = "prod"
 release_commits = "^(feat|fix|perf)[(:!]"
 pr_labels = ["release"]
+pr_body = """
+{% for release in releases %}
+## `{{ release.package }}` {% if release.previous_version and release.previous_version != release.next_version %}{{ release.previous_version }} → {% endif %}{{ release.next_version }}
+
+Merging this pull request into `main` will:
+
+- tag the release commit as `v{{ release.next_version }}`
+- create the Codeberg release `v{{ release.next_version }}` with the changelog below
+- publish `{{ release.package }}` {{ release.next_version }} to crates.io
+
+{% if release.changelog %}{{ release.changelog }}{% endif %}
+{% endfor %}
+"""
 
 [[package]]
 name = "bootvine"
