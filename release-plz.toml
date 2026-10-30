@@ -2,7 +2,6 @@
 release_always = true
 semver_check = false
 git_release_type = "prod"
-release_commits = "^(feat|fix|perf)[(:!]"
 pr_labels = ["release"]
 pr_body = """
 {% for release in releases %}
