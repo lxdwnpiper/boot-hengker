@@ -86,51 +86,46 @@
           ...
         }:
         let
-          runSampleMachine = machineName: description: {
-            type = "app";
-            meta.description = "Boot the ${machineName} sample machine in QEMU: ${description}";
-            program = lib.getExe (vmTests.nixosSystemFor system machineName).config.system.build.vm;
-          };
-          runReleasePlzOnCodeberg = subcommand: description: {
+          shellScriptApp = name: description: scriptArgs: {
             type = "app";
             meta.description = description;
-            program = lib.getExe (
-              pkgs.writeShellApplication {
-                name = "release-plz-${subcommand}";
-                runtimeInputs = [
-                  pkgs.release-plz
-                  pkgs.gitMinimal
-                  pkgs.pkg-config
-                  pkgs.stdenv.cc
-                  rustToolchain
-                ];
-                text = ''
-                  export PKG_CONFIG_PATH="${
-                    lib.makeSearchPathOutput "dev" "lib/pkgconfig" [
-                      pkgs.dbus
-                      pkgs.systemd
-                    ]
-                  }"
-                  exec release-plz ${subcommand} --forge gitea --git-token "$CODEBERG_TOKEN"
-                '';
-              }
-            );
+            program = lib.getExe (pkgs.writeShellApplication ({ inherit name; } // scriptArgs));
           };
+
+          sampleMachineApps = lib.mapAttrs' (
+            machineName: machineDescription:
+            lib.nameValuePair "sample-vm-${machineName}" {
+              type = "app";
+              meta.description = "Boot the ${machineName} sample machine in QEMU: ${machineDescription}";
+              program = lib.getExe (vmTests.nixosSystemFor system machineName).config.system.build.vm;
+            }
+          ) vmTests.machineDescriptions;
+
+          releasePlzOnCodeberg =
+            subcommand: description:
+            shellScriptApp "release-plz-${subcommand}" description {
+              runtimeInputs = [
+                pkgs.release-plz
+                pkgs.gitMinimal
+                pkgs.pkg-config
+                pkgs.stdenv.cc
+                rustToolchain
+              ];
+              runtimeEnv.PKG_CONFIG_PATH =
+                lib.makeSearchPathOutput "dev" "lib/pkgconfig"
+                  builds.bootvine.buildInputs;
+              text = ''exec release-plz ${subcommand} --forge gitea --git-token "$CODEBERG_TOKEN"'';
+            };
         in
-        {
-          release-plz-release = runReleasePlzOnCodeberg "release" "Publish unpublished versions to crates.io and tag them with a Codeberg release";
-          release-plz-release-pr = runReleasePlzOnCodeberg "release-pr" "Open or update the Codeberg pull request that bumps the version and changelog";
-          sample-vm-slow-services = runSampleMachine "slow-services" "slow and failing units, a held initrd probe and a greetd login";
-          sample-vm-text-console = runSampleMachine "text-console" "the slow units without a display manager, handing over at the default target";
-          sample-vm-scripted-initrd = runSampleMachine "scripted-initrd" "the slow units with the scripted initrd, so bootvine starts in stage 2";
-          sample-vm-encrypted-volume = runSampleMachine "encrypted-volume" "a LUKS volume unlocked in the initrd with the passphrase 'sample passphrase'";
-          sample-vm-failures = runSampleMachine "failures" "units that fail in every way systemd reports, each with journal messages";
-          record-screencasts = {
-            type = "app";
-            meta.description = "Re-record the scripted demo animations and the sample machine recordings into recordings/";
-            program = lib.getExe (
-              pkgs.writeShellApplication {
-                name = "record-screencasts";
+        sampleMachineApps
+        // {
+          release-plz-release = releasePlzOnCodeberg "release" "Publish unpublished versions to crates.io and tag them with a Codeberg release";
+          release-plz-release-pr = releasePlzOnCodeberg "release-pr" "Open or update the Codeberg pull request that bumps the version and changelog";
+
+          record-screencasts =
+            shellScriptApp "record-screencasts"
+              "Re-record the scripted demo animations and the sample machine recordings into recordings/"
+              {
                 runtimeInputs = [
                   pkgs.vhs
                   pkgs.libwebp
@@ -142,34 +137,26 @@
                     lib.mapAttrs (machineName: _: self.checks.${system}."vm-${machineName}") vmTests.machines
                   )
                 }";
-              }
-            );
-          };
-          build-and-push-to-cachix = {
-            type = "app";
-            meta.description = "Build flake outputs and push everything built to the wvhulle Cachix cache";
-            program = lib.getExe (
-              pkgs.writeShellApplication {
-                name = "build-and-push-to-cachix";
+              };
+
+          build-and-push-to-cachix =
+            shellScriptApp "build-and-push-to-cachix"
+              "Build flake outputs and push everything built to the wvhulle Cachix cache"
+              {
                 runtimeInputs = [ pkgs.cachix ];
                 text = ''exec cachix watch-exec wvhulle -- nix build --print-build-logs "$@"'';
-              }
-            );
-          };
-          check-conventional-commits = {
-            type = "app";
-            meta.description = "Check that the commit messages in a git revision range are conventional commits";
-            program = lib.getExe (
-              pkgs.writeShellApplication {
-                name = "check-conventional-commits";
+              };
+
+          check-conventional-commits =
+            shellScriptApp "check-conventional-commits"
+              "Check that the commit messages in a git revision range are conventional commits"
+              {
                 runtimeInputs = [
                   pkgs.convco
                   pkgs.gitMinimal
                 ];
                 text = ''exec convco check "$@"'';
-              }
-            );
-          };
+              };
         }
       );
 
@@ -180,9 +167,9 @@
           bootvine-build = builds.bootvine;
           repo-tasks-build = builds.repo-tasks;
         }
-        // lib.mapAttrs' (
-          machineName: check: lib.nameValuePair "vm-${machineName}" check
-        ) (vmTests.checksFor pkgs)
+        // lib.mapAttrs' (machineName: check: lib.nameValuePair "vm-${machineName}" check) (
+          vmTests.checksFor pkgs
+        )
       );
 
       devShells = forEachSystem (
