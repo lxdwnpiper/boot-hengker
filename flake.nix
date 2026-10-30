@@ -105,7 +105,12 @@
                   rustToolchain
                 ];
                 text = ''
-                  export PKG_CONFIG_PATH="${lib.getDev pkgs.dbus}/lib/pkgconfig"
+                  export PKG_CONFIG_PATH="${
+                    lib.makeSearchPathOutput "dev" "lib/pkgconfig" [
+                      pkgs.dbus
+                      pkgs.systemd
+                    ]
+                  }"
                   exec release-plz ${subcommand} --forge gitea --git-token "$CODEBERG_TOKEN"
                 '';
               }
