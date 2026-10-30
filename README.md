@@ -22,9 +22,15 @@ answered in place over the tree.
 
 <img src="https://codeberg.org/wvhulle/bootvine/raw/branch/main/recordings/passphrase.png" width="640" alt="A LUKS passphrase prompt floating over the initrd tree">
 
-It needs systemd ≥ 246 as PID 1,
-[libdbus](https://www.freedesktop.org/wiki/Software/dbus/) and a virtual terminal. With a
-systemd initrd it shows the boot from about a second after the kernel starts.
+## Requirements
+
+- systemd ≥ 246 as PID 1
+- [libdbus](https://www.freedesktop.org/wiki/Software/dbus/)
+- a virtual terminal
+- a systemd initrd, to show the boot from the initrd as well as stage 2
+
+See [Install](https://codeberg.org/wvhulle/bootvine/src/branch/main/docs/install.md)
+for each distribution.
 
 ## Try it without installing
 

@@ -9,31 +9,213 @@ while it does. None of this is needed to install or configure it.
   service manager over D-Bus.
 - **[libdbus](https://www.freedesktop.org/wiki/Software/dbus/).** It talks to
   PID 1 over systemd's private socket, which
-  [zbus](https://github.com/dbus2/zbus) cannot use; see [systemd's private socket](#systemds-private-socket).
+  [zbus](https://github.com/dbus2/zbus) cannot use; see
+  [systemd's private socket](#systemds-private-socket).
 - **A virtual terminal.** It draws on `tty12` and switches the console to it.
+
+## Overview
+
+```mermaid
+sequenceDiagram
+    participant Kernel
+    participant PID1 as systemd (PID 1)
+    participant Bootvine as bootvine
+    participant Console as tty12
+
+    Kernel->>PID1: unpack the initramfs, run /init
+    PID1->>Bootvine: start bootvine.service (wanted by sysinit.target)
+    Bootvine->>PID1: connect to /run/systemd/private, Subscribe
+    Bootvine->>Console: take the console
+    loop initrd
+        PID1-->>Bootvine: JobNew, JobRemoved, PropertiesChanged
+        Bootvine->>Console: redraw the tree
+    end
+    PID1->>PID1: switch-root to /sysroot, re-execute
+    Note over Bootvine: spared, chroots into the new root
+    Bootvine->>PID1: reconnect, Subscribe
+    loop stage 2
+        PID1-->>Bootvine: JobNew, JobRemoved, PropertiesChanged
+        Bootvine->>Console: redraw the tree
+    end
+    PID1-->>Bootvine: StartupFinished
+    Bootvine->>Console: hand the console back
+```
+
+## Starting in the initrd
+
+The initrd is a small root file system that the kernel unpacks into memory and
+runs before the real root is mounted. When it runs systemd, its `/init` is
+systemd as PID 1, with the same units, targets and D-Bus API as on the real
+root. bootvine hooks into that systemd rather than into the kernel.
+
+```mermaid
+flowchart LR
+    subgraph Build["When the initramfs is built"]
+        Generator["NixOS, dracut module<br>or mkinitcpio hook"]
+    end
+    subgraph Initramfs
+        Binary["/usr/bin/bootvine"]
+        Unit["bootvine.service"]
+        Link["sysinit.target.wants/<br>bootvine.service"]
+    end
+    Generator --> Binary
+    Generator --> Unit
+    Generator --> Link
+    Link -- "pulls in at the first<br>transaction" --> Unit
+```
+
+1. **The image.** The initramfs generator copies the binary,
+   `bootvine.service` and `/etc/bootvine.toml` into the image and enables the
+   unit there, which links it into `sysinit.target.wants`.
+2. **The first transaction.** systemd in the initrd starts `initrd.target`,
+   which pulls in `sysinit.target` and with it `bootvine.service`.
+3. **No waiting.** `DefaultDependencies=no` drops the implicit
+   `After=sysinit.target basic.target`, so bootvine is not ordered after
+   anything and starts in parallel with udev and the first mounts, about a
+   second after the kernel.
+4. **Knowing where it is.** `/etc/initrd-release` exists only in an initrd, so
+   its presence tells bootvine it is in the initrd stage.
+
+Without a systemd initrd, the same unit is enabled in the real root and starts
+in stage 2 instead.
+
+## What systemd exposes
+
+PID 1 publishes its state on D-Bus under `org.freedesktop.systemd1`. In the
+initrd there is no D-Bus daemon yet, so bootvine connects straight to PID 1 on
+the private socket `/run/systemd/private`, which systemd listens on from the
+moment it starts. Where that socket is not available, it falls back to the
+system bus.
+
+```mermaid
+flowchart LR
+    Bootvine["bootvine"]
+    subgraph PID1["systemd (PID 1)"]
+        Manager["Manager<br>/org/freedesktop/systemd1"]
+        Units["Unit objects"]
+        Jobs["Job objects"]
+    end
+    Bootvine -- "Subscribe, ListJobs,<br>GetDefaultTarget, GetUnit,<br>SetShowStatus" --> Manager
+    Bootvine -- "Properties.GetAll" --> Units
+    Bootvine -- "Properties.Get JobType" --> Jobs
+    Manager -. "JobNew, JobRemoved,<br>StartupFinished" .-> Bootvine
+    Units -. "PropertiesChanged" .-> Bootvine
+```
+
+On connecting, bootvine:
+
+1. calls `Subscribe`, without which PID 1 sends no signals;
+2. calls `ListJobs` for the jobs already queued, since some were queued before
+   it started;
+3. calls `GetDefaultTarget` for the root of the tree, such as
+   `initrd.target` in the initrd and `graphical.target` in stage 2;
+4. reads `FinishTimestampMonotonic`, which stays 0 until the boot is finished.
+
+From then on it follows the signals:
+
+| Signal | Carries | Used for |
+| --- | --- | --- |
+| `JobNew` | job id, job path, unit name | a row in the tree |
+| `JobRemoved` | job id, result | the row finishes as done, failed or skipped |
+| `PropertiesChanged` on a unit | `ActiveState` and its timestamps | running since, and the timeline |
+| `StartupFinished` | | the boot reached its default target |
+
+For each unit it meets, `GetUnit` and `Properties.GetAll` give its
+`Description`, its `After=` and `Before=` orderings and its timeouts.
+
+### From orderings to a tree
+
+A unit waits on the units in its `After=` that still have a pending job; when
+stopping, on the units in its `Before=`. bootvine nests each unit under the one
+waiting on it, starting from the default target.
+
+```mermaid
+flowchart TB
+    Graphical["graphical.target"] --> DisplayManager["display-manager.service"]
+    Graphical --> MultiUser["multi-user.target"]
+    MultiUser --> RemoteFs["remote-fs.target"]
+    RemoteFs --> NetworkMount["mnt-data.mount"]
+    NetworkMount --> Network["network-online.target"]
+    Network --> NetworkManager["NetworkManager-wait-online.service"]
+```
+
+Here `graphical.target` is `After=multi-user.target`, `remote-fs.target` is
+`After=` the network mount, the mount is `After=network-online.target`, and so
+on down to the unit that is actually running. A target is ordered after the
+units it wants, so targets fill the upper levels.
+
+### Timestamps
+
+systemd's `…TimestampMonotonic` properties count microseconds of
+`CLOCK_MONOTONIC`, which starts with the kernel. bootvine reads the same
+clock, so the times it shows are measured from the kernel start, even for
+units that ran before bootvine did.
+
+## Surviving the switch to the real root
+
+At the end of the initrd, systemd mounts the real root at `/sysroot`, isolates
+`initrd-switch-root.target` and runs `initrd-switch-root.service`, which makes
+PID 1 kill the remaining processes, move `/sysroot` to `/` and re-execute
+itself from the real root.
+
+```mermaid
+sequenceDiagram
+    participant PID1 as systemd (PID 1)
+    participant Bootvine as bootvine
+
+    PID1-->>Bootvine: JobNew initrd-switch-root.service
+    Bootvine->>Bootvine: open a directory fd to /sysroot
+    PID1->>PID1: isolate initrd-switch-root.target
+    Note over Bootvine: kept, IgnoreOnIsolate=yes
+    PID1->>PID1: kill remaining processes
+    Note over Bootvine: spared, argv[0] is @bootvine
+    PID1->>PID1: move /sysroot to /, re-execute
+    PID1--xBootvine: private socket closes
+    Bootvine->>Bootvine: fchdir to the fd, chroot(".")
+    Bootvine->>PID1: reconnect to /run/systemd/private
+    Note over Bootvine: stage 2, root is the default target
+```
+
+Three things keep bootvine alive across it:
+
+- **A process name starting with `@`.** `ExecStart=@/usr/bin/bootvine
+  @bootvine` sets `argv[0]` to `@bootvine`, and switch-root spares processes
+  whose name starts with `@`.
+- **`IgnoreOnIsolate=yes`**, so isolating `initrd-switch-root.target` does
+  not stop the unit.
+- **A file descriptor to the new root.** After the switch, `/sysroot` no
+  longer exists and bootvine's own root is still the old initramfs. A
+  directory opened as soon as the switch-root job is queued lets it `chroot`
+  into the real root, where `/run/systemd/private` is the re-executed PID 1.
+
+When the connection drops, bootvine moves the initrd into the finished stages
+and reconnects for up to a minute.
 
 ## Lifecycle
 
 ### Boot
 
-1. **Start.** `bootvine.service` is wanted by `sysinit.target` and has no
-   default dependencies, so it starts early. With a systemd initrd it starts
-   there, about a second after the kernel; without one it starts in stage 2.
-2. **Switch to the real root.** In the initrd, bootvine survives the switch
-   and keeps drawing; the tree moves the initrd into the finished stages.
+1. **Start**, in the initrd or in stage 2; see
+   [starting in the initrd](#starting-in-the-initrd).
+2. **Switch to the real root**; see
+   [surviving the switch](#surviving-the-switch-to-the-real-root).
 3. **Stage 2.** The tree shows the jobs still pending under the default
-   target, nested under the units waiting on them.
+   target.
 4. **Handover.** bootvine hands the console back once the default target is
    reached and the final frame has stayed for `keep-final-frame-for`. When a
    display manager is starting, it waits instead for the display manager to
    switch to its own terminal, up to `wait-for-display-manager`.
 
+If it starts after the boot has already finished, it exits without touching
+the console.
+
 ### Shutdown
 
 `shutdown.target` conflicts with `bootvine.service` and wants
-`bootvine-shutdown.service`, which runs `bootvine --shutdown`. It shows the
-units being stopped, nested under the units that have to stop first, until
-systemd hands over to `systemd-shutdown`.
+`bootvine-shutdown.service`, which runs `bootvine --shutdown`. Its root is the
+target being brought up, such as `poweroff.target` or `reboot.target`. It
+shows the units being stopped, nested under the units that have to stop first,
+until PID 1 hands over to `systemd-shutdown` and the connection closes.
 
 ## The console
 
@@ -64,7 +246,7 @@ starts, it stays behind it and comes forward once the prompt is answered.
 
 | Unit | Wanted by | Notable settings |
 | --- | --- | --- |
-| `bootvine.service` | `sysinit.target` | `IgnoreOnIsolate=yes`, `Before=display-manager.service`, process name `@bootvine` |
+| `bootvine.service` | `sysinit.target` | `DefaultDependencies=no`, `IgnoreOnIsolate=yes`, `Before=display-manager.service`, process name `@bootvine` |
 | `bootvine-shutdown.service` | `shutdown.target` | `After=bootvine.service display-manager.service` |
 
 Both draw on `/dev/tty12` with `TTYReset=yes` and log to the journal.
@@ -84,14 +266,3 @@ and differ only in where their inputs come from.
 - libdbus sends its authentication handshake together with the first message,
   which systemd leaves unread, so a no-reply ping goes out right after
   connecting.
-
-## Surviving the switch to the real root
-
-Three things keep bootvine alive from the initrd into stage 2:
-
-- a process name starting with `@`, which systemd's switch-root spares from
-  being killed;
-- a unit that is not stopped on isolate (`IgnoreOnIsolate=yes`), since the
-  initrd isolates `initrd-switch-root.target`;
-- a chroot through a file descriptor to the new root, taken as soon as the
-  switch is queued.
