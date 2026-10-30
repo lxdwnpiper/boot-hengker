@@ -1,4 +1,4 @@
-{ machine }:
+{ machine, ... }:
 {
   name = "bootvine-failures";
 
@@ -9,7 +9,10 @@
         marker: "${pkgs.bash}/bin/bash -c 'until [ -e /run/${marker} ]; do sleep 0.1; done'";
     in
     {
-      imports = [ machine ];
+      imports = [
+        machine
+        ../shared/recorded-display.nix
+      ];
       bootvineSample.startFailuresByHand = true;
       testing.initrdBackdoor = true;
 
@@ -36,14 +39,8 @@
         };
       };
 
-      virtualisation = {
-        memorySize = 2048;
-        qemu.options = [
-          "-vga none"
-          "-device virtio-vga,xres=1280,yres=800"
-        ];
-      };
     };
 
-  testScript = builtins.readFile ../shared/console.py + builtins.readFile ./check.py;
+  testScript = builtins.readFile ../shared/console.py
+    + builtins.readFile ../shared/screen_recording.py + builtins.readFile ./check.py;
 }

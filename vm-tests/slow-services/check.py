@@ -6,7 +6,9 @@ def unit_state(unit):
     return machine.succeed(f"systemctl is-active {unit} || true").strip()
 
 
+recording = ScreenRecording(machine)
 machine.start()
+recording.start()
 
 wait_for_screen("Initrd", "Slow hardware probe")
 assert_bootvine_in_front()
@@ -56,3 +58,4 @@ assert_bootvine_in_front()
 assert_text_visible(font_has_512_glyphs=True)
 machine.succeed("touch /run/release-sample-database")
 machine.wait_for_shutdown()
+recording.stop()

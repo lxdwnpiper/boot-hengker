@@ -9,7 +9,7 @@
 | `xtask/` | repository tasks run with `cargo xtask` |
 | `vm-tests/` | the sample NixOS machines, one folder each with its VM check |
 | `nix/` | the crane builds and the NixOS module |
-| `recordings/` | the animations and screenshots the README and the [guide](guide.md) show |
+| `recordings/` | the scripted demo GIFs and the sample machine WebP recordings the README and the [guide](guide.md) show |
 
 `cargo build` and `cargo test` act on every crate. `cargo run` needs the binary:
 `--bin bootvine`, `--bin scripted-boot` and so on.
@@ -73,9 +73,7 @@ locally from the dev shell with `release-plz update`.
 | Model and render tests | `cargo test --workspace` |
 | Scripted demos | `cargo run --bin scripted-boot` (also `scripted-shutdown`, `scripted-luks-unlock`) |
 | Sample machines in a window | `nix run .#sample-vm-<machine>`, see the [guide](guide.md#sample-machines) |
-| Boot and shutdown in a VM | `nix build .#checks.x86_64-linux.vm-boot-and-shutdown` |
-| Passphrase prompt in a VM | `nix build .#checks.x86_64-linux.vm-luks-passphrase` |
-| Failure panel in a VM | `nix build .#checks.x86_64-linux.vm-failures` |
+| A sample machine's check | `nix build .#checks.x86_64-linux.vm-<machine>` |
 
 To watch your own user manager start the sample units:
 
@@ -89,15 +87,18 @@ systemctl --user disable --runtime $(ls $units)
 ```
 
 Everything a sample machine needs sits in its own folder under `vm-tests/`:
-`machine.nix`, and for the machines with a check, `check.nix` and `check.py`.
-`vm-tests/shared/` holds the settings every machine shares, the window setup
-for `nix run` and the console helpers for the checks. A new machine is a new
-folder plus its name in `vm-tests/default.nix`.
+`machine.nix`, `check.nix` and `check.py`. `vm-tests/shared/` holds the
+settings every machine shares, the window setup for `nix run`, the console
+helpers for the checks and the screen recorder. A new machine is a new folder
+plus its name in `vm-tests/default.nix`.
 
 The VM checks read the console as text, hold the boot at fixed points and wait
 on marker files instead of sleeping. The failures check starts each failing
-unit by hand, so it knows which one is newest in the panel. To step through one by hand, run
-`nix run .#checks.x86_64-linux.vm-boot-and-shutdown.driverInteractive` and
+unit by hand, so it knows which one is newest in the panel. While a check runs,
+`ScreenRecording` takes a frame every half second through a second QEMU
+monitor socket, so it never competes with the driver's own monitor; the frames
+land in the check's output under `recording/`. To step through a check by hand, run
+`nix run .#checks.x86_64-linux.vm-slow-services.driverInteractive` and
 call `test_script()`.
 
 Prefix VM and recording commands with `env -u LD_LIBRARY_PATH` when your shell
@@ -106,8 +107,8 @@ exports libraries that clash with [QEMU](https://www.qemu.org) or Chromium.
 ## Repository tasks
 
 - `nix run .#record-screencasts` re-records the animations from the scripted
-  demos and copies the passphrase and failures screenshots from the VM checks
-  into `recordings/`, for the README and the [guide](guide.md).
+  demos and turns the frames each VM check captured into
+  `recordings/<machine>.webp`, for the README and the [guide](guide.md).
 - `cargo xtask sync-default-config` rewrites the defaults block in
   [configuration](configuration.md#defaults) from `bootvine defaults`.
 - `cargo run --bin bootvine -- install --destdir <dir> --initrd dracut` stages an install

@@ -122,18 +122,21 @@
           sample-vm-failures = runSampleMachine "failures" "units that fail in every way systemd reports, each with journal messages";
           record-screencasts = {
             type = "app";
-            meta.description = "Re-record the screencasts and the passphrase and failures screenshots into recordings/";
+            meta.description = "Re-record the scripted demo animations and the sample machine recordings into recordings/";
             program = lib.getExe (
               pkgs.writeShellApplication {
                 name = "record-screencasts";
                 runtimeInputs = [
                   pkgs.vhs
+                  pkgs.libwebp
                   builds.scripted-demos
                   builds.repo-tasks
                 ];
-                text = "exec xtask record-screencasts --passphrase-png ${
-                  self.checks.${system}.vm-luks-passphrase
-                }/passphrase.png --failures-png ${self.checks.${system}.vm-failures}/failures.png";
+                text = "exec xtask record-screencasts --vm-check-outputs ${
+                  pkgs.linkFarm "vm-check-outputs" (
+                    lib.mapAttrs (machineName: _: self.checks.${system}."vm-${machineName}") vmTests.machines
+                  )
+                }";
               }
             );
           };
@@ -172,7 +175,9 @@
           bootvine-build = builds.bootvine;
           repo-tasks-build = builds.repo-tasks;
         }
-        // vmTests.checksFor pkgs
+        // lib.mapAttrs' (
+          machineName: check: lib.nameValuePair "vm-${machineName}" check
+        ) (vmTests.checksFor pkgs)
       );
 
       devShells = forEachSystem (

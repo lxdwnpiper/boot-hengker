@@ -12,7 +12,9 @@ def failure_panel():
     return "\n".join(lines[start:])
 
 
+recording = ScreenRecording(machine)
 machine.start()
+recording.start()
 
 wait_for_screen("Initrd", "Initrd held for the check")
 start_failing_unit("initrd-nic-firmware-load")
@@ -52,8 +54,8 @@ wait_for_screen("upstream-uplink  exited with status 1", "lost connection to ups
 wait_for_screen("× 9 failed", "connection refused")
 assert "Started Upstream uplink" not in failure_panel(), f"systemd's own start line reached the panel:\n{screen()}"
 print(screen())
-machine.screenshot("failures")
 
 machine.succeed("touch /run/release-boot-failures-hold")
 retry(lambda _: "handing the console over" in bootvine_journal(), timeout_seconds=60)
 print(bootvine_journal())
+recording.stop()

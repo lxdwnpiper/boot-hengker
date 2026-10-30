@@ -8,6 +8,8 @@ pub enum TaskError {
     Shell(#[from] xshell::Error),
     #[error("{}: {source}", path.display())]
     File { path: PathBuf, source: io::Error },
+    #[error("{} has no recording frames", .0.display())]
+    NoRecordingFrames(PathBuf),
     #[error("no recordings directory here; run from the repository root")]
     NotInRepositoryRoot,
     #[error("{0} has no ```toml block under its Defaults heading")]

@@ -34,18 +34,10 @@ in
       ];
     };
 
-  checksFor = pkgs: {
-    vm-boot-and-shutdown = pkgs.testers.runNixOSTest (
-      import ./slow-services/check.nix { machine = machines.slow-services; }
-    );
-    vm-luks-passphrase = pkgs.testers.runNixOSTest (
-      import ./encrypted-volume/check.nix {
-        machine = machines.encrypted-volume;
-        inherit pkgs;
-      }
-    );
-    vm-failures = pkgs.testers.runNixOSTest (
-      import ./failures/check.nix { machine = machines.failures; }
-    );
-  };
+  checksFor =
+    pkgs:
+    lib.mapAttrs (
+      machineName: machine:
+      pkgs.testers.runNixOSTest (import ./${machineName}/check.nix { inherit machine pkgs; })
+    ) machines;
 }

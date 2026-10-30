@@ -16,8 +16,8 @@ struct RepoTasks {
 #[derive(Subcommand)]
 enum Task {
     #[command(
-        about = "Record the screencasts with vhs and copy the passphrase and failures screenshots \
-                 into recordings/"
+        about = "Record the screencasts with vhs and convert the passphrase and failures \
+                 screenshots to WebP in recordings/"
     )]
     RecordScreencasts(RecordScreencastsOptions),
     #[command(
@@ -28,19 +28,18 @@ enum Task {
 
 #[derive(Args)]
 struct RecordScreencastsOptions {
-    #[arg(long, help = "passphrase.png produced by the vm-luks-passphrase check")]
-    passphrase_png: PathBuf,
-    #[arg(long, help = "failures.png produced by the vm-failures check")]
-    failures_png: PathBuf,
+    #[arg(
+        long,
+        help = "Directory with one entry per sample machine, each the output of its vm-<machine> \
+                check"
+    )]
+    vm_check_outputs: PathBuf,
 }
 
 fn main() -> ExitCode {
     let outcome = match RepoTasks::parse().task {
         Task::RecordScreencasts(options) => {
-            record_screencasts::record_screencasts(&record_screencasts::CheckScreenshots {
-                passphrase_png: &options.passphrase_png,
-                failures_png: &options.failures_png,
-            })
+            record_screencasts::record_screencasts(&options.vm_check_outputs)
         }
         Task::SyncDefaultConfig => sync_default_config::sync_default_config(),
     };

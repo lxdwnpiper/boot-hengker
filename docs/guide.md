@@ -1,9 +1,9 @@
 # Guide
 
 What bootvine shows on the console, part by part, with the recordings that go
-with each. The animations come from the [scripted demos](#scripted-demos); the
-screenshots come from the [VM checks](development.md#testing) on real NixOS
-machines.
+with each. The GIFs come from the [scripted demos](#scripted-demos); the WebP
+animations are real boots of the [sample machines](#sample-machines), recorded
+by their [VM checks](development.md#testing).
 
 ## Reading the screen
 
@@ -47,8 +47,12 @@ From top to bottom:
 
 ## Booting through the initrd
 
-The same recording shows a boot from the start. With a systemd initrd,
-bootvine starts about a second after the kernel:
+<img src="../recordings/slow-services.webp" width="640" alt="A NixOS machine booting through the initrd into stage 2, handing over to a greetd login, then powering off">
+
+The `slow-services` machine boots with a held hardware probe in the initrd,
+slow units in stage 2 and one failing unit, hands over to its greetd login
+and powers off. With a systemd initrd, bootvine starts about a second after
+the kernel:
 
 - **The initrd stage**: udev settling, the root device and its file systems
   under `initrd.target`.
@@ -62,6 +66,22 @@ bootvine starts about a second after the kernel:
 
 How bootvine gets in that early and survives the switch is in
 [architecture](architecture.md#starting-in-the-initrd).
+
+### Without a display manager
+
+<img src="../recordings/text-console.webp" width="640" alt="The same boot on a machine without a display manager, ending at a text login">
+
+The `text-console` machine boots the same units without greetd. With no
+display manager to wait for, bootvine hands the console back as soon as the
+default target is reached, and the text login on `tty1` comes forward.
+
+### Without a systemd initrd
+
+<img src="../recordings/scripted-initrd.webp" width="640" alt="The same boot with NixOS's scripted initrd: the kernel and initrd lines scroll past before bootvine starts in stage 2">
+
+The `scripted-initrd` machine uses NixOS's older scripted initrd, which has no
+systemd. The initrd's lines scroll past as usual, and bootvine starts in
+stage 2, from `sysinit.target` on.
 
 ## Shutdown
 
@@ -77,7 +97,11 @@ On a poweroff, reboot or halt the tree turns around:
 
 ## Passphrase prompts
 
-<img src="../recordings/passphrase.png" width="640" alt="A LUKS passphrase prompt floating over the initrd tree">
+<img src="../recordings/encrypted-volume.webp" width="640" alt="A LUKS passphrase prompt floating over the initrd tree, a wrong answer, then the unlock">
+
+The `encrypted-volume` machine asks for a LUKS passphrase in the initrd; its
+recording shows a wrong answer, then the right one.
+
 
 When a unit asks for a passphrase, such as `systemd-cryptsetup@….service`
 unlocking a [LUKS](https://gitlab.com/cryptsetup/cryptsetup) volume, the
@@ -94,7 +118,7 @@ bootvine started, bootvine waits behind it.
 
 ## Failures
 
-<img src="../recordings/failures.png" width="640" alt="The failure panel listing failed units with their reason and last journal lines">
+<img src="../recordings/failures.webp" width="640" alt="Units failing one after another, each landing in the failure panel with its reason and last journal lines">
 
 A unit that broke or timed out gets an entry in the failure panel, newest
 first:
@@ -114,8 +138,8 @@ first:
   The footer counts both.
 
 Failures from the initrd stay in the panel after the switch to the real root.
-The screenshot comes from the `failures` sample machine, with every kind of
-failure systemd reports.
+The recording is the `failures` machine, where every kind of failure systemd
+reports happens one after another.
 
 ## Trying it
 
@@ -144,14 +168,14 @@ Each sample machine boots in a [QEMU](https://www.qemu.org) window with
 [Nix](https://nixos.org/download/), and logs in as root at the end. `poweroff`
 shows the shutdown.
 
-| Run | Shows |
-| --- | --- |
-| `nix run .#sample-vm-slow-services` | slow units in the initrd and stage 2, one failing unit, and the handover to a greetd login |
-| `nix run .#sample-vm-text-console` | the same units without a display manager, handing over at the default target |
-| `nix run .#sample-vm-scripted-initrd` | the same units with NixOS's scripted initrd, so bootvine starts in stage 2 only |
-| `nix run .#sample-vm-encrypted-volume` | a LUKS volume unlocked in the initrd; the passphrase is `sample passphrase` |
-| `nix run .#sample-vm-failures` | a firmware failure in the initrd, then units that exit with an error, crash, time out, cannot be run, restart too often, report a status, die after starting, and one that fails only through its dependency |
+| Run | Shows | Recording |
+| --- | --- | --- |
+| `nix run .#sample-vm-slow-services` | slow units in the initrd and stage 2, one failing unit, and the handover to a greetd login | [booting through the initrd](#booting-through-the-initrd) |
+| `nix run .#sample-vm-text-console` | the same units without a display manager, handing over at the default target | [without a display manager](#without-a-display-manager) |
+| `nix run .#sample-vm-scripted-initrd` | the same units with NixOS's scripted initrd, so bootvine starts in stage 2 only | [without a systemd initrd](#without-a-systemd-initrd) |
+| `nix run .#sample-vm-encrypted-volume` | a LUKS volume unlocked in the initrd; the passphrase is `sample passphrase` | [passphrase prompts](#passphrase-prompts) |
+| `nix run .#sample-vm-failures` | a firmware failure in the initrd, then units that exit with an error, crash, time out, cannot be run, restart too often, report a status, die after starting, and one that fails only through its dependency | [failures](#failures) |
 
 Each machine keeps its disk in `~/.cache/bootvine-<machine>.qcow2`; delete it
 to start fresh. The machines live in `vm-tests/`, one folder each, next to the
-checks that drive them.
+check that drives and records it.
