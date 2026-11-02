@@ -2,7 +2,10 @@ use std::{cmp::Reverse, iter::once, time::Duration};
 
 use ratatui::{
     buffer::Buffer,
-    layout::{Constraint, Layout, Rect},
+    layout::{
+        Constraint::{Fill, Length},
+        Layout, Rect,
+    },
     style::{Color, Stylize},
     symbols::Marker,
     text::{Line, Span},
@@ -12,18 +15,22 @@ use ratatui::{
     },
 };
 
-use super::{WHOLE_UNITS, fit_width, rule, unit_count};
+use super::{
+    WHOLE_UNITS, fit_width, rule,
+    screen_spacing::{
+        ANNOTATION_COLUMN_WIDTH, COLUMN_GAP_WIDTH, RULED_ROW_HEIGHT, TEXT_ROW_HEIGHT,
+        TIMELINE_LABEL_WIDTH,
+    },
+    unit_count,
+};
 use crate::{
     boot_model::{FinishedRun, MilestoneRow},
     screen_settings::{color_scheme::TimelineColors, font_glyphs::Glyphs},
 };
 
-pub const LABEL_WIDTH: u16 = 28;
-pub const CHROME_HEIGHT: u16 = 2;
 const MARK_WIDTH: u16 = 2;
 const SLOWEST_RUNS_SHOWN: usize = 5;
 const KERNEL_ORIGIN_LABEL: &str = "Kernel";
-const AXIS_LABEL_SPACING: u16 = 8;
 const AXIS_STEPS: [Duration; 12] = [
     Duration::from_secs(1),
     Duration::from_secs(2),
@@ -56,6 +63,17 @@ pub struct RunningRun<'a> {
     pub since: Duration,
 }
 
+fn label_and_bar_areas(area: Rect) -> [Rect; 2] {
+    area.layout(
+        &Layout::horizontal([Length(TIMELINE_LABEL_WIDTH), Fill(1)]).spacing(COLUMN_GAP_WIDTH),
+    )
+}
+
+pub fn timeline_fits(area: Rect) -> bool {
+    let [_, bar_area] = label_and_bar_areas(area);
+    bar_area.width >= ANNOTATION_COLUMN_WIDTH
+}
+
 impl Timeline<'_> {
     pub fn height(&self) -> u16 {
         let entries = self.milestones.len()
@@ -64,11 +82,11 @@ impl Timeline<'_> {
         if entries == 0 {
             return 0;
         }
-        CHROME_HEIGHT.saturating_add(u16::try_from(entries).unwrap_or(u16::MAX))
+        RULED_ROW_HEIGHT.saturating_add(u16::try_from(entries).unwrap_or(u16::MAX))
     }
 
     fn finished_that_fit(&self, height: u16) -> Vec<&FinishedRun> {
-        let bar_rows = usize::from(height.saturating_sub(CHROME_HEIGHT));
+        let bar_rows = usize::from(height.saturating_sub(RULED_ROW_HEIGHT));
         let room = bar_rows.saturating_sub(self.milestones.len() + self.running.len());
         let mut longest_first = self.finished.clone();
         longest_first
@@ -128,7 +146,7 @@ impl Timeline<'_> {
     fn fitted(&self, label: &str) -> String {
         fit_width(
             label,
-            usize::from(LABEL_WIDTH - MARK_WIDTH),
+            usize::from(TIMELINE_LABEL_WIDTH - MARK_WIDTH),
             self.glyphs.ellipsis,
         )
     }
@@ -169,10 +187,7 @@ impl Widget for Timeline<'_> {
         );
         let inner = block.inner(area);
         block.render(area, buf);
-        let [label_area, bar_area] =
-            Layout::horizontal([Constraint::Length(LABEL_WIDTH), Constraint::Fill(1)])
-                .spacing(1)
-                .areas(inner);
+        let [label_area, bar_area] = label_and_bar_areas(inner);
         let entries: Vec<TimelineEntry> = self
             .milestones
             .iter()
@@ -184,12 +199,15 @@ impl Widget for Timeline<'_> {
             )
             .chain(self.running.iter().map(|row| self.running_entry(row)))
             .collect();
+        let [_, entry_labels_area] =
+            label_area.layout(&Layout::vertical([Length(TEXT_ROW_HEIGHT), Fill(1)]));
         Paragraph::new(
-            once(Line::default())
-                .chain(entries.iter().map(|entry| entry.label.clone()))
+            entries
+                .iter()
+                .map(|entry| entry.label.clone())
                 .collect::<Vec<_>>(),
         )
-        .render(label_area, buf);
+        .render(entry_labels_area, buf);
         let axis = TimeAxis::new(self.origin, self.now, bar_area.width);
         let label_row = f64::from(bar_area.height.saturating_sub(1).max(1));
         let axis_color = self.colors.axis;
@@ -265,7 +283,7 @@ struct TimeAxis {
 impl TimeAxis {
     fn new(origin: Duration, now: Duration, width: u16) -> Self {
         let elapsed = now.saturating_sub(origin).max(AXIS_STEPS[0]);
-        let max_labels = u128::from((width / AXIS_LABEL_SPACING).max(1));
+        let max_labels = u128::from((width / ANNOTATION_COLUMN_WIDTH).max(1));
         let step = AXIS_STEPS
             .into_iter()
             .find(|step| elapsed.as_nanos().div_ceil(step.as_nanos()) <= max_labels)

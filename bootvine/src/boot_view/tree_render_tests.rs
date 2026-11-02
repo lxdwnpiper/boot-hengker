@@ -109,7 +109,7 @@ fn slow_runs_show_their_timeout_in_a_column() {
         "{screen}"
     );
     assert!(
-        line_with(&lines, "slow").ends_with("6.40s   1m30s"),
+        line_with(&lines, "slow").ends_with("6.40s     1m30s"),
         "{screen}"
     );
     assert!(line_with(&lines, "quick").ends_with("2.40s"), "{screen}");

@@ -9,15 +9,14 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
-use super::{fit_width, rule};
+use super::{
+    fit_width, rule,
+    screen_spacing::{TEXT_GAP, TEXT_INDENT, TEXT_ROW_HEIGHT},
+};
 use crate::{
     boot_model::{FailedUnit, FailureExplanation},
     screen_settings::{color_scheme::FailureColors, font_glyphs::Glyphs},
 };
-
-pub const RULE_HEIGHT: u16 = 1;
-const LOG_INDENT: &str = "    ";
-const REASON_GAP: &str = "  ";
 
 pub struct FailurePanel<'a> {
     pub newest_first: Vec<&'a FailedUnit>,
@@ -42,14 +41,14 @@ impl FailurePanel<'_> {
             .iter()
             .map(|failed| 1 + log_lines(failed).len())
             .sum();
-        RULE_HEIGHT.saturating_add(u16::try_from(rows).unwrap_or(u16::MAX))
+        TEXT_ROW_HEIGHT.saturating_add(u16::try_from(rows).unwrap_or(u16::MAX))
     }
 
     fn headline(&self, failed: &FailedUnit, width: usize) -> Line<'static> {
         let marker = format!("{} ", self.glyphs.failed);
         let label_room = width.saturating_sub(marker.width());
         let label = fit_width(&failed.label, label_room, self.glyphs.ellipsis);
-        let reason_room = label_room.saturating_sub(label.width() + REASON_GAP.width());
+        let reason_room = label_room.saturating_sub(label.width() + TEXT_GAP.width());
         let reason = match &failed.explanation {
             FailureExplanation::Explained(cause) if reason_room > 0 => {
                 fit_width(&cause.reason, reason_room, self.glyphs.ellipsis)
@@ -57,7 +56,7 @@ impl FailurePanel<'_> {
             _ => String::new(),
         };
         let reason_span =
-            (!reason.is_empty()).then(|| format!("{REASON_GAP}{reason}").fg(self.colors.reason));
+            (!reason.is_empty()).then(|| format!("{TEXT_GAP}{reason}").fg(self.colors.reason));
         Line::from(
             [
                 marker.fg(self.colors.unit),
@@ -70,11 +69,11 @@ impl FailurePanel<'_> {
     }
 
     fn block(&self, failed: &FailedUnit, width: usize) -> Vec<Line<'static>> {
-        let log_room = width.saturating_sub(LOG_INDENT.width());
+        let log_room = width.saturating_sub(TEXT_INDENT.width());
         once(self.headline(failed, width))
             .chain(log_lines(failed).iter().map(|line| {
                 format!(
-                    "{LOG_INDENT}{}",
+                    "{TEXT_INDENT}{}",
                     fit_width(line, log_room, self.glyphs.ellipsis)
                 )
                 .fg(self.colors.log)
@@ -170,8 +169,8 @@ mod tests {
             panel_text(&failures, 5),
             [
                 "× web  exited with status 1",
-                "    bind: address in use",
-                "    giving up",
+                "   bind: address in use",
+                "   giving up",
                 "× db  exited with status 1",
                 "× cache  exited with status 1",
             ]
@@ -189,10 +188,10 @@ mod tests {
             panel_text(&failures, 6),
             [
                 "× web  exited with status 1",
-                "    giving up",
+                "   giving up",
                 "× db  exited with status 1",
-                "    disk full",
-                "    read-only file system",
+                "   disk full",
+                "   read-only file system",
                 "× cache  exited with status 1",
             ]
         );

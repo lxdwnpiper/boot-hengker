@@ -7,6 +7,7 @@ mod run_timeline;
 mod screen_chrome;
 #[cfg(test)]
 mod screen_render_fixtures;
+mod screen_spacing;
 mod stage_summary;
 mod tree_height_fitting;
 #[cfg(test)]
@@ -18,7 +19,10 @@ use std::time::Duration;
 use jiff::fmt::friendly::{Designator, FractionalUnit, Spacing, SpanPrinter};
 use ratatui::{
     buffer::Buffer,
-    layout::{Constraint, Layout, Rect},
+    layout::{
+        Constraint::{Fill, Length},
+        Layout, Rect,
+    },
     style::Color,
     text::Line,
     widgets::{Block, Borders, Widget},
@@ -29,8 +33,9 @@ use unicode_width::UnicodeWidthStr;
 pub use self::screen_chrome::PasswordPrompt;
 use self::{
     failure_panel::FailurePanel,
-    run_timeline::{RunningRun, Timeline},
-    screen_chrome::{FOOTER_HEIGHT, Footer, Header, PasswordPopup},
+    run_timeline::{RunningRun, Timeline, timeline_fits},
+    screen_chrome::{Footer, Header, PasswordPopup},
+    screen_spacing::{PANEL_MINIMUM_HEIGHT, RULED_ROW_HEIGHT, TEXT_ROW_HEIGHT},
     stage_summary::Stages,
     tree_height_fitting::rows_within_height,
     unit_tree::UnitTree,
@@ -43,14 +48,7 @@ use crate::{
     screen_settings::{color_scheme::Colors, config_file::Timing, font_glyphs::Glyphs},
 };
 
-const DURATION_WIDTH: u16 = 9;
-const MIN_BAR_WIDTH: u16 = 12;
-const MIN_HEIGHT_FOR_TIMELINE: u16 = 12;
-const MIN_TIMELINE_HEIGHT: u16 = run_timeline::CHROME_HEIGHT + 4;
-const HEADER_HEIGHT: u16 = 1;
-const MIN_FAILURE_PANEL_HEIGHT: u16 = failure_panel::RULE_HEIGHT + 1;
-const RESERVED_FAILURE_PANEL_HEIGHT: u16 = failure_panel::RULE_HEIGHT + 3;
-const MIN_TREE_HEIGHT_BESIDE_FAILURES: u16 = 4;
+const MIN_TIMELINE_HEIGHT: u16 = RULED_ROW_HEIGHT + PANEL_MINIMUM_HEIGHT;
 const BRANCH: &str = "├─ ";
 const LAST_BRANCH: &str = "└─ ";
 const PASSING_TRUNK: &str = "│  ";
@@ -160,18 +158,23 @@ impl Widget for BootView<'_> {
             colors: &self.colors.footer,
             glyphs: self.glyphs,
         };
-        let fits_timeline = area.width >= run_timeline::LABEL_WIDTH + 1 + MIN_BAR_WIDTH
-            && area.height >= MIN_HEIGHT_FOR_TIMELINE;
-        let free = area
-            .height
-            .saturating_sub(HEADER_HEIGHT + stages.height() + FOOTER_HEIGHT);
+        let [header_area, stage_area, body_area, footer_area] = area.layout(&Layout::vertical([
+            Length(TEXT_ROW_HEIGHT),
+            Length(stages.height()),
+            Fill(1),
+            Length(RULED_ROW_HEIGHT),
+        ]));
         let heights = Heights::share(
-            free,
+            body_area.height,
             UnitTree::height_of(pending_count, 0),
             failure_panel.height(),
-            if fits_timeline { timeline.height() } else { 0 },
+            if timeline_fits(body_area) {
+                timeline.height()
+            } else {
+                0
+            },
         );
-        let budget = usize::from(heights.tree.saturating_sub(1));
+        let budget = usize::from(heights.tree.saturating_sub(TEXT_ROW_HEIGHT));
         let rows = rows_within_height(forest, budget);
         let tree = UnitTree {
             phase: stages.current_phase(),
@@ -184,24 +187,12 @@ impl Widget for BootView<'_> {
         };
         let tree_height = tree.height().min(heights.tree);
 
-        let [
-            header_area,
-            stage_area,
-            tree_area,
-            _,
-            failure_area,
-            timeline_area,
-            footer_area,
-        ] = Layout::vertical([
-            Constraint::Length(HEADER_HEIGHT),
-            Constraint::Length(stages.height()),
-            Constraint::Length(tree_height),
-            Constraint::Fill(1),
-            Constraint::Length(heights.failures),
-            Constraint::Length(heights.timeline),
-            Constraint::Length(FOOTER_HEIGHT),
-        ])
-        .areas(area);
+        let [tree_area, _, failure_area, timeline_area] = body_area.layout(&Layout::vertical([
+            Length(tree_height),
+            Fill(1),
+            Length(heights.failures),
+            Length(heights.timeline),
+        ]));
 
         header.render(header_area, buf);
         stages.render(stage_area, buf);
@@ -232,13 +223,13 @@ struct Heights {
 
 impl Heights {
     fn share(free: u16, tree_need: u16, failures_need: u16, timeline_need: u16) -> Self {
-        let reserved = RESERVED_FAILURE_PANEL_HEIGHT
+        let reserved = PANEL_MINIMUM_HEIGHT
             .min(failures_need)
-            .min(free.saturating_sub(MIN_TREE_HEIGHT_BESIDE_FAILURES));
+            .min(free.saturating_sub(PANEL_MINIMUM_HEIGHT));
         let failures = failures_need
             .min(free.saturating_sub(tree_need))
             .max(reserved);
-        let failures = if failures >= MIN_FAILURE_PANEL_HEIGHT {
+        let failures = if failures >= RULED_ROW_HEIGHT {
             failures
         } else {
             0

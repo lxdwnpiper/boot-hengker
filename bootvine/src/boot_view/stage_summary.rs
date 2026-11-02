@@ -8,14 +8,20 @@ use ratatui::{
     widgets::{Paragraph, Widget},
 };
 
-use super::{BRANCH, ELAPSED, LAST_BRANCH, unit_count};
+use super::{BRANCH, ELAPSED, LAST_BRANCH, screen_spacing::ANNOTATION_COLUMN_WIDTH, unit_count};
 use crate::{
     boot_model::BootState,
     screen_settings::{color_scheme::StageColors, font_glyphs::Glyphs},
 };
 
 const SHUTDOWN_SUCCESSOR: &str = "systemd-shutdown";
-const PHASE_WIDTH: usize = 9;
+
+fn padded_phase_label(label: &str) -> String {
+    format!(
+        "{label:phase_width$}",
+        phase_width = usize::from(ANNOTATION_COLUMN_WIDTH)
+    )
+}
 
 pub struct Stages<'a> {
     pub state: &'a BootState,
@@ -57,7 +63,7 @@ impl Stages<'_> {
         self.state.finished_stages.iter().map(|stage| {
             Line::from(vec![
                 BRANCH.fg(self.colors.branches),
-                format!("{:PHASE_WIDTH$}", stage.label).fg(self.colors.finished_label),
+                padded_phase_label(stage.label).fg(self.colors.finished_label),
                 format!(
                     "{} done in {}",
                     self.glyphs.bead,
@@ -105,7 +111,7 @@ impl Stages<'_> {
         let elapsed = ELAPSED.unsigned_duration_to_string(&self.now.saturating_sub(started_at));
         Line::from(vec![
             LAST_BRANCH.fg(self.colors.branches),
-            format!("{:PHASE_WIDTH$}", self.state.phase.label())
+            padded_phase_label(self.state.phase.label())
                 .fg(self.colors.current)
                 .bold(),
             elapsed.fg(self.colors.current),

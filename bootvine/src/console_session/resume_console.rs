@@ -15,7 +15,7 @@ use crossterm::{
 use ratatui::{
     backend::CrosstermBackend,
     buffer::Buffer,
-    layout::{Constraint, Flex, Layout, Rect},
+    layout::{Constraint, Rect},
     style::{Color, Style},
     widgets::{Block, Borders, Widget},
 };
@@ -55,10 +55,7 @@ pub fn resume_console_is_open(marker: &Path) -> bool {
 }
 
 fn band_area(screen: Rect) -> Rect {
-    let [band] = Layout::vertical([Constraint::Length(BAND_HEIGHT)])
-        .flex(Flex::Center)
-        .areas(screen);
-    band
+    screen.centered_vertically(Constraint::Length(BAND_HEIGHT))
 }
 
 fn band_frame() -> Block<'static> {

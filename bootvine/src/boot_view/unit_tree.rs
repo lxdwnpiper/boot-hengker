@@ -2,7 +2,10 @@ use std::{iter::once, time::Duration};
 
 use ratatui::{
     buffer::Buffer,
-    layout::{Constraint, Rect},
+    layout::{
+        Constraint::{self, Fill, Length},
+        Layout, Rect,
+    },
     style::{Style, Stylize},
     text::{Line, Span},
     widgets::{Row, Table, Widget},
@@ -10,8 +13,8 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 
 use super::{
-    BRANCH, DURATION_WIDTH, ENDED_TRUNK, LAST_BRANCH, PASSING_TRUNK, RUNNING_ELAPSED, WHOLE_UNITS,
-    fit_width,
+    BRANCH, ENDED_TRUNK, LAST_BRANCH, PASSING_TRUNK, RUNNING_ELAPSED, WHOLE_UNITS, fit_width,
+    screen_spacing::{ANNOTATION_COLUMN_WIDTH, COLUMN_GAP_WIDTH, TEXT_ROW_HEIGHT},
 };
 use crate::{
     boot_model::{RowStatus, TreeRow, UnitKind},
@@ -20,10 +23,8 @@ use crate::{
 
 const SPINNER: [char; 4] = ['|', '/', '-', '\\'];
 const SPINNER_STEP: Duration = Duration::from_millis(100);
-const MIN_DESCRIPTION_WIDTH: u16 = 12;
-const MIN_TAG_WIDTH: u16 = 6;
-const MIN_LABEL_WIDTH: u16 = 24;
-const HEADER_ROWS: u16 = 1;
+const LABEL_SHARE: u16 = 3;
+const DESCRIPTION_SHARE: u16 = 2;
 const SHOW_TIMEOUT_AFTER: Duration = Duration::from_secs(5);
 const TIMEOUT_HEADER: &str = "Timeout";
 
@@ -43,10 +44,11 @@ pub struct UnitTree<'a> {
 }
 
 struct Columns {
+    constraints: Vec<Constraint>,
     label: u16,
-    tag: u16,
     description: u16,
-    timeout: u16,
+    shows_annotations: bool,
+    shows_timeout: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -66,15 +68,42 @@ fn spinner_at(now: Duration) -> char {
     SPINNER[usize::try_from(steps % 4).unwrap_or_default()]
 }
 
-fn width_of(text: &str) -> u16 {
-    u16::try_from(text.width()).unwrap_or(u16::MAX)
+fn solved_columns(width: u16, shows_annotations: bool, shows_timeout: bool) -> Columns {
+    let leading = if shows_annotations {
+        vec![
+            Fill(LABEL_SHARE),
+            Length(ANNOTATION_COLUMN_WIDTH),
+            Fill(DESCRIPTION_SHARE),
+        ]
+    } else {
+        vec![Fill(1)]
+    };
+    let constraints: Vec<Constraint> = leading
+        .into_iter()
+        .chain(once(Length(ANNOTATION_COLUMN_WIDTH)))
+        .chain(shows_timeout.then_some(Length(ANNOTATION_COLUMN_WIDTH)))
+        .collect();
+    let solved = Layout::horizontal(constraints.clone())
+        .spacing(COLUMN_GAP_WIDTH)
+        .split(Rect::new(0, 0, width, TEXT_ROW_HEIGHT));
+    Columns {
+        label: solved[0].width,
+        description: if shows_annotations {
+            solved[2].width
+        } else {
+            0
+        },
+        constraints,
+        shows_annotations,
+        shows_timeout,
+    }
 }
 
 impl UnitTree<'_> {
     pub fn height_of(rows: usize, hidden: usize) -> u16 {
         u16::try_from(rows + usize::from(hidden > 0))
             .unwrap_or(u16::MAX)
-            .saturating_add(HEADER_ROWS)
+            .saturating_add(TEXT_ROW_HEIGHT)
     }
 
     pub fn height(&self) -> u16 {
@@ -87,7 +116,7 @@ impl UnitTree<'_> {
 
     fn header(&self, columns: &Columns) -> Row<'static> {
         if !self.phase_fits_its_column(columns) {
-            return Row::default().height(HEADER_ROWS);
+            return Row::default().height(TEXT_ROW_HEIGHT);
         }
         let name = |text: &'static str| Line::from(text).fg(self.colors.columns);
         Row::new(columns.shown([
@@ -114,15 +143,6 @@ impl UnitTree<'_> {
             limit,
             exceeded: elapsed >= limit,
         })
-    }
-
-    fn timeout_width(&self) -> u16 {
-        self.rows
-            .iter()
-            .filter_map(|row| self.run_timeout(row))
-            .map(|timeout| width_of(&WHOLE_UNITS.unsigned_duration_to_string(&timeout.limit)))
-            .max()
-            .map_or(0, |widest| widest.max(width_of(TIMEOUT_HEADER)))
     }
 
     fn timeout_cell(&self, row: &TreeRow) -> Line<'static> {
@@ -218,39 +238,16 @@ impl UnitTree<'_> {
     }
 
     fn columns(&self, width: u16) -> Columns {
-        let timeout = self.timeout_width();
-        let timeout_room = if timeout > 0 { timeout + 1 } else { 0 };
-        let unannotated = width.saturating_sub(DURATION_WIDTH + 1 + timeout_room);
-        let annotated: Vec<(&TreeRow, Stage)> = self
-            .rows
-            .iter()
-            .zip(self.stages())
-            .filter(|(row, _)| {
-                row.chain.is_empty() && !(row.description.is_none() && row.kind.tag().is_none())
-            })
-            .collect();
-        let tag = annotated
-            .iter()
-            .map(|(row, _)| width_of(row.kind.tag().unwrap_or_default()))
-            .fold(MIN_TAG_WIDTH, u16::max);
-        let content = unannotated.saturating_sub(2);
-        let label = (content * 3 / 5).max(MIN_LABEL_WIDTH);
-        let fits_annotations =
-            !annotated.is_empty() && label + tag + MIN_DESCRIPTION_WIDTH <= content;
-        fits_annotations.then_some(label).map_or(
-            Columns {
-                label: unannotated,
-                tag: 0,
-                description: 0,
-                timeout,
-            },
-            |label| Columns {
-                label,
-                tag,
-                description: content - label - tag,
-                timeout,
-            },
-        )
+        let shows_timeout = self.rows.iter().any(|row| self.run_timeout(row).is_some());
+        let has_annotated_rows = self.rows.iter().any(|row| {
+            row.chain.is_empty() && !(row.description.is_none() && row.kind.tag().is_none())
+        });
+        let annotated = solved_columns(width, true, shows_timeout);
+        if has_annotated_rows && annotated.description >= ANNOTATION_COLUMN_WIDTH {
+            annotated
+        } else {
+            solved_columns(width, false, shows_timeout)
+        }
     }
 
     fn row(&self, row: &TreeRow, stage: Stage, prefix: String, columns: &Columns) -> Row<'static> {
@@ -279,8 +276,11 @@ impl UnitTree<'_> {
                     marker,
                     Span::styled(self.chained_label(row, room), style),
                 ]),
-                Line::from(annotation(row.kind.tag().unwrap_or_default(), columns.tag))
-                    .fg(self.colors.columns),
+                Line::from(annotation(
+                    row.kind.tag().unwrap_or_default(),
+                    ANNOTATION_COLUMN_WIDTH,
+                ))
+                .fg(self.colors.columns),
                 Line::from(annotation(
                     row.description.as_deref().unwrap_or_default(),
                     columns.description,
@@ -297,33 +297,22 @@ impl Columns {
     fn shown<T>(&self, cells: [T; 5]) -> impl Iterator<Item = T> {
         let present = [
             true,
-            self.tag > 0,
-            self.description > 0,
+            self.shows_annotations,
+            self.shows_annotations,
             true,
-            self.timeout > 0,
+            self.shows_timeout,
         ];
         cells
             .into_iter()
             .zip(present)
             .filter_map(|(cell, present)| present.then_some(cell))
     }
-
-    fn widths(&self) -> impl Iterator<Item = Constraint> {
-        self.shown([
-            self.label,
-            self.tag,
-            self.description,
-            DURATION_WIDTH,
-            self.timeout,
-        ])
-        .map(Constraint::Length)
-    }
 }
 
 impl Widget for UnitTree<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let capacity = usize::from(area.height.saturating_sub(HEADER_ROWS));
-        let shown = if usize::from(self.height() - HEADER_ROWS) > capacity {
+        let capacity = usize::from(area.height.saturating_sub(TEXT_ROW_HEIGHT));
+        let shown = if usize::from(self.height() - TEXT_ROW_HEIGHT) > capacity {
             capacity.saturating_sub(1).min(self.rows.len())
         } else {
             self.rows.len()
@@ -336,20 +325,25 @@ impl Widget for UnitTree<'_> {
             ])
         });
         let columns = self.columns(area.width);
-        Table::new(
+        let table = Table::new(
             self.rows
                 .iter()
                 .zip(self.stages())
                 .zip(tree_prefixes(self.rows))
                 .take(shown)
-                .map(|((row, stage), prefix)| self.row(row, stage, prefix, &columns))
-                .chain(overflow),
-            columns.widths(),
+                .map(|((row, stage), prefix)| self.row(row, stage, prefix, &columns)),
+            columns.constraints.clone(),
         )
-        .header(self.header(&columns))
+        .column_spacing(COLUMN_GAP_WIDTH)
+        .header(self.header(&columns));
+        match overflow {
+            Some(overflow_row) => table.footer(overflow_row),
+            None => table,
+        }
         .render(area, buf);
         if !self.phase_fits_its_column(&columns) {
-            self.phase.render(Rect { height: 1, ..area }, buf);
+            let [phase_row, _] = area.layout(&Layout::vertical([Length(TEXT_ROW_HEIGHT), Fill(1)]));
+            self.phase.render(phase_row, buf);
         }
     }
 }

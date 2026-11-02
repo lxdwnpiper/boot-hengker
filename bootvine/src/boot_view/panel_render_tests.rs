@@ -65,7 +65,7 @@ fn tree_on_top_timeline_below() {
     );
     assert!(!screen.contains("root switch"), "{screen}");
     assert!(
-        lines[23].starts_with("√ 2 done   2 running   3 waiting   × 1 failed"),
+        lines[23].starts_with("√ 2 done  2 running  3 waiting  × 1 failed"),
         "{screen}"
     );
 }
@@ -99,7 +99,7 @@ fn password_prompt_floats_over_a_dimmed_view() {
     assert!(lines[title_row + 3].contains("│  > ***_"), "{screen}");
     assert!(lines[title_row + 4].contains("Enter unlock"), "{screen}");
     assert!(
-        lines[23].starts_with("√ 2 done   2 running   3 waiting   × 1 failed"),
+        lines[23].starts_with("√ 2 done  2 running  3 waiting  × 1 failed"),
         "{screen}"
     );
     assert_eq!(
@@ -239,7 +239,7 @@ fn long_timeline_labels_end_in_an_ellipsis() {
 
 #[test]
 fn narrow_screens_drop_the_timeline() {
-    let lines = render(&boot_in_progress(), 12_400 * MS, 40, 24);
+    let lines = render(&boot_in_progress(), 12_400 * MS, 37, 24);
     assert!(
         lines.iter().all(|line| !line.contains('■')),
         "{}",
@@ -427,10 +427,10 @@ fn failures_show_their_reason_and_journal_lines_above_the_timeline() {
     );
     assert_eq!(
         lines[failures + 2],
-        "    ERROR! Failed to get system power limits",
+        "   ERROR! Failed to get system power limits",
         "{screen}"
     );
-    assert_eq!(lines[failures + 3], "    giving up", "{screen}");
+    assert_eq!(lines[failures + 3], "   giving up", "{screen}");
 }
 
 #[test]
@@ -448,7 +448,7 @@ fn failure_lines_are_cut_to_a_narrow_screen() {
     );
     assert_eq!(
         lines[failures + 2],
-        "    ERROR! Failed to get syst…",
+        "   ERROR! Failed to get syste…",
         "{screen}"
     );
 }

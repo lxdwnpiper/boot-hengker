@@ -2,13 +2,19 @@ use std::{iter::once, time::Duration};
 
 use ratatui::{
     buffer::Buffer,
-    layout::{Constraint, Rect},
+    layout::{
+        Constraint::{self, Fill, Length},
+        Layout, Rect,
+    },
     style::{Style, Stylize},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Padding, Paragraph, Widget, Wrap},
+    widgets::{Block, Clear, Padding, Paragraph, Widget, Wrap},
 };
 
-use super::{DURATION_WIDTH, ELAPSED};
+use super::{
+    ELAPSED, rule,
+    screen_spacing::{ANNOTATION_COLUMN_WIDTH, TEXT_GAP},
+};
 use crate::{
     boot_model::{Tally, boot_origin::BootOrigin},
     screen_settings::{
@@ -17,7 +23,6 @@ use crate::{
     },
 };
 
-pub const FOOTER_HEIGHT: u16 = 2;
 const SEPARATOR: &str = " · ";
 const REJECTED_PASSPHRASE: &str = "Wrong passphrase, try again";
 
@@ -47,19 +52,17 @@ impl Header<'_> {
 
 impl Widget for Header<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        self.origin().render(
-            Rect {
-                width: area.width.saturating_sub(DURATION_WIDTH),
-                ..area
-            },
-            buf,
-        );
+        let [origin_area, total_area] = area.layout(&Layout::horizontal([
+            Fill(1),
+            Length(ANNOTATION_COLUMN_WIDTH),
+        ]));
+        self.origin().render(origin_area, buf);
         if let Some(total) = self.total {
             Line::from(ELAPSED.unsigned_duration_to_string(&total))
                 .fg(self.colors.total_time)
                 .bold()
                 .right_aligned()
-                .render(area, buf);
+                .render(total_area, buf);
         }
     }
 }
@@ -72,24 +75,23 @@ pub struct Footer<'a> {
 
 impl Widget for Footer<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let failed = format!("   {} {} failed", self.glyphs.failed, self.tally.failed);
+        let failed = format!(
+            "{TEXT_GAP}{} {} failed",
+            self.glyphs.failed, self.tally.failed
+        );
         let failed = if self.tally.failed > 0 {
             failed.fg(self.colors.failed).bold()
         } else {
             failed.fg(self.colors.no_failures)
         };
-        let block = Block::new()
-            .borders(Borders::TOP)
-            .border_style(self.colors.rule);
-        let inner = block.inner(area);
-        block.render(area, buf);
-        Line::from(vec![
+        Paragraph::new(Line::from(vec![
             format!("{} {} done", self.glyphs.done, self.tally.done).fg(self.colors.done),
-            format!("   {} running", self.tally.running).fg(self.colors.running),
-            format!("   {} waiting", self.tally.waiting).fg(self.colors.waiting),
+            format!("{TEXT_GAP}{} running", self.tally.running).fg(self.colors.running),
+            format!("{TEXT_GAP}{} waiting", self.tally.waiting).fg(self.colors.waiting),
             failed,
-        ])
-        .render(inner, buf);
+        ]))
+        .block(rule(self.colors.rule, Line::default()))
+        .render(area, buf);
     }
 }
 
