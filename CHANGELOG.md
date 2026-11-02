@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2](https://codeberg.org/wvhulle/bootvine/compare/v0.1.1...v0.1.2) - 2026-11-02
+
+### Added
+
+- show the kernel's image loading progress while resuming from hibernation
+- say when the screen is waiting for the system manager
+
+### Changed
+
+- reduce screen spacing to a small named set and declarative layouts
+
+### Fixed
+
+- repaint the whole screen while the root switches
+- finish console setup before resuming from hibernation
+
 ## [0.1.1](https://codeberg.org/wvhulle/bootvine/compare/v0.1.0...v0.1.1) - 2026-10-30
 
 ### Changed
