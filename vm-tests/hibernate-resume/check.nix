@@ -7,7 +7,7 @@
     {
       imports = [
         machine
-        "${pkgs.path}/nixos/tests/common/auto-format-root-device.nix"
+        (pkgs.path + "/nixos/tests/common/auto-format-root-device.nix")
       ];
 
       boot.resumeDevice = "/dev/vdc";
