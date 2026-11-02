@@ -113,6 +113,14 @@ fn queued_units(signals: &[Signal]) -> impl Iterator<Item = &str> {
     })
 }
 
+fn connected_inputs(changes: Vec<BootChange>, switching_root: bool) -> Vec<ScreenInput> {
+    (!changes.is_empty())
+        .then_some(ScreenInput::Boot(changes))
+        .into_iter()
+        .chain(switching_root.then_some(ScreenInput::FullRepaint))
+        .collect()
+}
+
 struct BootTracker {
     scope: Scope,
     target: RootRequest,
@@ -160,9 +168,9 @@ impl BusFeed {
             }
             Link::Connected(connection) => {
                 let received = self.tracker.receive(connection).await;
+                let switching_root = matches!(self.tracker.root_switch, RootSwitch::Queued(_));
                 Some(match received {
-                    Ok(changes) if changes.is_empty() => Vec::new(),
-                    Ok(changes) => vec![ScreenInput::Boot(changes)],
+                    Ok(changes) => connected_inputs(changes, switching_root),
                     Err(_) => self.lose_connection(),
                 })
             }
@@ -184,7 +192,7 @@ impl BusFeed {
             Ok(changes) => vec![ScreenInput::Boot(changes), ScreenInput::FullRepaint],
             Err(_) if Instant::now() < deadline => {
                 sleep(BACKGROUND_CHECK_INTERVAL).await;
-                Vec::new()
+                vec![ScreenInput::FullRepaint]
             }
             Err(_) => {
                 self.link = Link::Finished;
@@ -544,6 +552,23 @@ mod tests {
             units_in_failed_state: HashSet::new(),
             root_switch: RootSwitch::NotQueued,
         }
+    }
+
+    #[test]
+    fn the_screen_is_repainted_only_while_the_root_switches() {
+        assert!(connected_inputs(Vec::new(), false).is_empty());
+        assert!(matches!(
+            connected_inputs(Vec::new(), true).as_slice(),
+            [ScreenInput::FullRepaint]
+        ));
+        assert!(matches!(
+            connected_inputs(vec![BootChange::ForgetJobs], true).as_slice(),
+            [ScreenInput::Boot(_), ScreenInput::FullRepaint]
+        ));
+        assert!(matches!(
+            connected_inputs(vec![BootChange::ForgetJobs], false).as_slice(),
+            [ScreenInput::Boot(_)]
+        ));
     }
 
     fn in_state(state: ActiveState) -> Activity {

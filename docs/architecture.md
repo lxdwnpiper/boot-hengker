@@ -270,7 +270,10 @@ While it runs, bootvine:
   `/proc/sys/kernel/printk` to 1, so only emergency messages reach the
   screen, and sets it again if something raises it;
 - **silences systemd's status output** with the manager's `SetShowStatus`
-  call.
+  call;
+- **repaints every cell every 100 ms during a root switch**, because PID 1
+  writes to the console and resets it while it re-executes, and drawing only
+  the cells that changed would leave that on screen.
 
 It restores the log level and the status output when it hands the console
 back. Kernel messages from before it starts are already on screen; see
