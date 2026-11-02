@@ -194,7 +194,7 @@ impl BootState {
         };
         let outcome = match result {
             JobResult::Done => Outcome::Succeeded { at },
-            JobResult::Skipped | JobResult::Canceled => Outcome::Abandoned,
+            JobResult::Skipped | JobResult::Canceled | JobResult::Collected => Outcome::Abandoned,
             JobResult::Failed => Outcome::Failed(FailureKind::Broke),
             JobResult::Timeout => Outcome::Failed(FailureKind::TimedOut),
             JobResult::Dependency => Outcome::Failed(FailureKind::DependencyFailed),
@@ -335,6 +335,20 @@ mod tests {
                 ("nm-wait.service", FailureKind::DependencyFailed),
             ]
         );
+    }
+
+    #[test]
+    fn a_collected_job_on_a_multi_device_mount_source_is_not_a_failure() {
+        let mut state = BootState::new(Phase::Initrd);
+        queue_unit(
+            &mut state,
+            1,
+            waiting("dev-nvme0n1p1:-dev-nvme1n1p3.device", &[]),
+            500 * MS,
+        );
+        state.finish_job(1, JobResult::Collected, 2000 * MS);
+        assert!(state.failed.is_empty());
+        assert_eq!(state.tally().failed, 0);
     }
 
     #[test]

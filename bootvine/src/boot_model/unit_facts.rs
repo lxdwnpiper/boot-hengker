@@ -20,6 +20,7 @@ pub enum JobResult {
     Done,
     Skipped,
     Canceled,
+    Collected,
     Timeout,
     Dependency,
     #[serde(other)]
@@ -162,6 +163,7 @@ mod tests {
         );
         assert_eq!(from_str("maintenance").ok(), Some(ActiveState::Inactive));
         assert_eq!(from_str("dependency").ok(), Some(JobResult::Dependency));
+        assert_eq!(from_str("collected").ok(), Some(JobResult::Collected));
         assert_eq!(from_str("frozen").ok(), Some(JobResult::Failed));
         assert_eq!(from_str("stop").ok(), Some(JobKind::TakesDown));
         assert_eq!(from_str("restart").ok(), Some(JobKind::BringsUp));
