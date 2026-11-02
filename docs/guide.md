@@ -85,6 +85,8 @@ stage 2, from `sysinit.target` on.
 
 ## Resuming from hibernation
 
+<img src="https://codeberg.org/wvhulle/bootvine/raw/branch/recordings/hibernate-resume.webp" width="640" alt="The tree held still during a resume, with the kernel's image loading progress in a band across the middle of the screen">
+
 Resuming from hibernation looks different from a boot, because the kernel
 freezes every process before it loads the image, bootvine included. The tree
 stops moving, and a band across the middle of the screen shows the kernel's own

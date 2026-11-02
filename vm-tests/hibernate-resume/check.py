@@ -13,9 +13,7 @@ def assert_console_returned():
     assert console_level() == BOOT_CONSOLE_LEVEL, f"kernel console level was not restored: {console_level()}"
 
 
-recording = ScreenRecording(machine)
 machine.start()
-recording.start()
 
 machine.wait_for_unit("default.target")
 assert_console_returned()
@@ -29,21 +27,18 @@ machine.succeed(
 
 machine.execute("systemctl hibernate >&2 &", check_return=False)
 machine.wait_for_shutdown()
-recording.stop()
 
 resume_recording = ScreenRecording(machine)
-resume_recording.frames_directory = os.path.join(machine.out_dir, "resume-recording")
 resume_recording.frame_seconds = 0.1
 machine.start()
 resume_recording.start()
 machine.wait_for_console_text("Image loading progress")
 machine.wait_for_console_text("Image loading done")
+resume_recording.stop()
 machine.succeed(f"grep '{SENTINEL_TEXT}' /run/test/sentinel")
 assert console_level() == BOOT_CONSOLE_LEVEL, f"the restored system kept the opened level: {console_level()}"
 assert foreground_terminal() != f"tty{BOOTVINE_TERMINAL}", "the restored system came back on bootvine's terminal"
 machine.fail("systemctl is-active bootvine")
-
-resume_recording.stop()
 
 machine.crash()
 machine.start()
