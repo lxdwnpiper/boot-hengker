@@ -276,6 +276,27 @@ It restores the log level and the status output when it hands the console
 back. Kernel messages from before it starts are already on screen; see
 [early kernel messages](configuration.md#early-kernel-messages).
 
+### Resuming from hibernation
+
+The kernel freezes all processes before it loads a hibernated image, so
+bootvine cannot draw during the load. A drop-in on
+`systemd-hibernate-resume.service` runs `bootvine open-resume-console` first,
+which:
+
+- creates `/run/bootvine/resume-console-open`, so the running bootvine stops
+  drawing, stops resetting the log level and stops taking `tty12` back;
+- raises the console log level to 7, so the kernel's `pr_info` progress lines
+  reach the screen, and hides their timestamps;
+- draws a band across the middle of `tty12`, limits scrolling to the two rows
+  inside it, and sets the colour and cursor there. The kernel console writes at
+  the cursor in the terminal's current colour, always from column 0, so it
+  stays inside the band without knowing about it.
+
+If an image is restored, none of this needs undoing: the boot kernel's memory
+is replaced, and the restored system keeps its own log level and terminals. If
+not, `bootvine close-resume-console` runs as `ExecStopPost`, restoring what
+the marker recorded, the colour and the scrolling, and bootvine repaints.
+
 ### Passphrase prompts
 
 bootvine acts as a systemd

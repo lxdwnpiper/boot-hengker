@@ -1,4 +1,4 @@
-use std::{future::ready, io, ops::ControlFlow, time::Duration};
+use std::{future::ready, io, mem, ops::ControlFlow, path::PathBuf, time::Duration};
 
 use crossterm::event::Event;
 use futures::{Stream, StreamExt};
@@ -11,6 +11,7 @@ use crate::{
         console_palette::ConsoleLook,
         console_takeover::{ForegroundVt, QuietKernelConsole, console_look, vt_of_stdin},
         passphrase_input::asks_to_quit,
+        resume_console::{RESUME_CONSOLE_MARKER, resume_console_is_open},
         stream_sources::items_when_readable,
         watch_screen::{ConsoleDesk, Refresh, ScreenInput, WatchEnding},
     },
@@ -24,6 +25,8 @@ pub struct LiveDesk {
     look: ConsoleLook,
     entry: Option<PasswordEntry>,
     handover_deadline: Option<Duration>,
+    resume_marker: PathBuf,
+    console_was_lent: bool,
 }
 
 impl LiveDesk {
@@ -44,6 +47,8 @@ impl LiveDesk {
             look: console_look(own_vt),
             entry: None,
             handover_deadline: None,
+            resume_marker: PathBuf::from(RESUME_CONSOLE_MARKER),
+            console_was_lent: false,
         }
     }
 
@@ -134,7 +139,17 @@ impl ConsoleDesk for LiveDesk {
         self.follow_requests(false);
     }
 
+    fn lends_console(&mut self) -> bool {
+        let lent = resume_console_is_open(&self.resume_marker);
+        self.console_was_lent |= lent;
+        lent
+    }
+
     fn keep_console_up(&mut self) -> Refresh {
+        if self.lends_console() {
+            return Refresh::Steady;
+        }
+        let console_returned = mem::take(&mut self.console_was_lent);
         let kernel_got_loud = self
             .quiet_kernel
             .as_mut()
@@ -144,7 +159,7 @@ impl ConsoleDesk for LiveDesk {
         let look = console_look(self.own_vt);
         let restyled = look != self.look;
         self.look = look;
-        if kernel_got_loud || terminal_was_taken || restyled {
+        if console_returned || kernel_got_loud || terminal_was_taken || restyled {
             Refresh::Repaint
         } else {
             Refresh::Steady
@@ -156,4 +171,41 @@ pub fn password_request_inputs(watch: RequestWatch) -> io::Result<impl Stream<It
     Ok(items_when_readable(watch, RequestWatch::changed)?
         .filter(|changed| ready(*changed))
         .map(|_| ScreenInput::PasswordRequests))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{env, fs, process};
+
+    use super::*;
+
+    fn desk_watching(resume_marker: PathBuf) -> LiveDesk {
+        LiveDesk {
+            quiet_kernel: None,
+            foreground: None,
+            for_system: true,
+            own_vt: None,
+            look: console_look(None),
+            entry: None,
+            handover_deadline: None,
+            resume_marker,
+            console_was_lent: false,
+        }
+    }
+
+    #[test]
+    fn the_console_is_repainted_only_after_it_was_lent_for_resume() {
+        let marker = env::temp_dir().join(format!("bootvine-resume-marker-{}", process::id()));
+        let mut desk = desk_watching(marker.clone());
+        assert!(!desk.lends_console());
+
+        fs::write(&marker, "1").expect("create the marker");
+        assert!(desk.lends_console());
+        assert_eq!(desk.keep_console_up(), Refresh::Steady);
+
+        fs::remove_file(&marker).expect("remove the marker");
+        assert!(!desk.lends_console());
+        assert_eq!(desk.keep_console_up(), Refresh::Repaint);
+        assert_eq!(desk.keep_console_up(), Refresh::Steady);
+    }
 }

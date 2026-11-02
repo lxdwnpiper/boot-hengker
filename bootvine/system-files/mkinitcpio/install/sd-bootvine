@@ -3,6 +3,7 @@
 build() {
     add_binary bootvine
     add_systemd_unit bootvine.service
+    add_file /usr/lib/systemd/system/systemd-hibernate-resume.service.d/bootvine.conf
     if [[ -f /etc/bootvine.toml ]]; then
         add_file /etc/bootvine.toml
     fi

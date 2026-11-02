@@ -51,6 +51,10 @@ in
         substituteInPlace $out/lib/systemd/system/$unit \
           --replace-fail /usr/bin/bootvine $out/bin/bootvine
       done
+      resume_drop_in=systemd-hibernate-resume.service.d/bootvine.conf
+      install -Dm644 bootvine/system-files/systemd/$resume_drop_in $out/lib/systemd/system/$resume_drop_in
+      substituteInPlace $out/lib/systemd/system/$resume_drop_in \
+        --replace-fail /usr/bin/bootvine $out/bin/bootvine
       install -Dm755 bootvine/system-files/dracut/90bootvine/module-setup.sh \
         $out/lib/dracut/modules.d/90bootvine/module-setup.sh
       install -Dm644 bootvine/system-files/mkinitcpio/install/sd-bootvine \

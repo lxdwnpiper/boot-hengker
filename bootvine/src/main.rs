@@ -3,7 +3,10 @@ use std::{
 };
 
 use bootvine::{
-    console_session::watch_loop::{Settings, run},
+    console_session::{
+        resume_console::{close_resume_console, open_resume_console},
+        watch_loop::{Settings, run},
+    },
     screen_settings::config_file::{
         Config, ConfigError, Timing, default_config_table, read_config_file,
     },
@@ -69,6 +72,13 @@ enum Command {
     Install(InstallOptions),
     #[command(about = "Disable and remove what install put in place")]
     Uninstall(UninstallOptions),
+    #[command(
+        about = "Let the kernel's image loading progress reach the console; started before \
+                 systemd-hibernate-resume.service"
+    )]
+    OpenResumeConsole,
+    #[command(about = "Undo open-resume-console when no hibernated image was restored")]
+    CloseResumeConsole,
 }
 
 #[derive(Args)]
@@ -102,6 +112,8 @@ fn main() -> ExitCode {
         ),
         Some(Command::Install(options)) => report_outcome(install_files(&options)),
         Some(Command::Uninstall(options)) => report_outcome(uninstall_files(&options)),
+        Some(Command::OpenResumeConsole) => report_outcome(open_resume_console()),
+        Some(Command::CloseResumeConsole) => report_outcome(close_resume_console()),
         None => watch_boot(cli.watch),
     }
 }

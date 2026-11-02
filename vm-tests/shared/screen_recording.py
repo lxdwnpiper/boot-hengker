@@ -14,6 +14,7 @@ class ScreenRecording:
         self.recorded_machine = recorded_machine
         self.frames_directory = os.path.join(recorded_machine.out_dir, "recording")
         self.raw_frame = os.path.join(recorded_machine.state_dir, "recording-frame.ppm")
+        self.frame_seconds = RECORDING_FRAME_SECONDS
         self.stopping = threading.Event()
         self.thread = threading.Thread(target=self.record_frames, daemon=True)
 
@@ -64,7 +65,7 @@ class ScreenRecording:
             while not self.stopping.is_set():
                 self.save_frame(monitor, frame_number)
                 frame_number += 1
-                self.stopping.wait(RECORDING_FRAME_SECONDS)
+                self.stopping.wait(self.frame_seconds)
         except (OSError, ConnectionError, subprocess.CalledProcessError):
             pass
         finally:

@@ -83,6 +83,35 @@ The `scripted-initrd` machine uses NixOS's older scripted initrd, which has no
 systemd. The initrd's lines scroll past as usual, and bootvine starts in
 stage 2, from `sysinit.target` on.
 
+## Resuming from hibernation
+
+Resuming from hibernation looks different from a boot, because the kernel
+freezes every process before it loads the image, bootvine included. The tree
+stops moving, and a band across the middle of the screen shows the kernel's own
+progress:
+
+```
+─── Looking for a hibernated session ─────────────────────────────
+PM: Image loading progress:  60%
+
+──────────────────────────────────────────────────────────────────
+```
+
+The text comes straight from the kernel, which is why it is a line of text and
+not a bar. The screen stays like this until the restored system takes over.
+Bootvine does not draw again, because the restore replaces it along with the
+rest of the boot kernel's memory.
+
+The last lines show how the time was spent. `Read ... in N seconds` is the
+image load. `Suspending console(s)` means the load has finished and the kernel
+is about to jump into the restored system. If the screen stays on that line for
+a long time, the wait is the restored kernel bringing devices back up, not the
+disk.
+
+With no image to restore, `systemd-hibernate-resume` finishes at once and the
+band disappears. Some kernel console setups
+switch to a blank terminal for the load; the same lines then appear there.
+
 ## Shutdown
 
 <img src="https://codeberg.org/wvhulle/bootvine/raw/branch/recordings/shutdown.gif" width="691" alt="A poweroff: units stopping under the targets waiting on them">
@@ -174,6 +203,7 @@ shows the shutdown.
 | `nix run .#sample-vm-text-console` | the same units without a display manager, handing over at the default target | [without a display manager](#without-a-display-manager) |
 | `nix run .#sample-vm-scripted-initrd` | the same units with NixOS's scripted initrd, so bootvine starts in stage 2 only | [without a systemd initrd](#without-a-systemd-initrd) |
 | `nix run .#sample-vm-encrypted-volume` | a LUKS volume unlocked in the initrd; the passphrase is `sample passphrase` | [passphrase prompts](#passphrase-prompts) |
+| `nix run .#sample-vm-hibernate-resume` | a swap disk to hibernate to; run `systemctl hibernate`, then start the machine again | [resuming from hibernation](#resuming-from-hibernation) |
 | `nix run .#sample-vm-failures` | a firmware failure in the initrd, then units that exit with an error, crash, time out, cannot be run, restart too often, report a status, die after starting, and one that fails only through its dependency | [failures](#failures) |
 
 Each machine keeps its disk in `~/.cache/bootvine-<machine>.qcow2`; delete it

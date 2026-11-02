@@ -64,6 +64,10 @@ pub trait ConsoleDesk {
     }
 
     fn begin_handover(&mut self, _reached: &str, _deadline: Duration) {}
+
+    fn lends_console(&mut self) -> bool {
+        false
+    }
 }
 
 struct CachedProjection {
@@ -183,6 +187,9 @@ impl<Desk: ConsoleDesk> WatchScreen<Desk> {
         Error: From<B::Error>,
     {
         batch.into_iter().try_for_each(|input| self.absorb(input))?;
+        if self.desk.lends_console() {
+            return ControlFlow::Continue(());
+        }
         match self.draw(terminal) {
             Ok(()) => ControlFlow::Continue(()),
             Err(error) => ControlFlow::Break(WatchEnding::Failed(error)),
@@ -253,7 +260,10 @@ where
         .await
 }
 
-fn overwrite_every_cell<B: Backend>(backend: &mut B, frame: &Buffer) -> Result<(), B::Error> {
+pub(super) fn overwrite_every_cell<B: Backend>(
+    backend: &mut B,
+    frame: &Buffer,
+) -> Result<(), B::Error> {
     backend.draw(
         frame
             .content

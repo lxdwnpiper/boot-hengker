@@ -34,6 +34,13 @@ const PACKAGED_UNITS: [PackagedUnit; 2] = [
         contents: include_str!("../../system-files/systemd/bootvine-shutdown.service"),
     },
 ];
+const RESUME_DROP_IN_DIR: &str = "systemd-hibernate-resume.service.d";
+const RESUME_DROP_IN: PackagedUnit = PackagedUnit {
+    name: "systemd-hibernate-resume.service.d/bootvine.conf",
+    contents: include_str!(
+        "../../system-files/systemd/systemd-hibernate-resume.service.d/bootvine.conf"
+    ),
+};
 const DRACUT_MODULE_SETUP: &str =
     include_str!("../../system-files/dracut/90bootvine/module-setup.sh");
 const MKINITCPIO_INSTALL_HOOK: &str =
@@ -177,14 +184,17 @@ fn binary_file(target: &InstallTarget) -> Result<Option<InstalledFile>, InstallE
 
 fn unit_files(target: &InstallTarget) -> impl Iterator<Item = InstalledFile> {
     let binary_path = target.binary_path();
-    PACKAGED_UNITS.iter().map(move |unit| InstalledFile {
-        destination: target.unit_path(unit.name),
-        contents: unit
-            .contents
-            .replace(PACKAGED_BINARY_PATH, &binary_path.to_string_lossy())
-            .into_bytes(),
-        mode: 0o644,
-    })
+    PACKAGED_UNITS
+        .iter()
+        .chain(once(&RESUME_DROP_IN))
+        .map(move |unit| InstalledFile {
+            destination: target.unit_path(unit.name),
+            contents: unit
+                .contents
+                .replace(PACKAGED_BINARY_PATH, &binary_path.to_string_lossy())
+                .into_bytes(),
+            mode: 0o644,
+        })
 }
 
 fn initrd_hook_files(initrd: InitrdGenerator) -> Vec<InstalledFile> {
@@ -318,6 +328,7 @@ pub fn uninstall_files(options: &UninstallOptions) -> Result<(), InstallError> {
         .every_installed_path()
         .into_iter()
         .try_for_each(|path| remove_if_present(target.staged(&path)))?;
+    let _ = fs::remove_dir(target.staged(&target.unit_path(RESUME_DROP_IN_DIR)));
     let dracut_module_dir = target.staged(Path::new(DRACUT_MODULE_DIR));
     match fs::remove_dir(&dracut_module_dir) {
         Err(error) if error.kind() == ErrorKind::DirectoryNotEmpty => {
