@@ -15,6 +15,7 @@ use crate::{
 };
 
 const SHUTDOWN_SUCCESSOR: &str = "systemd-shutdown";
+const AWAITING_MANAGER: &str = " · waiting for the system manager";
 
 fn padded_phase_label(label: &str) -> String {
     format!(
@@ -115,6 +116,11 @@ impl Stages<'_> {
                 .fg(self.colors.current)
                 .bold(),
             elapsed.fg(self.colors.current),
+            if self.state.awaits_manager() {
+                AWAITING_MANAGER.fg(self.colors.current)
+            } else {
+                Span::default()
+            },
         ])
     }
 }

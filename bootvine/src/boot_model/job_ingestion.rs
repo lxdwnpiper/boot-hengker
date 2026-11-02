@@ -94,6 +94,11 @@ impl BootState {
         }
     }
 
+    #[must_use]
+    pub fn awaits_manager(&self) -> bool {
+        self.root == Root::Unresolved
+    }
+
     pub fn set_root(&mut self, root: String) {
         if self.phase == Phase::User && !self.milestone_targets.contains(&root) {
             self.milestone_targets.push(root.clone());

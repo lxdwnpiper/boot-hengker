@@ -14,6 +14,24 @@ const CRYPTSETUP_MESSAGE: &str =
     "Please enter passphrase for disk Samsung SSD 980 PRO 1TB (cryptroot):";
 
 #[test]
+fn the_stage_says_when_the_manager_has_not_answered_yet() {
+    let mut state = BootState::new(Phase::Host);
+    let lines = render(&state, 500 * MS, 110, 24);
+    assert!(
+        lines[1].contains("Stage 2") && lines[1].contains("waiting for the system manager"),
+        "{}",
+        lines.join("\n")
+    );
+    state.set_root("graphical.target".to_owned());
+    let lines = render(&state, 500 * MS, 110, 24);
+    assert!(
+        lines.iter().all(|line| !line.contains("system manager")),
+        "{}",
+        lines.join("\n")
+    );
+}
+
+#[test]
 fn tree_on_top_timeline_below() {
     let lines = render(&boot_in_progress(), 12_400 * MS, 110, 24);
     let screen = lines.join("\n");

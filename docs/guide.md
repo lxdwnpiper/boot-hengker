@@ -58,7 +58,8 @@ the kernel:
   under `initrd.target`.
 - **The switch to the real root**: the initrd moves into the stages at the
   top, with its time and unit count, and the tree starts again under the
-  default target. The timeline keeps the initrd's runs, left of the `│`.
+  default target. Until the new manager answers, the stage line says it is
+  waiting for it. The timeline keeps the initrd's runs, left of the `│`.
 - **Stage 2** up to `graphical.target`.
 - **The handover**: bootvine hands the console back once the default target is
   reached, or earlier, once the display manager has switched to its own
