@@ -34,11 +34,12 @@ machine.start()
 resume_recording.start()
 machine.wait_for_console_text("Image loading progress")
 machine.wait_for_console_text("Image loading done")
-resume_recording.stop()
 machine.succeed(f"grep '{SENTINEL_TEXT}' /run/test/sentinel")
 assert console_level() == BOOT_CONSOLE_LEVEL, f"the restored system kept the opened level: {console_level()}"
 assert foreground_terminal() != f"tty{BOOTVINE_TERMINAL}", "the restored system came back on bootvine's terminal"
 machine.fail("systemctl is-active bootvine")
+machine.sleep(1)
+resume_recording.stop()
 
 machine.crash()
 machine.start()

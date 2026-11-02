@@ -7,7 +7,6 @@
     {
       imports = [
         machine
-        ../shared/recorded-display.nix
         "${pkgs.path}/nixos/tests/common/auto-format-root-device.nix"
       ];
 
@@ -25,6 +24,13 @@
       };
 
       virtualisation = {
+        memorySize = 2048;
+        qemu.options = [
+          "-vga none"
+          "-device VGA,xres=1280,yres=800"
+          "-chardev socket,id=recording-monitor,path=recording-monitor,server=on,wait=off"
+          "-mon chardev=recording-monitor,mode=readline"
+        ];
         emptyDiskImages = [ 4096 ];
         useNixStoreImage = true;
         useEFIBoot = true;
