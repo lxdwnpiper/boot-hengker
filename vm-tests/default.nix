@@ -10,7 +10,7 @@ let
   };
 
   machineDescriptions = {
-    slow-services = "slow and failing units, a held initrd probe and a greetd login";
+    slow-services = "slow and failing units, a held initrd probe and a tuigreet login";
     text-console = "the slow units without a display manager, handing over at the default target";
     scripted-initrd = "the slow units with the scripted initrd, so bootvine starts in stage 2";
     encrypted-volume = "a LUKS volume unlocked in the initrd with the passphrase 'sample passphrase'";

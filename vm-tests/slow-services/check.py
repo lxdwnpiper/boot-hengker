@@ -38,7 +38,7 @@ machine.wait_for_unit("greetd.service")
 retry(lambda _: "another program took the console" in bootvine_journal(), timeout_seconds=60)
 assert unit_state("late-sensor-probe") == "activating", "the boot finished before the display manager took over"
 assert foreground_terminal() != f"tty{BOOTVINE_TERMINAL}", "bootvine took the console back from the display manager"
-machine.wait_until_tty_matches("1", "login: ")
+machine.wait_until_tty_matches("1", "Username:")
 assert_unit_start_stays_off_console("Mid boot status probe")
 show_status = machine.succeed("systemctl show -p ShowStatus --value").strip()
 assert show_status == "no", f"systemd status output came back before the boot finished: {show_status}"
@@ -62,9 +62,9 @@ show_status = machine.succeed("systemctl show -p ShowStatus --value").strip()
 assert show_status == "yes", f"systemd status output was not restored: {show_status}"
 assert_unit_start_stays_off_console("Post boot status probe")
 
-machine.wait_until_tty_matches("1", "login: ")
+machine.wait_until_tty_matches("1", "Username:")
 machine.send_chars("sample-user\n")
-machine.wait_until_tty_matches("1", "Password: ")
+machine.wait_until_tty_matches("1", "Password:")
 machine.send_chars("sample-user\n")
 machine.wait_until_succeeds("pgrep -u sample-user bash", timeout=30)
 

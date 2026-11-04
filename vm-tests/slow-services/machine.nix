@@ -37,6 +37,6 @@ in
 
   services.greetd = {
     enable = true;
-    settings.default_session.command = "${pkgs.greetd}/bin/agreety --cmd ${pkgs.bashInteractive}/bin/bash";
+    settings.default_session.command = "${pkgs.tuigreet}/bin/tuigreet --time --cmd ${pkgs.bashInteractive}/bin/bash";
   };
 }

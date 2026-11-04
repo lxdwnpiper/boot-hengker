@@ -47,10 +47,10 @@ From top to bottom:
 
 ## Booting through the initrd
 
-<img src="https://codeberg.org/wvhulle/bootvine/raw/branch/recordings/slow-services.webp" width="640" alt="A NixOS machine booting through the initrd into stage 2, handing over to a greetd login, then powering off">
+<img src="https://codeberg.org/wvhulle/bootvine/raw/branch/recordings/slow-services.webp" width="640" alt="A NixOS machine booting through the initrd into stage 2, handing over to a tuigreet login, then powering off">
 
 The `slow-services` machine boots with a held hardware probe in the initrd,
-slow units in stage 2 and one failing unit, hands over to its greetd login
+slow units in stage 2 and one failing unit, hands over to its tuigreet login
 and powers off. With a systemd initrd, bootvine starts about a second after
 the kernel:
 
@@ -212,7 +212,7 @@ shows the shutdown.
 
 | Run | Shows | Recording |
 | --- | --- | --- |
-| `nix run .#sample-vm-slow-services` | slow units in the initrd and stage 2, one failing unit, and the handover to a greetd login | [booting through the initrd](#booting-through-the-initrd) |
+| `nix run .#sample-vm-slow-services` | slow units in the initrd and stage 2, one failing unit, and the handover to a tuigreet login | [booting through the initrd](#booting-through-the-initrd) |
 | `nix run .#sample-vm-text-console` | the same units without a display manager, handing over at the default target | [without a display manager](#without-a-display-manager) |
 | `nix run .#sample-vm-scripted-initrd` | the same units with NixOS's scripted initrd, so bootvine starts in stage 2 only | [without a systemd initrd](#without-a-systemd-initrd) |
 | `nix run .#sample-vm-encrypted-volume` | a LUKS volume unlocked in the initrd; the passphrase is `sample passphrase` | [passphrase prompts](#passphrase-prompts) |
