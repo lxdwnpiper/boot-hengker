@@ -19,7 +19,7 @@ use crate::{
         boot_feed::{RootRequest, bus_inputs},
         link_error::Error,
         switch_root::INITRD_RELEASE,
-        systemd_bus::{Scope, Session, StatusOutput},
+        systemd_bus::{Scope, Session, StatusRelease, restore_status_after_watch},
     },
 };
 
@@ -32,16 +32,6 @@ pub struct Settings {
 }
 
 const FULL_REPAINT_INTERVAL: Duration = Duration::from_secs(5);
-
-struct ConfiguredStatusOnExit;
-
-impl Drop for ConfiguredStatusOnExit {
-    fn drop(&mut self) {
-        if let Ok(session) = Session::open(Scope::System) {
-            session.set_show_status(StatusOutput::Configured).ok();
-        }
-    }
-}
 
 fn boot_already_finished(settings: &Settings) -> bool {
     settings.scope == Scope::System
@@ -73,8 +63,14 @@ pub fn run(settings: &Settings) -> Result<(), Error> {
 }
 
 async fn watch_live_boot(settings: &Settings, phase: Phase) -> Result<(), Error> {
+    match settings.scope {
+        Scope::System => restore_status_after_watch(watch_on_console(settings, phase)).await,
+        Scope::User => watch_on_console(settings, phase).await.map(drop),
+    }
+}
+
+async fn watch_on_console(settings: &Settings, phase: Phase) -> Result<StatusRelease, Error> {
     let for_system = settings.scope == Scope::System;
-    let _restores_status = for_system.then_some(ConfiguredStatusOnExit);
     let requests = RequestWatch::open();
     let prompt_check: fn() -> ScreenInput = if requests.is_some() {
         || ScreenInput::PromptCheck
@@ -117,6 +113,7 @@ async fn watch_live_boot(settings: &Settings, phase: Phase) -> Result<(), Error>
     ratatui::restore();
     match ending {
         WatchEnding::Failed(error) => Err(error),
-        WatchEnding::BootCompleted | WatchEnding::ViewerLeft => Ok(()),
+        WatchEnding::BootCompleted => Ok(StatusRelease::AfterBoot),
+        WatchEnding::ViewerLeft => Ok(StatusRelease::Immediately),
     }
 }

@@ -1,5 +1,5 @@
 use std::{
-    future::ready,
+    future::{Future, pending, ready},
     io, iter, mem,
     os::fd::{AsFd, AsRawFd, BorrowedFd, RawFd},
     pin::pin,
@@ -11,9 +11,13 @@ use dbus::{
     arg::{AppendAll, PropMap, RefArg, Variant},
     channel::{BusType, Channel},
 };
-use futures::{TryStreamExt, stream};
+use futures::{Stream, StreamExt, TryStreamExt, future::select, stream};
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
-use tokio::{io::unix::AsyncFd, time::timeout};
+use tokio::{
+    io::unix::AsyncFd,
+    signal::unix::{Signal as OsSignal, SignalKind, signal},
+    time::timeout,
+};
 
 use crate::{
     boot_model::{Activity, JobKind, JobResult, UnitFacts, UnitKind, UnitTimeouts},
@@ -40,6 +44,8 @@ const PRIVATE_SOCKET: &str = "unix:path=/run/systemd/private";
 const SIGNAL_RULE: &str = "type='signal',path_namespace='/org/freedesktop/systemd1'";
 const CALL_TIMEOUT: Duration = Duration::from_secs(1);
 const UNLIMITED: Duration = Duration::from_micros(u64::MAX);
+const STATUS_SILENT_MODE: &str = "no";
+const STATUS_RESET_MODE: &str = "";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Scope {
@@ -48,18 +54,9 @@ pub enum Scope {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum StatusOutput {
-    Silent,
-    Configured,
-}
-
-impl StatusOutput {
-    fn bus_mode(self) -> &'static str {
-        match self {
-            Self::Silent => "no",
-            Self::Configured => "",
-        }
-    }
+pub enum StatusRelease {
+    AfterBoot,
+    Immediately,
 }
 
 pub enum SignalBatch {
@@ -157,6 +154,41 @@ fn read_boot_in_progress(reply: &Message) -> Result<bool, Error> {
     Ok(finished.0 == 0)
 }
 
+async fn boot_finish_or_lost_connection() -> Result<(), Error> {
+    let mut connection = BusConnection::register(Session::open(Scope::System)?)?;
+    connection.subscribe().await?;
+    if connection.boot_in_progress().await? {
+        connection
+            .into_signals()
+            .any(|signal| ready(matches!(signal, Signal::BootFinished)))
+            .await;
+    }
+    Ok(())
+}
+
+async fn termination_request(listener: io::Result<OsSignal>) {
+    match listener {
+        Ok(mut listener) => {
+            listener.recv().await;
+        }
+        Err(_) => pending().await,
+    }
+}
+
+pub async fn restore_status_after_watch(
+    watch: impl Future<Output = Result<StatusRelease, Error>>,
+) -> Result<(), Error> {
+    let terminated = termination_request(signal(SignalKind::terminate()));
+    let watched = watch.await;
+    if !matches!(watched, Ok(StatusRelease::Immediately)) {
+        select(pin!(terminated), pin!(boot_finish_or_lost_connection())).await;
+    }
+    if let Ok(session) = Session::open(Scope::System) {
+        session.restore_configured_status().ok();
+    }
+    watched.map(drop)
+}
+
 impl Session {
     pub fn open(scope: Scope) -> Result<Self, Error> {
         if scope == Scope::System
@@ -193,8 +225,8 @@ impl Session {
         Ok(self.channel.send_with_reply_and_block(call, CALL_TIMEOUT)?)
     }
 
-    pub fn set_show_status(&self, output: StatusOutput) -> Result<(), Error> {
-        self.blocking_call(manager_call("SetShowStatus", (output.bus_mode(),))?)?;
+    fn restore_configured_status(&self) -> Result<(), Error> {
+        self.blocking_call(manager_call("SetShowStatus", (STATUS_RESET_MODE,))?)?;
         Ok(())
     }
 
@@ -297,8 +329,8 @@ impl BusConnection {
         Ok(())
     }
 
-    pub async fn set_show_status(&mut self, output: StatusOutput) -> Result<(), Error> {
-        self.call(manager_call("SetShowStatus", (output.bus_mode(),))?)
+    pub async fn silence_status_output(&mut self) -> Result<(), Error> {
+        self.call(manager_call("SetShowStatus", (STATUS_SILENT_MODE,))?)
             .await?;
         Ok(())
     }
@@ -372,6 +404,10 @@ impl BusConnection {
         if self.early_signals.is_empty() {
             readable_or_timeout(&self.session, patience).await;
         }
+        self.take_signals()
+    }
+
+    fn take_signals(&mut self) -> SignalBatch {
         let still_connected = self.drain_replies().is_ok();
         let signals = mem::take(&mut self.early_signals);
         if still_connected {
@@ -379,6 +415,29 @@ impl BusConnection {
         } else {
             SignalBatch::Closed(signals)
         }
+    }
+
+    async fn next_signals(&mut self) -> SignalBatch {
+        if self.early_signals.is_empty() {
+            let Ok(mut readiness) = self.session.readable().await else {
+                return SignalBatch::Closed(Vec::new());
+            };
+            readiness.clear_ready();
+        }
+        self.take_signals()
+    }
+
+    fn into_signals(self) -> impl Stream<Item = Signal> {
+        unfold_carrying(self, |mut connection| async move {
+            match connection.next_signals().await {
+                SignalBatch::Open(signals) => Some(CarriedItem {
+                    item: signals,
+                    state: connection,
+                }),
+                SignalBatch::Closed(_) => None,
+            }
+        })
+        .flat_map(stream::iter)
     }
 }
 

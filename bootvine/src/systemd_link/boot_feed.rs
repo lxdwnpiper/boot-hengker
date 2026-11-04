@@ -25,7 +25,6 @@ use crate::{
         switch_root::Sysroot,
         systemd_bus::{
             BusConnection, FetchedUnit, JobListing, Scope, Session, Signal, SignalBatch,
-            StatusOutput,
         },
     },
 };
@@ -327,7 +326,7 @@ impl BootTracker {
     ) -> Result<Vec<BootChange>, Error> {
         connection.subscribe().await?;
         if self.scope == Scope::System {
-            connection.set_show_status(StatusOutput::Silent).await.ok();
+            connection.silence_status_output().await.ok();
         }
         let shutting_down = self.phase == Phase::Shutdown;
         let jobs: Vec<JobListing> = connection

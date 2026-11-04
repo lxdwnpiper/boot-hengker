@@ -12,9 +12,20 @@
         machine
         ../shared/recorded-display.nix
       ];
-      systemd.services = {
-        sample-database.serviceConfig.ExecStop = lib.mkForce (waitFor "release-sample-database");
-        backdoor.before = [ "sample-database.service" ];
+      systemd = {
+        settings.Manager.ShowStatus = lib.mkForce true;
+        services = {
+          sample-database.serviceConfig.ExecStop = lib.mkForce (waitFor "release-sample-database");
+          backdoor.before = [ "sample-database.service" ];
+          late-sensor-probe = {
+            wantedBy = [ "graphical.target" ];
+            after = [ "greetd.service" ];
+            serviceConfig = {
+              Type = "oneshot";
+              ExecStart = waitFor "release-late-sensor-probe";
+            };
+          };
+        };
       };
     };
 

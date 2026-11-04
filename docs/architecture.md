@@ -275,8 +275,13 @@ While it runs, bootvine:
   writes to the console and resets it while it re-executes, and drawing only
   the cells that changed would leave that on screen.
 
-It restores the log level and the status output when it hands the console
-back. Kernel messages from before it starts are already on screen; see
+It restores the log level when it hands the console back. It keeps running
+without touching the console until the boot finishes and only then restores the
+status output, so jobs still running cannot write over a display manager that
+started before them. This holds for a handover and for an error. Pressing a
+[quit key](guide.md#leaving-the-tree) or stopping the service restores the
+output at once, so a stuck boot stays visible; status lines can then reach a
+display manager that starts before the boot finishes. Kernel messages from before it starts are already on screen; see
 [early kernel messages](configuration.md#early-kernel-messages).
 
 ### Resuming from hibernation

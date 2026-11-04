@@ -173,6 +173,16 @@ Failures from the initrd stay in the panel after the switch to the real root.
 The recording is the `failures` machine, where every kind of failure systemd
 reports happens one after another.
 
+## Leaving the tree
+
+`q`, `Ctrl-C` or `Esc` closes the tree during a boot or shutdown and gives the
+console back with systemd's status lines, for when bootvine misbehaves or you
+want to see what a stuck boot is doing. While a passphrase prompt is open, keys
+go to the prompt instead.
+
+These keys cannot help if bootvine itself has hung, because it reads them in
+the same loop that draws the screen.
+
 ## Trying it
 
 Neither of these touches your system's boot.

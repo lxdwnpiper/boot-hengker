@@ -13,6 +13,7 @@
         ../shared/recorded-display.nix
       ];
       testing.initrdBackdoor = true;
+      boot.kernelParams = lib.mkAfter [ "console=tty0" ];
       boot.initrd.systemd.services.initrd-hardware-probe.serviceConfig.ExecStart = lib.mkForce (
         waitFor "release-initrd-hardware-probe"
       );
