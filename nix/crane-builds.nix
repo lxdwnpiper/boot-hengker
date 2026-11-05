@@ -30,10 +30,7 @@ let
     args: craneLib.buildPackage (commonArgs // { inherit cargoArtifacts; } // args);
 in
 {
-  rustfmt-formatting = craneLib.cargoFmt {
-    inherit (commonArgs) src pname version;
-    cargoExtraArgs = "--all";
-  };
+  inherit cargoArtifacts;
 
   clippy-lints = craneLib.cargoClippy (
     commonArgs

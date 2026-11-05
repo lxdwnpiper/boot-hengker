@@ -34,25 +34,26 @@ Commit messages follow [Conventional Commits](https://www.conventionalcommits.or
 jj does not run git hooks, so check the commits you are about to push with:
 
 ```sh
-nix run .#check-conventional-commits -- origin/main..HEAD
+nix run .#check-commit-messages -- origin/main..HEAD
 ```
 
 Git users can install the same commit-message check and a formatting check as
 hooks with `prek install` ([prek](https://github.com/j178/prek), from the dev
-shell) or `pre-commit install` ([pre-commit](https://pre-commit.com)).
+shell) or `pre-commit install` ([pre-commit](https://pre-commit.com)). CI runs
+the formatting hook with `nix run .#run-pre-commit-hooks`.
 
 ## Continuous integration
 
-`.woodpecker/rust-and-flake-checks.yaml` runs on Codeberg's
+`.woodpecker/checks.yaml` runs on Codeberg's
 [Woodpecker CI](https://woodpecker-ci.org) for every push and pull request: the bootvine build with its tests, the xtask build, clippy,
-rustfmt, an evaluation of every flake output, and the commit-message check on
-pull requests. Builds on `main` are pushed to the `wvhulle` [Cachix](https://www.cachix.org) cache, which
-`nixConfig` in `flake.nix` offers as a substituter. The two VM checks need KVM,
+the pre-commit hooks, an evaluation of every flake output, and the commit-message check on
+pull requests. The workspace dependencies are built or fetched in a step of their own. Builds on `main` are pushed to the `wvhulle` [Cachix](https://www.cachix.org) cache, which
+`nixConfig` in `flake.nix` offers as a substituter. CI tasks are Nushell scripts in `ci/`, exposed as flake apps in `nix/ci-tasks.nix`. The two VM checks need KVM,
 which Codeberg's runners lack, so they only run locally.
 
 ## Releases
 
-`.woodpecker/release-pr-and-publish.yaml` runs
+`.woodpecker/publish-release-and-update-pr.yaml` runs
 [release-plz](https://release-plz.dev) after the checks pass on `main`. It
 keeps a pull request labelled `release` open on Codeberg that bumps the version
 in `Cargo.toml` and adds the new commits to `CHANGELOG.md`. Only `feat`, `fix`
@@ -61,10 +62,19 @@ minor version while bootvine is below 1.0. Merging that pull request publishes
 the crate to crates.io, tags the merge `v<version>` and creates a Codeberg
 release with the changelog. Settings are in `release-plz.toml`.
 
-The pipeline needs two Woodpecker secrets: `codeberg_token`, a Codeberg access
-token with repository write access, and `cargo_registry_token`, a crates.io
-token that may publish new crates and updates. Preview the next release
+The pipeline needs two Woodpecker secrets: `bot_token`, an access token of the
+`wvhulle-bot` Codeberg account, which has write access to the repository, and
+`cargo_registry_token`, a crates.io token that may publish new crates and updates. Preview the next release
 locally from the dev shell with `release-plz update`.
+
+## Dependency updates
+
+The `weekly-dependency-update` cron runs `.woodpecker/dependency-update-pr.yaml`,
+which updates `Cargo.lock` and `flake.lock` and opens or updates one pull request
+from the `bot/dependency-updates` branch as `wvhulle-bot`. The checks on that pull
+request are the trial build. Commits pushed to the branch by hand stop further
+automatic updates until it is merged. Updates that need changes to `Cargo.toml`
+stay manual.
 
 ## Testing
 

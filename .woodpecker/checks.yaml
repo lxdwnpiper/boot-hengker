@@ -1,0 +1,85 @@
+when:
+  - repo: wvhulle/bootvine
+    event: [pull_request, push, manual]
+
+variables:
+  - &nix_config
+    NIX_CONFIG: |
+      experimental-features = nix-command flakes
+      build-users-group =
+      accept-flake-config = true
+  - &after_dependency_step
+    - status: [success, failure]
+
+steps:
+  - name: prepare-build-dependencies
+    image: nixos/nix:latest
+    depends_on: []
+    environment: *nix_config
+    commands:
+      - nix run --quiet .#build-unless-cached -- .#packages.x86_64-linux.workspace-dependencies
+
+  - name: build-and-test-bootvine
+    image: nixos/nix:latest
+    depends_on: [prepare-build-dependencies]
+    when: *after_dependency_step
+    environment: *nix_config
+    commands:
+      - nix run --quiet .#import-exported-paths
+      - nix run --quiet .#build-and-export-paths -- .#checks.x86_64-linux.bootvine-build
+
+  - name: build-repo-tasks
+    image: nixos/nix:latest
+    depends_on: [prepare-build-dependencies]
+    when: *after_dependency_step
+    environment: *nix_config
+    commands:
+      - nix run --quiet .#import-exported-paths
+      - nix run --quiet .#build-and-export-paths -- .#checks.x86_64-linux.repo-tasks-build
+
+  - name: lint-with-clippy
+    image: nixos/nix:latest
+    depends_on: [prepare-build-dependencies]
+    when: *after_dependency_step
+    environment: *nix_config
+    commands:
+      - nix run --quiet .#import-exported-paths
+      - nix build --quiet --print-build-logs .#checks.x86_64-linux.clippy-lints
+
+  - name: upload-builds-to-cachix
+    image: nixos/nix:latest
+    depends_on: [build-and-test-bootvine, build-repo-tasks]
+    when:
+      - event: [push, manual]
+        branch: main
+        status: [success, failure]
+    environment:
+      <<: *nix_config
+      CACHIX_AUTH_TOKEN:
+        from_secret: cachix_auth_token
+    commands:
+      - nix run --quiet .#upload-exported-paths
+
+  - name: run-pre-commit-hooks
+    image: nixos/nix:latest
+    depends_on: [prepare-build-dependencies]
+    when: *after_dependency_step
+    environment: *nix_config
+    commands:
+      - nix run --quiet .#run-pre-commit-hooks
+
+  - name: evaluate-flake-outputs
+    image: nixos/nix:latest
+    depends_on: []
+    environment: *nix_config
+    commands:
+      - nix flake check --quiet --no-build
+
+  - name: check-commit-messages
+    image: nixos/nix:latest
+    depends_on: []
+    when:
+      - event: pull_request
+    environment: *nix_config
+    commands:
+      - nix run --quiet .#check-commit-messages -- --fetch-target-branch FETCH_HEAD..HEAD
