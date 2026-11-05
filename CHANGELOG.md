@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3](https://codeberg.org/wvhulle/bootvine/compare/v0.1.2...v0.1.3) - 2026-11-05
+
+### Fixed
+
+- do not report collected systemd jobs as failed
+- keep systemd status off the display manager until the boot finishes
+
 ## [0.1.2](https://codeberg.org/wvhulle/bootvine/compare/v0.1.1...v0.1.2) - 2026-11-02
 
 ### Added
