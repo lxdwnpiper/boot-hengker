@@ -1,13 +1,15 @@
 {
   pkgs,
   mkApp,
-  cargoToolchain,
-  preCommitInputs,
+  cargoToolchain ? null,
+  preCommitInputs ? [ ],
   extraReleaseInputs ? [ ],
   releaseWrapperArgs ? [ ],
 }:
 let
   inherit (pkgs) lib;
+
+  cargoInputs = lib.optional (cargoToolchain != null) cargoToolchain;
 
   nuScriptTool =
     {
@@ -49,12 +51,13 @@ let
     mkApp (nuScriptTool {
       inherit name;
       script = ../ci/release-tasks.nu;
-      runtimeInputs = [
-        cargoToolchain
-        pkgs.release-plz
-        pkgs.gitMinimal
-      ]
-      ++ extraReleaseInputs;
+      runtimeInputs =
+        cargoInputs
+        ++ [
+          pkgs.release-plz
+          pkgs.gitMinimal
+        ]
+        ++ extraReleaseInputs;
       wrapperArgs = releaseWrapperArgs;
     });
 
@@ -96,8 +99,7 @@ releaseTaskApps
   open-dependency-update-pr = mkApp (nuScriptTool {
     name = "open-dependency-update-pr";
     script = ../ci/dependency-updates.nu;
-    runtimeInputs = [
-      cargoToolchain
+    runtimeInputs = cargoInputs ++ [
       pkgs.gitMinimal
       pkgs.tea
     ];
@@ -107,6 +109,9 @@ releaseTaskApps
   build-unless-cached = exportingBuildApp "build-unless-cached";
   import-exported-paths = mkApp (nixBuiltPathsTool {
     name = "import-exported-paths";
+  });
+  copy-build-output = mkApp (nixBuiltPathsTool {
+    name = "copy-build-output";
   });
   upload-exported-paths = mkApp (nixBuiltPathsTool {
     name = "upload-exported-paths";
