@@ -5,10 +5,7 @@
   nodes.machine =
     { lib, ... }:
     {
-      imports = [
-        machine
-        (pkgs.path + "/nixos/tests/common/auto-format-root-device.nix")
-      ];
+      imports = [ machine ];
 
       boot.resumeDevice = "/dev/vdc";
       swapDevices = lib.mkOverride 0 [

@@ -78,10 +78,9 @@ default target is reached, and the text login on `tty1` comes forward.
 
 ### Without a systemd initrd
 
-<img src="https://codeberg.org/wvhulle/bootvine/raw/branch/recordings/scripted-initrd.webp" width="640" alt="The same boot with NixOS's scripted initrd: the kernel and initrd lines scroll past before bootvine starts in stage 2">
-
-The `scripted-initrd` machine uses NixOS's older scripted initrd, which has no
-systemd. The initrd's lines scroll past as usual, and bootvine starts in
+An initrd without systemd, such as one built by initramfs-tools, has no units
+for bootvine to follow. The initrd's lines scroll past as usual, and bootvine
+starts in
 stage 2, from `sysinit.target` on.
 
 ## Resuming from hibernation
@@ -214,7 +213,6 @@ shows the shutdown.
 | --- | --- | --- |
 | `nix run .#sample-vm-slow-services` | slow units in the initrd and stage 2, one failing unit, and the handover to a tuigreet login | [booting through the initrd](#booting-through-the-initrd) |
 | `nix run .#sample-vm-text-console` | the same units without a display manager, handing over at the default target | [without a display manager](#without-a-display-manager) |
-| `nix run .#sample-vm-scripted-initrd` | the same units with NixOS's scripted initrd, so bootvine starts in stage 2 only | [without a systemd initrd](#without-a-systemd-initrd) |
 | `nix run .#sample-vm-encrypted-volume` | a LUKS volume unlocked in the initrd; the passphrase is `sample passphrase` | [passphrase prompts](#passphrase-prompts) |
 | `nix run .#sample-vm-hibernate-resume` | a swap disk to hibernate to; run `systemctl hibernate`, then start the machine again | [resuming from hibernation](#resuming-from-hibernation) |
 | `nix run .#sample-vm-failures` | a firmware failure in the initrd, then units that exit with an error, crash, time out, cannot be run, restart too often, report a status, die after starting, and one that fails only through its dependency | [failures](#failures) |

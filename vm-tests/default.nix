@@ -12,7 +12,6 @@ let
   machineDescriptions = {
     slow-services = "slow and failing units, a held initrd probe and a tuigreet login";
     text-console = "the slow units without a display manager, handing over at the default target";
-    scripted-initrd = "the slow units with the scripted initrd, so bootvine starts in stage 2";
     encrypted-volume = "a LUKS volume unlocked in the initrd with the passphrase 'sample passphrase'";
     failures = "units that fail in every way systemd reports, each with journal messages";
     hibernate-resume = "a swap disk to hibernate to, showing the kernel's image loading progress on resume";
