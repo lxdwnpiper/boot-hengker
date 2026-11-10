@@ -63,7 +63,8 @@ the kernel:
 - **Stage 2** up to `graphical.target`.
 - **The handover**: bootvine hands the console back once the default target is
   reached, or earlier, once the display manager has switched to its own
-  terminal.
+  terminal. With `timing.hold-until-key`, it keeps the tree on screen and waits
+  for Enter first, with the display manager already starting behind it.
 
 How bootvine gets in that early and survives the switch is in
 [architecture](architecture.md#starting-in-the-initrd).

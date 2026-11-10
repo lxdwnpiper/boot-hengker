@@ -14,7 +14,10 @@ use crate::{
         },
         watch_screen::{ScreenInput, WatchEnding, WatchScreen, watch_until_ending},
     },
-    screen_settings::{color_scheme::Colors, config_file::Timing},
+    screen_settings::{
+        color_scheme::Colors,
+        config_file::{Look, Timing},
+    },
     systemd_link::{
         boot_feed::{RootRequest, bus_inputs},
         link_error::Error,
@@ -29,6 +32,7 @@ pub struct Settings {
     pub target: RootRequest,
     pub timing: Timing,
     pub colors: Colors,
+    pub look: Look,
 }
 
 const FULL_REPAINT_INTERVAL: Duration = Duration::from_secs(5);
@@ -106,6 +110,7 @@ async fn watch_on_console(settings: &Settings, phase: Phase) -> Result<StatusRel
         BootOrigin::read,
         settings.colors,
         settings.timing,
+        settings.look.clone(),
         Duration::ZERO,
     );
     let mut terminal = ratatui::try_init()?;

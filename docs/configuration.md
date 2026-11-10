@@ -42,6 +42,11 @@ some, write only those keys:
 paste into `services.bootvine.settings`:
 
 ```toml
+[look]
+operator = ""
+intro = false
+intro-for = "1s 500ms"
+
 [colors.header]
 origin = "white"
 separators = "dark-gray"
@@ -110,7 +115,16 @@ keep-finished-units-for = "2s"
 hide-runs-shorter-than = "1s"
 keep-final-frame-for = "1s"
 wait-for-display-manager = "10s"
+hold-until-key = false
 ```
+
+## Look
+
+| Key | Meaning |
+| --- | --- |
+| `operator` | Name to show, as `operator@host` in the header and on its own in the intro, such as `piperCs`. Empty by default. |
+| `intro` | Show the animated intro, with a rain of glyphs and the operator's name, before the tree appears. Ignored during a shutdown. |
+| `intro-for` | How long the intro stays before the tree takes over, such as `3s`. Its progress bar shows how much of it is left. |
 
 ## Colours
 
@@ -139,6 +153,7 @@ palette instead: `console.colors` on NixOS, or the `vt.default_red`,
 | `hide-runs-shorter-than` | Runs shorter than this get no timer and no timeline bar. |
 | `keep-final-frame-for` | How long the last frame stays before the console is handed back. |
 | `wait-for-display-manager` | When a display manager is starting, how long to wait for it to switch to its own terminal instead, so the console's status lines never show in between. |
+| `hold-until-key` | Keep the final frame on screen until Enter is pressed, instead of handing the console over after the timers above. The display manager keeps starting behind the tree, and Enter switches to its terminal. Ignored during a shutdown. |
 
 ## Early kernel messages
 
@@ -158,6 +173,7 @@ The units run bootvine with its defaults. Run by hand, it takes these options:
 | --- | --- |
 | `--config <path>` | Read the settings from another file than `/etc/bootvine.toml`. |
 | `--hold <duration>` | Override `timing.keep-final-frame-for`, e.g. `3s`. |
+| `--hold-until-key` | Override `timing.hold-until-key`, keeping the final frame until Enter is pressed. |
 | `--target <unit>` | Root the tree at this unit instead of the default target. |
 | `--user` | Watch your user service manager instead of PID 1. |
 | `--shutdown` | Follow a shutdown instead of a boot. |

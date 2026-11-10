@@ -27,6 +27,18 @@ pub fn asks_to_quit(event: &Event, typing: bool) -> bool {
     *code == KeyCode::Esc || (!typing && (*code == KeyCode::Char('q') || control_c))
 }
 
+#[must_use]
+pub fn presses_enter(event: &Event) -> bool {
+    matches!(
+        event,
+        Event::Key(KeyEvent {
+            code: KeyCode::Enter,
+            kind: KeyEventKind::Press,
+            ..
+        })
+    )
+}
+
 pub fn type_key(typed: &mut Zeroizing<String>, event: &Event) -> Option<Zeroizing<String>> {
     let Event::Key(KeyEvent {
         code,

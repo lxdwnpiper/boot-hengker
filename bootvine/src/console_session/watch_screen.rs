@@ -6,13 +6,17 @@ use ratatui::{
     Terminal,
     backend::Backend,
     buffer::{Buffer, CellDiffOption},
+    widgets::Widget,
 };
 
 use crate::{
     boot_model::{BootChange, BootState, boot_origin::BootOrigin},
-    boot_view::{BootProjection, BootView, PasswordPrompt, project_boot},
+    boot_view::{BootProjection, BootView, IntroView, PasswordPrompt, project_boot},
     console_session::console_palette::ConsoleLook,
-    screen_settings::{color_scheme::Colors, config_file::Timing},
+    screen_settings::{
+        color_scheme::Colors,
+        config_file::{Look, Timing},
+    },
     systemd_link::{link_error::Error, monotonic_clock::monotonic_now},
 };
 
@@ -63,7 +67,11 @@ pub trait ConsoleDesk {
         Refresh::Steady
     }
 
-    fn begin_handover(&mut self, _reached: &str, _deadline: Duration) {}
+    fn begin_handover(&mut self, _reached: &str, _deadline: Option<Duration>) {}
+
+    fn hold_hint(&self) -> Option<&'static str> {
+        None
+    }
 
     fn lends_console(&mut self) -> bool {
         false
@@ -83,6 +91,8 @@ pub struct WatchScreen<Desk> {
     refresh_due: Refresh,
     colors: Colors,
     timing: Timing,
+    look: Look,
+    started: Duration,
     epoch: Duration,
     projection: Option<CachedProjection>,
 }
@@ -94,6 +104,7 @@ impl<Desk: ConsoleDesk> WatchScreen<Desk> {
         read_origin: fn() -> BootOrigin,
         colors: Colors,
         timing: Timing,
+        look: Look,
         epoch: Duration,
     ) -> Self {
         Self {
@@ -104,6 +115,8 @@ impl<Desk: ConsoleDesk> WatchScreen<Desk> {
             refresh_due: Refresh::Steady,
             colors,
             timing,
+            look,
+            started: monotonic_now(),
             epoch,
             projection: None,
         }
@@ -167,15 +180,21 @@ impl<Desk: ConsoleDesk> WatchScreen<Desk> {
             self.origin = (self.read_origin)();
         }
         if let Some(display_manager) = self.state.started_display_manager() {
-            self.desk
-                .begin_handover(display_manager, now + self.timing.wait_for_display_manager);
+            self.desk.begin_handover(
+                display_manager,
+                self.handover_deadline(now + self.timing.wait_for_display_manager),
+            );
         } else if self.state.is_complete() {
             self.desk.begin_handover(
                 self.state.root.unit().unwrap_or("boot"),
-                now + self.timing.keep_final_frame_for,
+                self.handover_deadline(now + self.timing.keep_final_frame_for),
             );
         }
         ControlFlow::Continue(())
+    }
+
+    fn handover_deadline(&self, at: Duration) -> Option<Duration> {
+        (!self.timing.hold_until_key).then_some(at)
     }
 
     fn absorb_batch<B: Backend>(
@@ -205,6 +224,7 @@ impl<Desk: ConsoleDesk> WatchScreen<Desk> {
         }
         let now = self.now();
         let look = self.desk.look();
+        let introducing = self.look.intro && now.saturating_sub(self.started) < self.look.intro_for;
         if self
             .projection
             .as_ref()
@@ -220,19 +240,34 @@ impl<Desk: ConsoleDesk> WatchScreen<Desk> {
             })
             .projection;
         let completed = terminal.draw(|canvas| {
-            canvas.render_widget(
-                BootView {
-                    state: &self.state,
-                    projection,
-                    colors: &self.colors,
-                    timing: &self.timing,
-                    glyphs: &look.glyphs,
+            let area = canvas.area();
+            if introducing {
+                IntroView {
                     now,
+                    intro_for: self.look.intro_for,
+                    operator: &self.look.operator,
                     origin: &self.origin,
-                    password_prompt: self.desk.prompt(now),
-                },
-                canvas.area(),
-            );
+                    colors: &self.colors,
+                    glyphs: &look.glyphs,
+                }
+                .render(area, canvas.buffer_mut());
+            } else {
+                canvas.render_widget(
+                    BootView {
+                        state: &self.state,
+                        projection,
+                        colors: &self.colors,
+                        timing: &self.timing,
+                        glyphs: &look.glyphs,
+                        now,
+                        origin: &self.origin,
+                        password_prompt: self.desk.prompt(now),
+                        hold_hint: self.desk.hold_hint(),
+                        operator: Some(self.look.operator.as_str()),
+                    },
+                    area,
+                );
+            }
             look.palette.fit_frame(canvas.buffer_mut());
         })?;
         if self.refresh_due == Refresh::Repaint {
@@ -280,15 +315,18 @@ pub(super) fn overwrite_every_cell<B: Backend>(
 
 #[cfg(test)]
 mod tests {
+    use ratatui::backend::TestBackend;
+
     use super::*;
     use crate::{
-        boot_model::{ActiveState, Activity, HANDOFF_UNIT},
+        boot_model::{ActiveState, Activity, HANDOFF_UNIT, Phase},
         boot_test_fixtures::{MS, nested_boot_sample, queue_unit, waiting},
     };
 
     #[derive(Default)]
     struct HandoverRecorder {
         handovers: Vec<String>,
+        deadlines: Vec<Option<Duration>>,
     }
 
     impl ConsoleDesk for HandoverRecorder {
@@ -304,8 +342,9 @@ mod tests {
             ControlFlow::Continue(Vec::new())
         }
 
-        fn begin_handover(&mut self, reached: &str, _deadline: Duration) {
+        fn begin_handover(&mut self, reached: &str, deadline: Option<Duration>) {
             self.handovers.push(reached.to_owned());
+            self.deadlines.push(deadline);
         }
     }
 
@@ -325,6 +364,7 @@ mod tests {
             test_origin,
             Colors::default(),
             Timing::default(),
+            Look::default(),
             Duration::ZERO,
         )
     }
@@ -346,5 +386,58 @@ mod tests {
         let _ = screen.apply_boot_changes(vec![started], 6000 * MS);
         assert!(!screen.state.is_complete());
         assert_eq!(screen.desk.handovers, [HANDOFF_UNIT]);
+    }
+
+    fn screen_text(terminal: &Terminal<TestBackend>) -> String {
+        let buffer = terminal.backend().buffer();
+        let area = buffer.area;
+        (0..area.height)
+            .map(|row| {
+                (0..area.width)
+                    .map(|column| buffer[(column, row)].symbol().to_owned())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn an_enabled_intro_names_the_operator_before_the_tree_takes_over() {
+        let mut screen = screen_watching(BootState::new(Phase::Host));
+        screen.look = Look {
+            operator: "piperCs".to_owned(),
+            intro: true,
+            intro_for: Duration::from_secs(1),
+        };
+        screen.started = screen.now();
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("test backend");
+        screen.draw(&mut terminal).expect("draw the intro");
+        let intro = screen_text(&terminal);
+        assert!(intro.contains("piperCs@test"), "{intro}");
+        assert!(!intro.contains("Stage 2"), "{intro}");
+
+        screen.started = screen.now().saturating_sub(Duration::from_secs(2));
+        screen.draw(&mut terminal).expect("draw the tree");
+        let tree = screen_text(&terminal);
+        assert!(tree.contains("Stage 2"), "{tree}");
+        assert!(tree.contains("piperCs@test"), "{tree}");
+    }
+
+    #[test]
+    fn holding_until_a_key_leaves_the_handover_without_a_deadline() {
+        let mut state = nested_boot_sample();
+        queue_unit(&mut state, 20, waiting(HANDOFF_UNIT, &[]), 500 * MS);
+        let mut screen = screen_watching(state);
+        screen.timing.hold_until_key = true;
+        let started = BootChange::UpdateActivity {
+            unit: HANDOFF_UNIT.to_owned(),
+            activity: Activity {
+                state: Some(ActiveState::Active),
+                ..Activity::default()
+            },
+        };
+        let _ = screen.apply_boot_changes(vec![started], 6000 * MS);
+        assert_eq!(screen.desk.handovers, [HANDOFF_UNIT]);
+        assert_eq!(screen.desk.deadlines, [None]);
     }
 }

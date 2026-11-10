@@ -28,15 +28,19 @@ const REJECTED_PASSPHRASE: &str = "Wrong passphrase, try again";
 
 pub struct Header<'a> {
     pub origin: &'a BootOrigin,
+    pub operator: Option<&'a str>,
     pub total: Option<Duration>,
     pub colors: &'a HeaderColors,
 }
 
 impl Header<'_> {
     fn origin(&self) -> Line<'static> {
+        let mut parts = self.origin.parts();
+        if let (Some(operator), Some(host)) = (self.operator, parts.first_mut()) {
+            *host = format!("{operator}@{host}");
+        }
         Line::from(
-            self.origin
-                .parts()
+            parts
                 .into_iter()
                 .enumerate()
                 .flat_map(|(index, part)| {
@@ -69,6 +73,7 @@ impl Widget for Header<'_> {
 
 pub struct Footer<'a> {
     pub tally: Tally,
+    pub hint: Option<&'a str>,
     pub colors: &'a FooterColors,
     pub glyphs: &'a Glyphs,
 }
@@ -92,6 +97,20 @@ impl Widget for Footer<'_> {
         ]))
         .block(rule(self.colors.rule, Line::default()))
         .render(area, buf);
+        if let Some(hint) = self.hint {
+            Line::from(hint)
+                .fg(self.colors.done)
+                .bold()
+                .right_aligned()
+                .render(
+                    Rect {
+                        y: area.y.saturating_add(1),
+                        height: 1,
+                        ..area
+                    },
+                    buf,
+                );
+        }
     }
 }
 

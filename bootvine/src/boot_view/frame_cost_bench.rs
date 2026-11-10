@@ -81,6 +81,8 @@ fn draw_boot_frame(
                     now,
                     origin: &ryzen_origin(),
                     password_prompt: None,
+                    hold_hint: None,
+                    operator: None,
                 },
                 frame.area(),
             );

@@ -7,11 +7,31 @@ use toml::{Table, Value, de::Error as ParseError, ser::Error as SerializeError};
 
 use crate::screen_settings::color_scheme::Colors;
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Config {
+    pub look: Look,
     pub colors: Colors,
     pub timing: Timing,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
+pub struct Look {
+    pub operator: String,
+    pub intro: bool,
+    #[serde(with = "friendly_duration")]
+    pub intro_for: Duration,
+}
+
+impl Default for Look {
+    fn default() -> Self {
+        Self {
+            operator: String::new(),
+            intro: false,
+            intro_for: Duration::from_millis(1500),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -25,6 +45,7 @@ pub struct Timing {
     pub keep_final_frame_for: Duration,
     #[serde(with = "friendly_duration")]
     pub wait_for_display_manager: Duration,
+    pub hold_until_key: bool,
 }
 
 impl Default for Timing {
@@ -34,6 +55,7 @@ impl Default for Timing {
             hide_runs_shorter_than: Duration::from_secs(1),
             keep_final_frame_for: Duration::from_secs(1),
             wait_for_display_manager: Duration::from_secs(10),
+            hold_until_key: false,
         }
     }
 }
@@ -91,6 +113,15 @@ mod tests {
             config.timing.keep_final_frame_for,
             Timing::default().keep_final_frame_for
         );
+    }
+
+    #[test]
+    fn holding_the_console_until_a_key_is_off_unless_asked_for() {
+        let config: Config = toml::from_str("").expect("empty config");
+        assert!(!config.timing.hold_until_key);
+        let config: Config =
+            toml::from_str("[timing]\nhold-until-key = true\n").expect("valid config");
+        assert!(config.timing.hold_until_key);
     }
 
     #[test]

@@ -20,6 +20,28 @@ pub fn render_prompted(
     height: u16,
     password_prompt: Option<PasswordPrompt>,
 ) -> Buffer {
+    draw(state, now, width, height, password_prompt, None)
+}
+
+pub fn render_holding(state: &BootState, now: Duration, width: u16, height: u16) -> Vec<String> {
+    screen_lines(&draw(
+        state,
+        now,
+        width,
+        height,
+        None,
+        Some("Press Enter to continue"),
+    ))
+}
+
+fn draw(
+    state: &BootState,
+    now: Duration,
+    width: u16,
+    height: u16,
+    password_prompt: Option<PasswordPrompt>,
+    hold_hint: Option<&str>,
+) -> Buffer {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("test backend");
     let timing = Timing::default();
     let projection = project_boot(state, &timing, now);
@@ -35,6 +57,8 @@ pub fn render_prompted(
                     now,
                     origin: &ryzen_origin(),
                     password_prompt,
+                    hold_hint,
+                    operator: None,
                 },
                 frame.area(),
             );

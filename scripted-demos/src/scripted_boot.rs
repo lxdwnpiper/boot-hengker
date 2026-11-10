@@ -18,7 +18,10 @@ use bootvine::{
         stream_sources::{frame_inputs, key_inputs},
         watch_screen::{ConsoleDesk, WatchEnding, WatchScreen, watch_until_ending},
     },
-    screen_settings::{color_scheme::Colors, config_file::Timing},
+    screen_settings::{
+        color_scheme::Colors,
+        config_file::{Look, Timing},
+    },
     systemd_link::monotonic_clock::monotonic_now,
 };
 use futures::stream;
@@ -455,6 +458,7 @@ async fn play_scenario(terminal: &mut DefaultTerminal, scenario: &Scenario) -> i
         demo_origin,
         Colors::default(),
         Timing::default(),
+        Look::default(),
         monotonic_now(),
     );
     let inputs = stream::select(frame_inputs(), key_inputs()?);

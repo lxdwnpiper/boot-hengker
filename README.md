@@ -1,5 +1,9 @@
 # bootvine
 
+> Personal fork with a green "hacker" look, an intro splash and a tree that
+> waits for Enter before the display manager appears. See
+> [PIPERCS.md](PIPERCS.md) for what changed and how to install it.
+
 A live tree of systemd jobs on the boot console, in the spirit of
 [nix-output-monitor](https://github.com/maralorn/nix-output-monitor). It
 replaces the scrolling kernel and systemd lines with the units still pending

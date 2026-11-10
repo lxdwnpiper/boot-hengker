@@ -1,6 +1,7 @@
 mod failure_panel;
 #[cfg(test)]
 mod frame_cost_bench;
+mod intro;
 #[cfg(test)]
 mod panel_render_tests;
 mod run_timeline;
@@ -30,7 +31,6 @@ use ratatui::{
 use unicode_truncate::UnicodeTruncateStr;
 use unicode_width::UnicodeWidthStr;
 
-pub use self::screen_chrome::PasswordPrompt;
 use self::{
     failure_panel::FailurePanel,
     run_timeline::{RunningRun, Timeline, timeline_fits},
@@ -40,6 +40,7 @@ use self::{
     tree_height_fitting::rows_within_height,
     unit_tree::UnitTree,
 };
+pub use self::{intro::IntroView, screen_chrome::PasswordPrompt};
 use crate::{
     boot_model::{
         BootState, MilestoneRow, RowStatus, TreeNode, TreeRow, UnitKind, boot_origin::BootOrigin,
@@ -75,6 +76,8 @@ pub struct BootView<'a> {
     pub now: Duration,
     pub origin: &'a BootOrigin,
     pub password_prompt: Option<PasswordPrompt<'a>>,
+    pub hold_hint: Option<&'a str>,
+    pub operator: Option<&'a str>,
 }
 
 impl BootView<'_> {
@@ -141,6 +144,7 @@ impl Widget for BootView<'_> {
         let pending_count = all_rows.len();
         let header = Header {
             origin: self.origin,
+            operator: self.operator.filter(|operator| !operator.is_empty()),
             total: (!self.state.finished_stages.is_empty())
                 .then(|| self.now.saturating_sub(self.state.origin)),
             colors: &self.colors.header,
@@ -155,6 +159,7 @@ impl Widget for BootView<'_> {
         let failure_panel = self.failure_panel();
         let footer = Footer {
             tally: self.state.tally(),
+            hint: self.hold_hint,
             colors: &self.colors.footer,
             glyphs: self.glyphs,
         };

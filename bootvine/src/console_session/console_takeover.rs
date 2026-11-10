@@ -133,7 +133,7 @@ pub(super) struct ForegroundVt {
     previous: u16,
 }
 
-fn active_vt() -> Option<u16> {
+pub(super) fn active_vt() -> Option<u16> {
     let state: VtState = unsafe { ioctl(stdin(), Getter::<VT_GETSTATE, VtState>::new()) }.ok()?;
     Some(state.active)
 }
@@ -163,6 +163,10 @@ impl ForegroundVt {
 
     pub(super) fn taken_away(&self) -> bool {
         active_vt().is_some_and(|active| active != self.own)
+    }
+
+    pub(super) fn return_to(&mut self, number: u16) {
+        self.previous = number;
     }
 
     pub(super) fn stay_switched(self) {

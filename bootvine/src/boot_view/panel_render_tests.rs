@@ -2,7 +2,9 @@ use std::time::Duration;
 
 use super::{
     PasswordPrompt,
-    screen_render_fixtures::{boot_in_progress, render, render_prompted, screen_lines},
+    screen_render_fixtures::{
+        boot_in_progress, render, render_holding, render_prompted, screen_lines,
+    },
 };
 use crate::{
     boot_model::{ActiveState, Activity, BootState, FailureCause, HANDOFF_UNIT, JobResult, Phase},
@@ -331,6 +333,18 @@ fn completion_names_the_display_manager_that_started() {
     assert!(
         lines[1]
             .starts_with("└─ ■ Boot finished in 9.5s · handing over to display-manager.service"),
+        "{}",
+        lines.join("\n")
+    );
+}
+
+#[test]
+fn a_console_held_for_a_key_says_how_to_continue() {
+    let lines = render_holding(&boot_in_progress(), 12_400 * MS, 110, 24);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("Press Enter to continue")),
         "{}",
         lines.join("\n")
     );

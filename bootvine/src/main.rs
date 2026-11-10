@@ -8,7 +8,7 @@ use bootvine::{
         watch_loop::{Settings, run},
     },
     screen_settings::config_file::{
-        Config, ConfigError, Timing, default_config_table, read_config_file,
+        Config, ConfigError, Look, Timing, default_config_table, read_config_file,
     },
     system_install::install_files::{
         InstallOptions, UninstallOptions, install_files, uninstall_files,
@@ -52,6 +52,12 @@ struct WatchOptions {
                 timing.keep-final-frame-for"
     )]
     hold: Option<Duration>,
+    #[arg(
+        long,
+        help = "Keep the final frame on screen until Enter is pressed, instead of handing the \
+                console over; overrides timing.hold-until-key"
+    )]
+    hold_until_key: bool,
     #[arg(
         long,
         default_value = "/etc/bootvine.toml",
@@ -147,6 +153,12 @@ fn watch_boot(options: WatchOptions) -> ExitCode {
             Config::default()
         }
     };
+    let hold_until_key =
+        (options.hold_until_key || config.timing.hold_until_key) && !options.shutdown;
+    let look = Look {
+        intro: config.look.intro && !options.shutdown,
+        ..config.look
+    };
     let settings = Settings {
         scope: if options.user {
             Scope::User
@@ -159,9 +171,11 @@ fn watch_boot(options: WatchOptions) -> ExitCode {
             .map_or(RootRequest::ManagerDefault, RootRequest::Named),
         timing: Timing {
             keep_final_frame_for: options.hold.unwrap_or(config.timing.keep_final_frame_for),
+            hold_until_key,
             ..config.timing
         },
         colors: config.colors,
+        look,
     };
     report_outcome(run(&settings))
 }
